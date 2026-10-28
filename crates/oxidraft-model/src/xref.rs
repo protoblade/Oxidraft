@@ -64,7 +64,7 @@ pub fn dependent_name(xref: &str, name: &str) -> String {
 }
 
 /// The geometry with the blocks it references and its attributes' layers renamed.
-fn renamed_geometry(g: &Geometry, rename: &dyn Fn(&str) -> String) -> Geometry {
+pub(crate) fn renamed_geometry(g: &Geometry, rename: &dyn Fn(&str) -> String) -> Geometry {
     match g {
         Geometry::Insert { block, placement, attributes, clip } => Geometry::Insert {
             block: rename(block),

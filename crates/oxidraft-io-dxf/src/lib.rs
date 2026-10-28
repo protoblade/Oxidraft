@@ -30,6 +30,9 @@ pub struct Imported {
     pub document: Document,
     /// Number of DXF entities of types Oxidraft can't represent yet.
     pub skipped: usize,
+    /// Number of objects in layouts (paper space), which Oxidraft doesn't
+    /// keep yet.
+    pub paper_space: usize,
 }
 
 fn to_dxf(p: Point) -> DxfPoint {
@@ -1051,7 +1054,14 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
     doc.set_draw_order(&order.into_iter().map(|(_, id)| id).collect::<Vec<_>>());
     // A freshly opened file starts with an empty undo history.
     doc.forget_history();
-    Imported { document: doc, skipped }
+    // Viewports aren't read, so they aren't counted.
+    let paper_space = drawing.entities().filter(|e| e.common.is_in_paper_space).count()
+        + drawing
+            .blocks()
+            .filter(|b| b.name.to_ascii_lowercase().starts_with("*paper_space"))
+            .map(|b| b.entities.len())
+            .sum::<usize>();
+    Imported { document: doc, skipped, paper_space }
 }
 
 /// Sets imported attributes' layer and color: from the file when known,

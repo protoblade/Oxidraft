@@ -187,6 +187,10 @@ impl OxidraftApp {
         egui::Panel::top("ribbon").frame(body).exact_size(98.0).show_separator_line(false).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                // While a reference is edited in place, its panel leads every tab.
+                if self.doc.refedit().is_some() {
+                    self.edit_reference_panel(ui);
+                }
                 if self.ribbon_tab == 0 {
                     self.home_tab(ui);
                 } else if RIBBON_TABS[self.ribbon_tab] == "Insert" {
@@ -249,6 +253,17 @@ impl OxidraftApp {
                 ] {
                     self.small_tool(ui, &t);
                 }
+            });
+            ui.vertical(|ui| {
+                self.small_tool(
+                    ui,
+                    &tool(
+                        Icon::EditReference,
+                        "Edit Reference",
+                        Some("REFEDIT"),
+                        "Edits a block reference or xref in place (REFEDIT)",
+                    ),
+                );
             });
         });
     }
@@ -384,42 +399,53 @@ impl OxidraftApp {
         });
     }
 
+    /// The Edit Reference panel, shown while a reference is edited in place.
+    fn edit_reference_panel(&mut self, ui: &mut Ui) {
+        ribbon_panel(ui, "Edit Reference", |ui| {
+            let save = tool(Icon::SaveReference, "Save\nChanges", None, "Saves the edits to the reference (REFCLOSE)");
+            let discard = tool(
+                Icon::DiscardReference,
+                "Discard\nChanges",
+                None,
+                "Discards the edits to the reference (REFCLOSE)",
+            );
+            for (t, action) in [(save, "Save"), (discard, "Discard")] {
+                let response = paint_large(ui, &t, true);
+                let label = t.label.replace('\n', " ");
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+                if response.on_hover_text(t.tip).clicked() {
+                    self.command_text.clear();
+                    self.engine.edit_reference(action, &mut self.doc);
+                }
+            }
+            ui.vertical(|ui| {
+                let add =
+                    tool(Icon::AddToWorkingSet, "Add to Working Set", None, "Adds objects to the working set (REFSET)");
+                let remove = tool(
+                    Icon::RemoveFromWorkingSet,
+                    "Remove from Working Set",
+                    None,
+                    "Takes objects out of the working set (REFSET)",
+                );
+                for (t, action) in [(add, "Add"), (remove, "Remove")] {
+                    let response = paint_small(ui, &t, true);
+                    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t.label));
+                    if response.on_hover_text(t.tip).clicked() {
+                        self.command_text.clear();
+                        self.engine.edit_reference(action, &mut self.doc);
+                    }
+                }
+            });
+        });
+    }
+
     fn large_tool(&mut self, ui: &mut Ui, t: &Tool) {
-        let enabled = t.command.is_some();
-        let (rect, response) = ui.allocate_exact_size(vec2(58.0, 76.0), Sense::click());
-        paint_hover(ui, rect, &response, enabled);
-        let color = if enabled { theme::TEXT } else { theme::TEXT_DISABLED };
-        let icon = Rect::from_center_size(pos2(rect.center().x, rect.top() + 22.0), vec2(30.0, 30.0));
-        icons::paint(ui.painter(), icon, t.icon, color, enabled);
-        ui.painter().text(
-            pos2(rect.center().x, rect.top() + 42.0),
-            Align2::CENTER_TOP,
-            t.label,
-            FontId::proportional(11.5),
-            color,
-        );
+        let response = paint_large(ui, t, t.command.is_some());
         self.tool_response(&response, t);
     }
 
     fn small_tool(&mut self, ui: &mut Ui, t: &Tool) {
-        let enabled = t.command.is_some();
-        let font = FontId::proportional(11.5);
-        let text_w = if t.label.is_empty() {
-            0.0
-        } else {
-            ui.painter().layout_no_wrap(t.label.into(), font.clone(), theme::TEXT).size().x + 6.0
-        };
-        let (rect, response) = ui.allocate_exact_size(
-            vec2(24.0 + text_w.max(if t.label.is_empty() { 0.0 } else { 46.0 }), 24.0),
-            Sense::click(),
-        );
-        paint_hover(ui, rect, &response, enabled);
-        let color = if enabled { theme::TEXT } else { theme::TEXT_DISABLED };
-        let icon = Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0));
-        icons::paint(ui.painter(), icon, t.icon, color, enabled);
-        if !t.label.is_empty() {
-            ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, t.label, font, color);
-        }
+        let response = paint_small(ui, t, t.command.is_some());
         self.tool_response(&response, t);
     }
 
@@ -645,6 +671,45 @@ impl OxidraftApp {
         }
         ui.add_space(8.0);
     }
+}
+
+/// A large ribbon button: its icon above its label.
+fn paint_large(ui: &mut Ui, t: &Tool, enabled: bool) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(58.0, 76.0), Sense::click());
+    paint_hover(ui, rect, &response, enabled);
+    let color = if enabled { theme::TEXT } else { theme::TEXT_DISABLED };
+    let icon = Rect::from_center_size(pos2(rect.center().x, rect.top() + 22.0), vec2(30.0, 30.0));
+    icons::paint(ui.painter(), icon, t.icon, color, enabled);
+    ui.painter().text(
+        pos2(rect.center().x, rect.top() + 42.0),
+        Align2::CENTER_TOP,
+        t.label,
+        FontId::proportional(11.5),
+        color,
+    );
+    response
+}
+
+/// A small ribbon button: its icon, then its label if it has one.
+fn paint_small(ui: &mut Ui, t: &Tool, enabled: bool) -> Response {
+    let font = FontId::proportional(11.5);
+    let text_w = if t.label.is_empty() {
+        0.0
+    } else {
+        ui.painter().layout_no_wrap(t.label.into(), font.clone(), theme::TEXT).size().x + 6.0
+    };
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(24.0 + text_w.max(if t.label.is_empty() { 0.0 } else { 46.0 }), 24.0),
+        Sense::click(),
+    );
+    paint_hover(ui, rect, &response, enabled);
+    let color = if enabled { theme::TEXT } else { theme::TEXT_DISABLED };
+    let icon = Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0));
+    icons::paint(ui.painter(), icon, t.icon, color, enabled);
+    if !t.label.is_empty() {
+        ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, t.label, font, color);
+    }
+    response
 }
 
 fn ribbon_panel(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {

@@ -43,6 +43,7 @@ mod plot;
 mod point;
 mod polygon;
 mod rectang;
+mod refedit;
 mod revcloud;
 mod rotate;
 mod scale;
@@ -145,6 +146,8 @@ pub enum UiRequest {
     /// Back to the Plot dialog with the window picked for it (`None`: as
     /// it was).
     PlotWindow(Option<Aabb>),
+    /// REFCLOSE's Save for an xref: its file is to be written.
+    SaveXrefEdit,
 }
 
 /// Result of feeding one input to a command.
@@ -264,6 +267,12 @@ pub trait Command {
     /// show something stored in the drawing. Returns a line to print.
     fn prepare(&mut self, _doc: &Document) -> Option<String> {
         None
+    }
+
+    /// Checked after [`Command::prepare`]: true if there's nothing to do,
+    /// so the command ends without prompting.
+    fn is_finished(&self) -> bool {
+        false
     }
 
     /// For commands that don't ask to select objects: the objects selected

@@ -4,6 +4,7 @@ use oxidraft_geom::{Aabb, Point};
 
 use crate::entity::{Attribute, Color, Entity, EntityId, Geometry, Vertex};
 use crate::linetype::{self, CONTINUOUS, Linetype, Lineweight};
+use crate::refedit::RefEdit;
 use crate::underlay::ImageDef;
 use crate::xref::{Xref, is_dependent};
 
@@ -179,6 +180,11 @@ enum Change {
         before: Option<f64>,
         after: Option<f64>,
     },
+    /// REFEDIT's session: started, its working set changed, or ended.
+    RefEdit {
+        before: Option<Box<RefEdit>>,
+        after: Option<Box<RefEdit>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -223,6 +229,8 @@ pub struct Document {
     order: BTreeMap<EntityId, f64>,
     /// The highest key given out, so new objects still go on top.
     top: f64,
+    /// The block reference or xref being edited in place (REFEDIT).
+    refedit: Option<RefEdit>,
 }
 
 impl Default for Document {
@@ -252,6 +260,7 @@ impl Document {
             images: BTreeMap::new(),
             order: BTreeMap::new(),
             top: 0.0,
+            refedit: None,
         }
     }
 
@@ -299,6 +308,22 @@ impl Document {
     /// True if objects on `layer` can be selected and edited.
     pub fn is_editable(&self, layer: &str) -> bool {
         self.layer(layer).is_none_or(|l| l.is_shown() && !l.locked)
+    }
+
+    /// True if the object can be selected and edited: its layer allows it
+    /// and, while a reference is edited in place, it's in the working set.
+    pub fn is_selectable(&self, e: &Entity) -> bool {
+        self.is_editable(&e.layer) && self.refedit.as_ref().is_none_or(|r| r.in_working_set(e.id))
+    }
+
+    /// The block reference or xref being edited in place, if any.
+    pub fn refedit(&self) -> Option<&RefEdit> {
+        self.refedit.as_ref()
+    }
+
+    pub(crate) fn set_refedit(&mut self, refedit: Option<RefEdit>) {
+        let before = std::mem::replace(&mut self.refedit, refedit.clone());
+        self.record(Change::RefEdit { before: before.map(Box::new), after: refedit.map(Box::new) });
     }
 
     /// Number of objects on `layer`.
@@ -1092,6 +1117,7 @@ impl Document {
                     Change::Xref { .. } => "Xref",
                     Change::Image { .. } => "Image",
                     Change::Order { .. } => "Draw order",
+                    Change::RefEdit { .. } => "Reference edit",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -1139,6 +1165,9 @@ impl Document {
                     Some(k) => self.order.insert(*id, *k),
                     None => self.order.remove(id),
                 };
+            }
+            Change::RefEdit { before, after } => {
+                self.refedit = if forward { after } else { before }.as_deref().cloned()
             }
         }
     }

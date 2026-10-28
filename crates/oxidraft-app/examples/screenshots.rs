@@ -435,6 +435,39 @@ fn main() {
     h.run_steps(3);
     save(&mut h, &dir, "24-image-underlays");
 
+    // XCLIP: the survey xref clipped to a polygon, its frame showing.
+    let attach_site = |h: &mut Harness<'_, OxidraftApp>| {
+        h.state_mut().attach_file(dir.join("site-survey.dxf"));
+        h.run_steps(2);
+        h.get_by_label("OK").click();
+        h.run_steps(2);
+        click(h, Point::new(0.0, 0.0));
+    };
+    let mut h = harness();
+    attach_site(&mut h);
+    h.state_mut().type_command("xclip");
+    h.run_steps(1);
+    click(&mut h, Point::new(130.0, 30.0));
+    for input in ["", "", "p", "-10,-25", "120,-25", "140,40", "60,95", "-10,95", ""] {
+        h.state_mut().type_command(input);
+        h.run_steps(1);
+    }
+    hover(&mut h, Point::new(50.0, 30.0));
+    save(&mut h, &dir, "25-xclip");
+
+    // REFEDIT: the survey open for editing in place, the plan faded, a
+    // label being added.
+    let mut h = harness();
+    attach_site(&mut h);
+    h.state_mut().type_command("refedit");
+    h.run_steps(1);
+    click(&mut h, Point::new(130.0, 30.0));
+    h.state_mut().type_command("l");
+    h.run_steps(1);
+    click(&mut h, Point::new(130.0, 30.0));
+    hover(&mut h, Point::new(150.0, 45.0));
+    save(&mut h, &dir, "26-refedit");
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");

@@ -45,6 +45,8 @@ pub struct OxidraftApp {
     pub(crate) xref_selected: Option<String>,
     /// What each attached drawing attaches itself, as read with it.
     pub(crate) nested_xrefs: std::collections::HashMap<String, Vec<(String, String, oxidraft_model::XrefStatus)>>,
+    /// REFCLOSE's Save for an xref, waiting to be confirmed.
+    pub(crate) xref_edit_save: Option<crate::xref::XrefEditSave>,
     /// Images and PDF pages: their pixels as read so far, the reader, and
     /// a count that changes whenever pictures come or go.
     pub(crate) rasters: std::collections::HashMap<String, crate::underlay::Raster>,
@@ -130,6 +132,7 @@ impl OxidraftApp {
             xref_palette_open: false,
             xref_selected: None,
             nested_xrefs: Default::default(),
+            xref_edit_save: None,
             rasters: Default::default(),
             loader: Default::default(),
             raster_revision: 0,
@@ -284,6 +287,11 @@ impl OxidraftApp {
 
     pub(crate) fn save(&mut self, save_as: bool) {
         self.engine.cancel(&mut self.doc);
+        // The working set would be saved as part of the drawing.
+        if self.doc.refedit().is_some() {
+            self.engine.log("** Save or discard the reference edits first (REFCLOSE) **".to_string());
+            return;
+        }
         let path = match (&self.path, save_as) {
             (Some(p), false) => p.clone(),
             _ => {
@@ -381,6 +389,7 @@ impl OxidraftApp {
                     self.edit_attributes(id);
                 }
                 UiRequest::TextWindow => self.history_expanded = true,
+                UiRequest::SaveXrefEdit => self.prepare_xref_edit_save(),
                 UiRequest::PlotWindow(window) => {
                     if let Some(d) = &mut self.plot {
                         if let Some(w) = window {
@@ -548,6 +557,7 @@ impl eframe::App for OxidraftApp {
         self.attach_dialog(&ctx);
         self.image_attach_dialog(&ctx);
         self.xref_palette(&ctx);
+        self.xref_edit_save_dialog(&ctx);
         self.update_window(&ctx);
         self.command_line(&ctx);
         self.publish_copied(&ctx);

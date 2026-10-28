@@ -135,10 +135,13 @@ impl OxidraftApp {
             Geometry::Insert { block, .. } => Some(self.doc.xref(block).is_some()),
             _ => None,
         });
-        if let Some(xref) = reference
-            && item(ui, if xref { "Clip Xref" } else { "Clip Block Reference" }, "XC")
-        {
-            self.run("XCLIP");
+        if let Some(xref) = reference {
+            if item(ui, if xref { "Edit Xref In-place" } else { "Edit Block In-place" }, "") {
+                self.engine.refedit_selected(&mut self.doc);
+            }
+            if item(ui, if xref { "Clip Xref" } else { "Clip Block Reference" }, "XC") {
+                self.run("XCLIP");
+            }
         }
         ui.separator();
         if item(ui, "Select Similar", "") {

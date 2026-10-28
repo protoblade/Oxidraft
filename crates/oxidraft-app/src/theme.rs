@@ -16,6 +16,8 @@ pub const STRIP: Color32 = Color32::from_rgb(44, 51, 63);
 pub const TEXT: Color32 = Color32::from_rgb(226, 230, 236);
 pub const TEXT_DIM: Color32 = Color32::from_rgb(150, 160, 175);
 pub const TEXT_DISABLED: Color32 = Color32::from_rgb(105, 114, 128);
+/// Text that warns of something lost.
+pub const WARNING: Color32 = Color32::from_rgb(240, 180, 70);
 /// Active toggles, selected tab underline, focused input.
 pub const ACCENT: Color32 = Color32::from_rgb(10, 152, 255);
 /// Oxidraft's own app button (rust orange).

@@ -2,7 +2,7 @@
 
 use oxidraft_geom::{Aabb, Point, curve::Seg};
 
-use crate::{Document, EntityId, Geometry, entity::quadrants};
+use crate::{Document, Entity, EntityId, Geometry, entity::quadrants};
 
 /// Snap modes, in the priority order used to break ties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -312,25 +312,28 @@ pub fn window_select(doc: &Document, first: Point, second: Point) -> Vec<EntityI
     let b = Aabb::from_points(first, second);
     let crossing = second.x < first.x;
     doc.entities()
-        .filter(|e| doc.is_editable(&e.layer))
+        .filter(|e| doc.is_selectable(e))
         .filter(|e| if crossing { doc.entity_touches(e, &b) } else { b.contains_aabb(&doc.entity_bounds(e)) })
         .map(|e| e.id)
         .collect()
 }
 
 /// The entity whose curve is closest to `p`, if within `tolerance`.
-/// Objects on locked, off or frozen layers can't be picked.
+/// Objects on locked, off or frozen layers can't be picked, nor, while a
+/// reference is edited in place, objects outside its working set.
 pub fn pick(doc: &Document, p: Point, tolerance: f64) -> Option<EntityId> {
-    pick_on(doc, p, tolerance, |layer| doc.is_editable(layer))
+    pick_where(doc, p, tolerance, |e| doc.is_selectable(e))
 }
 
 /// Like [`pick`], but objects on locked layers count too (LAYULK).
 pub fn pick_locked(doc: &Document, p: Point, tolerance: f64) -> Option<EntityId> {
-    pick_on(doc, p, tolerance, |layer| doc.is_shown(layer))
+    let editing = |e: &Entity| doc.refedit().is_none_or(|r| r.in_working_set(e.id));
+    pick_where(doc, p, tolerance, |e| doc.is_shown(&e.layer) && editing(e))
 }
 
-fn pick_on(doc: &Document, p: Point, tolerance: f64, layer_ok: impl Fn(&str) -> bool) -> Option<EntityId> {
-    let editable = || doc.entities().filter(|e| layer_ok(&e.layer));
+/// Like [`pick`], among the objects `ok` allows.
+pub fn pick_where(doc: &Document, p: Point, tolerance: f64, ok: impl Fn(&Entity) -> bool) -> Option<EntityId> {
+    let editable = || doc.entities().filter(|e| ok(e));
     editable()
         .map(|e| (doc.entity_distance(e, p), e.id))
         .filter(|(d, _)| *d <= tolerance)
@@ -340,7 +343,7 @@ fn pick_on(doc: &Document, p: Point, tolerance: f64, layer_ok: impl Fn(&str) -> 
             // Clicking inside a hatched area picks it; the one drawn on top.
             doc.entities_in_draw_order()
                 .into_iter()
-                .filter(|e| layer_ok(&e.layer))
+                .filter(|e| ok(e))
                 .rfind(|e| matches!(e.geometry, Geometry::Hatch { .. }) && e.geometry.contains(p))
                 .map(|e| e.id)
         })

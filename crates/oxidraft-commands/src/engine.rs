@@ -55,6 +55,7 @@ use crate::{
     point::PointStyle,
     polygon::Polygon,
     rectang::Rectang,
+    refedit::{RefClose, RefEdit, RefSet},
     revcloud::RevCloud,
     rotate::Rotate,
     scale::Scale,
@@ -567,6 +568,24 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(XClipCommand::default())),
     },
     CommandInfo {
+        name: "REFEDIT",
+        aliases: &[],
+        description: "Edit a block reference or xref in place",
+        make: Some(|| Box::new(RefEdit)),
+    },
+    CommandInfo {
+        name: "REFSET",
+        aliases: &[],
+        description: "Add objects to or remove them from the reference being edited",
+        make: Some(|| Box::new(RefSet::new(None))),
+    },
+    CommandInfo {
+        name: "REFCLOSE",
+        aliases: &[],
+        description: "Save or discard the edits to the reference being edited",
+        make: Some(|| Box::new(RefClose::new(None))),
+    },
+    CommandInfo {
         name: "CLIP",
         aliases: &[],
         description: "Clip an xref, block reference, image or PDF underlay",
@@ -757,6 +776,47 @@ impl Engine {
         self.launch(info, Box::new(DrawOrder::new(Some(option))), doc, Point::ORIGIN, 0.0);
     }
 
+    /// The shortcut menu's Edit Xref In-place (or Edit Block In-place):
+    /// REFEDIT on the selected reference.
+    pub fn refedit_selected(&mut self, doc: &mut Document) {
+        let reference = self
+            .selection
+            .iter()
+            .copied()
+            .find(|id| matches!(doc.entity(*id).map(|e| &e.geometry), Some(Geometry::Insert { .. })));
+        let Some(id) = reference else { return };
+        self.cancel(doc);
+        let info = find("REFEDIT").expect("REFEDIT is a command");
+        self.log(format!("Command: {}", info.name));
+        self.started.push(info.name);
+        self.last_command = Some(info);
+        doc.begin(info.name);
+        match crate::refedit::open(doc, id) {
+            Ok(lines) => lines.into_iter().for_each(|l| self.log(l)),
+            Err(e) => self.log(e),
+        }
+        doc.commit();
+    }
+
+    /// The Edit Reference panel's buttons: REFCLOSE's "Save" or
+    /// "Discard", or REFSET's "Add" or "Remove".
+    pub fn edit_reference(&mut self, action: &'static str, doc: &mut Document) {
+        if self.active.is_some() {
+            self.cancel(doc);
+        }
+        let (name, cmd): (&str, Box<dyn Command>) = match action {
+            "Save" | "Discard" => ("REFCLOSE", Box::new(RefClose::new(Some(action == "Save")))),
+            _ => ("REFSET", Box::new(RefSet::new(Some(action == "Add")))),
+        };
+        let info = find(name).expect("REFCLOSE and REFSET are commands");
+        self.log(format!("Command: {}", info.name));
+        self.started.push(info.name);
+        self.launch(info, cmd, doc, Point::ORIGIN, 0.0);
+        if name == "REFCLOSE" && self.active.is_some() {
+            self.feed(Input::Enter, doc, Point::ORIGIN, 0.0);
+        }
+    }
+
     /// The Plot dialog's Window< button: asks for the window's corners,
     /// then hands it back as [`UiRequest::PlotWindow`].
     pub fn pick_plot_window(&mut self, doc: &mut Document) {
@@ -871,7 +931,7 @@ impl Engine {
             return;
         }
         self.window_start = None;
-        self.selection = doc.entities().filter(|e| doc.is_editable(&e.layer)).map(|e| e.id).collect();
+        self.selection = doc.entities().filter(|e| doc.is_selectable(e)).map(|e| e.id).collect();
         self.selection_windows.clear();
     }
 
@@ -1207,6 +1267,10 @@ impl Engine {
         }
         if let Some(line) = cmd.prepare(doc) {
             self.log(line);
+        }
+        if cmd.is_finished() {
+            doc.commit();
+            return;
         }
         if !wants_selection {
             cmd.preselected(&self.selection);
@@ -2333,6 +2397,54 @@ mod tests {
         type_all(&mut e, &mut d, &["hatchtoback"]);
         assert_eq!(order(&d)[0], hatch.0);
         assert!(e.history().iter().any(|l| l == "1 hatch object(s) sent to back."));
+    }
+
+    #[test]
+    fn refedit_edits_a_block_in_place() {
+        use oxidraft_model::{Block, BlockEntity, Color, Placement};
+        let (mut e, mut d) = (engine(), Document::new());
+        let line = Geometry::Line { start: Point::ORIGIN, end: Point::new(10.0, 0.0) };
+        d.define_block(Block {
+            name: "B".into(),
+            base: Point::ORIGIN,
+            entities: vec![BlockEntity::new("0", Color::ByLayer, line)],
+        });
+        let reference = d.add(Geometry::Insert {
+            block: "B".into(),
+            placement: Placement::at(Point::new(100.0, 0.0)),
+            attributes: Vec::new(),
+            clip: None,
+        });
+        let host = d.add(Geometry::Line { start: Point::new(0.0, 50.0), end: Point::new(10.0, 50.0) });
+        type_all(&mut e, &mut d, &["refedit"]);
+        click(&mut e, &mut d, 105.0, 0.0);
+        assert!(d.refedit().is_some(), "{:?}", e.history());
+        // The drawing's own objects can't be picked meanwhile.
+        type_all(&mut e, &mut d, &["erase"]);
+        click(&mut e, &mut d, 5.0, 50.0);
+        type_all(&mut e, &mut d, &[""]);
+        assert!(d.entity(host).is_some());
+        // New objects join the working set; REFSET brings in the line.
+        type_all(&mut e, &mut d, &["l", "100,5", "110,5", ""]);
+        type_all(&mut e, &mut d, &["refset", "a"]);
+        click(&mut e, &mut d, 5.0, 50.0);
+        type_all(&mut e, &mut d, &[""]);
+        assert!(e.history().iter().any(|l| l == "1 object(s) added to the working set."));
+        type_all(&mut e, &mut d, &["refclose", ""]);
+        assert!(d.refedit().is_none());
+        assert_eq!(d.block("B").unwrap().entities.len(), 3);
+        assert!(d.entity(host).is_none() && d.entity(reference).is_some());
+        assert_eq!(d.entities().count(), 1);
+        // Undo takes the edits back out of the block.
+        type_all(&mut e, &mut d, &["u"]);
+        assert!(d.refedit().is_some());
+        // Discard from the panel, then REFCLOSE with nothing being edited.
+        e.edit_reference("Discard", &mut d);
+        assert!(d.refedit().is_none() && d.entity(host).is_some());
+        assert_eq!(d.block("B").unwrap().entities.len(), 1);
+        type_all(&mut e, &mut d, &["refclose"]);
+        assert!(!e.is_active());
+        assert!(e.history().iter().any(|l| l.starts_with("** Command not allowed unless a reference")));
     }
 
     #[test]

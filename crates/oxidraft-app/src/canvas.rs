@@ -417,10 +417,17 @@ impl OxidraftApp {
         // Dash patterns in screen pixels by linetype name, looked up once a frame.
         let mut patterns: HashMap<String, Option<Vec<f64>>> = HashMap::new();
         let px_per_unit = self.doc.ltscale() * self.view.scale;
+        let refedit = self.doc.refedit();
         for e in self.doc.entities_in_draw_order() {
             if !self.doc.is_shown(&e.layer) || !on_screen(&self.doc.entity_bounds(e), &view) {
                 continue;
             }
+            // REFEDIT: the reference being edited shows as its working set,
+            // and the rest of the drawing fades (XFADECTL).
+            if refedit.is_some_and(|r| r.reference == e.id) {
+                continue;
+            }
+            let faded = refedit.is_some_and(|r| !r.in_working_set(e.id));
             // Attached drawings draw faded (AutoCAD's XDWGFADECTL).
             let xref = matches!(&e.geometry, Geometry::Insert { block, .. } if self.doc.xref(block).is_some());
             for s in self.doc.expanded_styled(e) {
@@ -431,6 +438,9 @@ impl OxidraftApp {
                 }
                 if xref {
                     color = color.gamma_multiply(0.6);
+                }
+                if faded {
+                    color = color.gamma_multiply(0.5);
                 }
                 let pattern = patterns.entry(s.linetype.clone()).or_insert_with(|| {
                     let lt = self.doc.linetype(&s.linetype).filter(|l| !l.is_continuous())?;

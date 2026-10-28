@@ -100,6 +100,25 @@ pub(crate) fn read_xref(path: &Path, chain: &mut Vec<PathBuf>) -> Result<Documen
     Ok(doc)
 }
 
+/// REFCLOSE's Save for an xref, waiting to be confirmed: the xref's file
+/// as read again, to put the edits into and write back.
+pub(crate) struct XrefEditSave {
+    name: String,
+    path: PathBuf,
+    site: Document,
+    /// The file's DWG version, or `None` for DXF.
+    version: Option<oxidraft_io_dwg::Version>,
+    /// Objects in the file Oxidraft can't keep: of types it doesn't
+    /// support, and in layouts.
+    skipped: usize,
+    paper_space: usize,
+}
+
+/// The backup AutoCAD makes when it writes over a drawing: "site.bak".
+fn backup_path(path: &Path) -> PathBuf {
+    path.with_extension("bak")
+}
+
 /// A long path cut to fit the palette, whole on hover.
 fn path_label(ui: &mut Ui, path: &str, width: f32) {
     ui.add_sized([width, 18.0], egui::Label::new(path).truncate()).on_hover_text(path);
@@ -146,6 +165,106 @@ impl OxidraftApp {
                 None
             }
         }
+    }
+
+    /// REFCLOSE's Save for an xref: reads its file again and asks to write
+    /// the edits into it.
+    pub(crate) fn prepare_xref_edit_save(&mut self) {
+        let Some(name) = self.doc.refedit().map(|r| r.block.clone()) else { return };
+        let Some(x) = self.doc.xref(&name).cloned() else { return };
+        let Some(path) = resolve(self.path.as_deref(), &x.path) else {
+            self.engine.log(format!("Xref \"{name}\" not found: {}; the edits aren't saved.", x.path));
+            return;
+        };
+        let read = if oxidraft_io_dwg::is_dwg(&path) {
+            oxidraft_io_dwg::load_file(&path).map(|o| (o.imported, Some(o.version)))
+        } else {
+            oxidraft_io_dxf::load_file(&path).map(|i| (i, None)).map_err(|e| e.to_string())
+        };
+        match read {
+            Ok((imported, version)) => {
+                self.xref_edit_save = Some(XrefEditSave {
+                    name,
+                    path,
+                    site: imported.document,
+                    version,
+                    skipped: imported.skipped,
+                    paper_space: imported.paper_space,
+                });
+            }
+            Err(e) => self.engine.log(format!("Could not read {}: {e}; the edits aren't saved.", path.display())),
+        }
+    }
+
+    /// Asks before REFCLOSE writes an xref's file, as AutoCAD does, saying
+    /// what in it Oxidraft can't keep.
+    pub(crate) fn xref_edit_save_dialog(&mut self, ctx: &egui::Context) {
+        let Some(d) = self.xref_edit_save.take() else { return };
+        let (mut open, mut ok, mut cancel) = (true, false, false);
+        let file = d.path.file_name().map_or(String::new(), |f| f.to_string_lossy().into_owned());
+        let backup = backup_path(&d.path).file_name().map_or(String::new(), |f| f.to_string_lossy().into_owned());
+        egui::Window::new("Save Reference Edits")
+            .id(egui::Id::unique("xref_edit_save"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_pos([360.0, 200.0])
+            .constrain_to(self.dialog_area(ctx))
+            .show(ctx, |ui| {
+                ui.set_width(380.0);
+                ui.label(RichText::new(format!("All reference edits will be saved to {file}.")).strong());
+                ui.add_space(4.0);
+                if d.skipped + d.paper_space > 0 {
+                    let mut lost = Vec::new();
+                    if d.skipped > 0 {
+                        lost.push(format!("{} object(s) of types it doesn't support", d.skipped));
+                    }
+                    if d.paper_space > 0 {
+                        lost.push(format!("{} object(s) in layouts", d.paper_space));
+                    }
+                    ui.colored_label(
+                        theme::WARNING,
+                        format!(
+                            "Oxidraft rewrites the file and can't keep {}; they'll be left out.",
+                            lost.join(" or ")
+                        ),
+                    );
+                }
+                ui.colored_label(theme::TEXT_DIM, format!("The file as it is now is kept as {backup}."));
+                ui.add_space(6.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    cancel = ui.button("Cancel").clicked();
+                    ok = ui.button("OK").clicked();
+                });
+            });
+        if ok {
+            self.save_xref_edit(d);
+        } else if open && !cancel {
+            self.xref_edit_save = Some(d);
+        } else {
+            self.engine.log("Reference edits not saved; still editing.".to_string());
+        }
+    }
+
+    /// Writes the edits into the xref's file (keeping the old file as .bak),
+    /// ends the reference edit and reads the xref again.
+    fn save_xref_edit(&mut self, mut d: XrefEditSave) {
+        self.engine.cancel(&mut self.doc);
+        self.doc.store_refedit(&mut d.site);
+        let written =
+            std::fs::copy(&d.path, backup_path(&d.path)).map_err(|e| e.to_string()).and_then(|_| match d.version {
+                Some(v) => oxidraft_io_dwg::save_file(&d.site, &d.path, v),
+                None => oxidraft_io_dxf::save_file(&d.site, &d.path).map_err(|e| e.to_string()),
+            });
+        if let Err(e) = written {
+            self.engine.log(format!("Could not save {}: {e}; still editing.", d.path.display()));
+            return;
+        }
+        self.doc.begin("REFCLOSE");
+        self.doc.close_refedit(true);
+        self.read_into(&d.name);
+        self.doc.commit();
+        self.engine.log(format!("Xref \"{}\" saved to {}.", d.name, d.path.display()));
     }
 
     /// Reads every attached drawing, right after opening.

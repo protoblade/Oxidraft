@@ -58,6 +58,11 @@ pub enum Icon {
     Image,
     Pdf,
     ImageClip,
+    EditReference,
+    SaveReference,
+    DiscardReference,
+    AddToWorkingSet,
+    RemoveFromWorkingSet,
     InsertBlock,
     CreateBlock,
     MatchProperties,
@@ -494,6 +499,31 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
                 let x = 0.08 + 0.105 * i as f32;
                 let h = if i % 2 == 0 { 0.16 } else { 0.09 };
                 pen.line(&[(x, 0.38), (x, 0.38 + h)], yellow);
+            }
+        }
+        // A block (a square with its diagonal) and what's done to it.
+        Icon::EditReference
+        | Icon::SaveReference
+        | Icon::DiscardReference
+        | Icon::AddToWorkingSet
+        | Icon::RemoveFromWorkingSet => {
+            pen.closed(&[(0.1, 0.1), (0.62, 0.1), (0.62, 0.62), (0.1, 0.62)], c);
+            pen.line(&[(0.1, 0.62), (0.62, 0.1)], c);
+            match icon {
+                Icon::EditReference => {
+                    pen.line(&[(0.45, 0.92), (0.92, 0.45)], blue);
+                    pen.line(&[(0.38, 0.99), (0.45, 0.92)], yellow);
+                }
+                Icon::SaveReference => pen.line(&[(0.48, 0.72), (0.62, 0.88), (0.94, 0.5)], green),
+                Icon::DiscardReference => {
+                    pen.line(&[(0.52, 0.52), (0.9, 0.9)], red);
+                    pen.line(&[(0.9, 0.52), (0.52, 0.9)], red);
+                }
+                Icon::AddToWorkingSet => {
+                    pen.line(&[(0.5, 0.72), (0.94, 0.72)], green);
+                    pen.line(&[(0.72, 0.5), (0.72, 0.94)], green);
+                }
+                _ => pen.line(&[(0.5, 0.72), (0.94, 0.72)], red),
             }
         }
         Icon::InsertBlock => {

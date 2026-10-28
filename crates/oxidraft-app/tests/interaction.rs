@@ -616,3 +616,61 @@ fn attach_a_pdf_page_as_an_underlay() {
     assert!((u.length() - 297.0).abs() < 0.1 && (v.length() - 210.0).abs() < 0.1, "{u:?} {v:?}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn edit_an_xref_in_place_and_save_it_to_its_file() {
+    use oxidraft_model::{Color, Layer};
+    let dir = std::env::temp_dir().join(format!("oxidraft-refedit-app-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut site = Document::new();
+    site.add_layer(Layer::new("Boundary", 1));
+    site.add_on_layer(Geometry::Line { start: Point::ORIGIN, end: Point::new(20.0, 0.0) }, "Boundary", Color::ByLayer);
+    oxidraft_io_dxf::save_file(&site, dir.join("site.dxf")).unwrap();
+    let mut plan = Document::new();
+    plan.add(Geometry::Line { start: Point::ORIGIN, end: Point::new(100.0, 60.0) });
+    let host = dir.join("plan.dxf");
+    oxidraft_io_dxf::save_file(&plan, &host).unwrap();
+
+    let mut h = app_with_line();
+    h.state_mut().open_path(host.clone());
+    h.run_steps(3);
+    h.state_mut().attach_file(dir.join("site.dxf"));
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let at = screen(&h, 50.0, 30.0);
+    click(&mut h, at);
+    // REFEDIT on the reference, then a circle drawn into it.
+    h.state_mut().type_command("refedit");
+    h.run_steps(1);
+    let on_line = screen(&h, 60.0, 30.0);
+    click(&mut h, on_line);
+    assert!(h.state_mut().document_mut().refedit().is_some(), "{:?}", h.state_mut().engine_mut().history());
+    for input in ["circle", "55,35", "2"] {
+        h.state_mut().type_command(input);
+        h.run_steps(1);
+    }
+    // Saving the drawing waits for the reference edit to end.
+    h.state_mut().type_command("save");
+    h.run_steps(1);
+    assert!(h.state_mut().engine_mut().history().iter().any(|l| l.contains("Save or discard the reference edits")));
+    h.get_by_label("Save Changes").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let history = h.state_mut().engine_mut().history().to_vec();
+    let doc = h.state_mut().document_mut();
+    assert!(doc.refedit().is_none(), "{history:?}");
+    assert_eq!(doc.block("site").map(|b| b.entities.len()), Some(2));
+    // Written to the xref's own file, in its coordinates, with a backup.
+    let saved = oxidraft_io_dxf::load_file(dir.join("site.dxf")).unwrap().document;
+    assert_eq!(saved.len(), 2);
+    assert!(
+        saved
+            .entities()
+            .any(|e| matches!(e.geometry, Geometry::Circle { center, .. } if center.approx_eq(Point::new(5.0, 5.0))))
+    );
+    assert!(saved.entities().any(|e| e.layer == "Boundary"));
+    assert!(dir.join("site.bak").is_file());
+    std::fs::remove_dir_all(&dir).ok();
+}

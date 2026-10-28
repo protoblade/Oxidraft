@@ -51,7 +51,7 @@ pub fn similar(e: &Entity, seed: &Entity, mode: SimilarMode) -> bool {
 pub fn select_similar(doc: &Document, seeds: &[EntityId], mode: SimilarMode) -> Vec<EntityId> {
     let seeds: Vec<&Entity> = seeds.iter().filter_map(|&id| doc.entity(id)).collect();
     doc.entities()
-        .filter(|e| doc.is_editable(&e.layer))
+        .filter(|e| doc.is_selectable(e))
         .filter(|e| seeds.iter().any(|s| similar(e, s, mode)))
         .map(|e| e.id)
         .collect()
@@ -140,7 +140,7 @@ impl QuickSelect {
     /// in `current` if it filters the selection.
     pub fn candidates<'a>(&'a self, doc: &'a Document, current: &'a [EntityId]) -> impl Iterator<Item = &'a Entity> {
         doc.entities()
-            .filter(|e| doc.is_editable(&e.layer))
+            .filter(|e| doc.is_selectable(e))
             .filter(move |e| !self.in_selection || current.contains(&e.id))
             .filter(|e| self.object_type.as_deref().is_none_or(|t| object_type(&e.geometry) == t))
     }
