@@ -44,6 +44,9 @@ pub struct OxidraftApp {
     pub(crate) updater: Updater,
     pub(crate) update_dialog: bool,
     pub(crate) layer_manager_open: bool,
+    /// One-shot snap from the shortcut menu for the next point:
+    /// `Some(Some(kind))` snaps only to `kind`, `Some(None)` doesn't snap.
+    pub(crate) snap_override: Option<Option<oxidraft_model::snap::SnapKind>>,
     pub(crate) properties_open: bool,
     /// Row selected in the Layer Properties Manager.
     pub(crate) selected_layer: Option<String>,
@@ -89,6 +92,7 @@ impl OxidraftApp {
             updater: Updater::default(),
             update_dialog: false,
             layer_manager_open: false,
+            snap_override: None,
             properties_open: false,
             selected_layer: None,
             renaming_layer: None,
@@ -285,6 +289,7 @@ impl OxidraftApp {
                 empty && (i.consume_key(none, Key::Delete) || i.consume_key(none, Key::Backspace)),
             )
         });
+        let select_all = empty && ctx.input_mut(|i| i.consume_key(cmd, Key::A));
 
         if esc {
             if !self.command_text.is_empty() {
@@ -331,6 +336,9 @@ impl OxidraftApp {
         }
         if new {
             self.new_drawing();
+        }
+        if select_all {
+            self.engine.select_all(&self.doc);
         }
         if delete && !self.engine.is_active() && !self.engine.selection().is_empty() {
             self.run("ERASE");

@@ -66,6 +66,12 @@ impl OxidraftApp {
         let cursor = pointer.map(|screen| self.resolve_cursor(rect, screen));
         self.cursor = cursor.as_ref().map(|c| c.point);
         self.handle_clicks(ui, &response, cursor.as_ref());
+        // Right-click opens the shortcut menu (Enter, options, editing…). This
+        // runs every frame: once open, the pointer is over the menu, not here.
+        if response.secondary_clicked() {
+            self.engine.cancel_window();
+        }
+        response.context_menu(|ui| self.shortcut_menu(ui));
 
         if self.grid {
             self.draw_grid(&painter, rect);
@@ -149,7 +155,12 @@ impl OxidraftApp {
         if self.picks_objects() {
             return CursorState { screen, raw, point: raw, snap: None, tracked: None };
         }
-        let snap = if self.osnap { snap::find_snap(&self.doc, raw, tolerance) } else { None };
+        let snap = match self.snap_override {
+            Some(Some(kind)) => snap::find_override_snap(&self.doc, raw, tolerance, kind),
+            Some(None) => None,
+            None if self.osnap => snap::find_snap(&self.doc, raw, tolerance),
+            None => None,
+        };
         if let Some(s) = snap {
             return CursorState { screen, raw, point: s.point, snap: Some(s), tracked: None };
         }
@@ -188,8 +199,13 @@ impl OxidraftApp {
                 None => {}
             }
         }
+        let picking_point = !self.picks_objects();
         if response.clicked_by(PointerButton::Primary) {
             self.engine.click(c.point, c.raw, shift, &mut self.doc, tolerance);
+            // A one-shot snap override is used up by the point it picked.
+            if picking_point {
+                self.snap_override = None;
+            }
         }
         // Double-clicking an object opens its properties, as in AutoCAD (its
         // two clicks have already selected it).
@@ -198,11 +214,6 @@ impl OxidraftApp {
             && snap::pick(&self.doc, c.raw, tolerance).is_some()
         {
             self.properties_open = true;
-        }
-        // Right-click acts as Enter.
-        if response.clicked_by(PointerButton::Secondary) {
-            self.command_text.clear();
-            self.submit();
         }
     }
 

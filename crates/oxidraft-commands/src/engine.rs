@@ -216,6 +216,10 @@ pub struct Engine {
     history: Vec<String>,
     /// Commands and inputs typed so far, for Up-arrow recall.
     typed: Vec<String>,
+    /// Commands started, and inputs typed at command prompts, for the
+    /// shortcut menu's Recent Input.
+    started: Vec<&'static str>,
+    inputs: Vec<String>,
     /// Selected objects: the pickfirst set when idle, or the set being built
     /// at a "Select objects:" prompt.
     selection: Vec<EntityId>,
@@ -248,6 +252,8 @@ impl Engine {
             last_point: None,
             history: Vec::new(),
             typed: Vec::new(),
+            started: Vec::new(),
+            inputs: Vec::new(),
             selection: Vec::new(),
             selection_windows: Vec::new(),
             window_start: None,
@@ -306,6 +312,45 @@ impl Engine {
             ids.extend(a.cmd.highlighted());
         }
         ids
+    }
+
+    /// The command Enter would repeat.
+    pub fn last_command(&self) -> Option<&'static str> {
+        self.last_command.map(|c| c.name)
+    }
+
+    /// Recently typed commands, newest first, without repeats.
+    pub fn recent_commands(&self, max: usize) -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = Vec::new();
+        for &name in self.started.iter().rev() {
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+        out.truncate(max);
+        out
+    }
+
+    /// Recently typed inputs that aren't command names (points, values), newest first.
+    pub fn recent_inputs(&self, max: usize) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for t in self.inputs.iter().rev() {
+            if !out.contains(t) {
+                out.push(t.clone());
+            }
+        }
+        out.truncate(max);
+        out
+    }
+
+    /// Selects every object that can be selected (Ctrl/Cmd+A).
+    pub fn select_all(&mut self, doc: &Document) {
+        if self.active.is_some() {
+            return;
+        }
+        self.window_start = None;
+        self.selection = doc.entities().filter(|e| doc.is_editable(&e.layer)).map(|e| e.id).collect();
+        self.selection_windows.clear();
     }
 
     pub fn selection(&self) -> &[EntityId] {
@@ -422,6 +467,9 @@ impl Engine {
         let text = text.trim();
         if !text.is_empty() {
             self.typed.push(text.to_string());
+            if self.active.is_some() {
+                self.inputs.push(text.to_string());
+            }
         }
         let Some(active) = &self.active else {
             self.window_start = None;
@@ -546,6 +594,11 @@ impl Engine {
         true
     }
 
+    /// Drops a selection window in progress (e.g. when a menu opens).
+    pub fn cancel_window(&mut self) {
+        self.window_start = None;
+    }
+
     /// Escape: ends the active command (keeping what it drew, as AutoCAD does),
     /// or drops the selection window, or clears the selection.
     pub fn cancel(&mut self, doc: &mut Document) {
@@ -587,6 +640,7 @@ impl Engine {
 
     fn start(&mut self, info: &'static CommandInfo, doc: &mut Document, cursor: Point, pick_tolerance: f64) {
         self.last_command = Some(info);
+        self.started.push(info.name);
         let Some(make) = info.make else {
             self.run_immediate(info.name, doc);
             return;
@@ -1301,6 +1355,18 @@ mod tests {
         assert_eq!(names, vec!["COPY"]);
         let names: Vec<_> = Engine::suggest("s").iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["STRETCH", "SCALE"]);
+    }
+
+    #[test]
+    fn recent_commands_and_inputs_for_the_shortcut_menu() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["l", "0,0", "5,0", "5,5", "c", "c", "1,1", "2", "LINE", "3,3", "4,4", ""]);
+        // The "c" that closed the line was an option, not CIRCLE.
+        assert_eq!(e.recent_commands(5), vec!["LINE", "CIRCLE"]);
+        assert_eq!(e.recent_inputs(3), vec!["4,4".to_string(), "3,3".to_string(), "2".to_string()]);
+        assert_eq!(e.last_command(), Some("LINE"));
+        e.select_all(&d);
+        assert_eq!(e.selection().len(), 5, "three closed-line segments, the circle and the last line");
     }
 
     #[test]

@@ -1,0 +1,163 @@
+//! The right-click shortcut menu in the drawing area, which changes with what
+//! you're doing, like AutoCAD's Default, Edit and Command menus.
+
+use eframe::egui::{self, Ui};
+use oxidraft_model::snap::SnapKind;
+
+use crate::app::OxidraftApp;
+
+/// How many entries Recent Input lists.
+const RECENT: usize = 8;
+
+fn item(ui: &mut Ui, label: impl Into<String>, shortcut: &str) -> bool {
+    item_enabled(ui, true, label, shortcut)
+}
+
+fn item_enabled(ui: &mut Ui, enabled: bool, label: impl Into<String>, shortcut: &str) -> bool {
+    let mut button = egui::Button::new(label.into());
+    if !shortcut.is_empty() {
+        button = button.shortcut_text(shortcut);
+    }
+    ui.add_enabled(enabled, button).clicked()
+}
+
+impl OxidraftApp {
+    pub(crate) fn shortcut_menu(&mut self, ui: &mut Ui) {
+        ui.set_min_width(210.0);
+        if self.engine.is_active() {
+            self.command_menu(ui);
+        } else if !self.engine.selection().is_empty() {
+            self.edit_menu(ui);
+        } else {
+            self.default_menu(ui);
+        }
+    }
+
+    /// Repeat <last command> and Recent Input, shared by the idle menus.
+    fn repeat_items(&mut self, ui: &mut Ui) {
+        let last = self.engine.last_command();
+        if item_enabled(ui, last.is_some(), format!("Repeat {}", last.unwrap_or("")), "Enter")
+            && let Some(name) = last
+        {
+            self.run(name);
+        }
+        let recent = self.engine.recent_commands(RECENT);
+        ui.add_enabled_ui(!recent.is_empty(), |ui| {
+            ui.menu_button("Recent Input", |ui| {
+                for name in recent {
+                    if ui.button(name).clicked() {
+                        self.run(name);
+                    }
+                }
+            });
+        });
+    }
+
+    /// Nothing selected, no command running.
+    fn default_menu(&mut self, ui: &mut Ui) {
+        self.repeat_items(ui);
+        ui.separator();
+        let undo = self.doc.undo_name().map(str::to_string);
+        if item_enabled(ui, undo.is_some(), format!("Undo {}", undo.unwrap_or_default()), "Cmd+Z") {
+            self.run("UNDO");
+        }
+        let redo = self.doc.redo_name().map(str::to_string);
+        if item_enabled(ui, redo.is_some(), format!("Redo {}", redo.unwrap_or_default()), "Shift+Cmd+Z") {
+            self.run("REDO");
+        }
+        ui.separator();
+        if item(ui, "Zoom Extents", "ZE") {
+            self.zoom_extents_pending = true;
+        }
+        if item(ui, "Select All", "Cmd+A") {
+            self.engine.select_all(&self.doc);
+        }
+        ui.separator();
+        if item(ui, "Layer Properties...", "LA") {
+            self.layer_manager_open = true;
+        }
+        if item(ui, "Properties", "Cmd+1") {
+            self.properties_open = true;
+        }
+    }
+
+    /// Objects selected, no command running.
+    fn edit_menu(&mut self, ui: &mut Ui) {
+        self.repeat_items(ui);
+        ui.separator();
+        for (label, command, alias) in [
+            ("Erase", "ERASE", "Del"),
+            ("Move", "MOVE", "M"),
+            ("Copy Selection", "COPY", "CO"),
+            ("Rotate", "ROTATE", "RO"),
+            ("Scale", "SCALE", "SC"),
+            ("Mirror", "MIRROR", "MI"),
+        ] {
+            if item(ui, label, alias) {
+                self.run(command);
+            }
+        }
+        ui.separator();
+        if item(ui, "Deselect All", "Esc") {
+            self.engine.cancel(&mut self.doc);
+        }
+        ui.separator();
+        if item(ui, "Properties", "Cmd+1") {
+            self.properties_open = true;
+        }
+    }
+
+    /// A command is running: Enter, Cancel, its options and snap overrides.
+    fn command_menu(&mut self, ui: &mut Ui) {
+        if item(ui, "Enter", "") {
+            self.command_text.clear();
+            self.submit();
+        }
+        if item(ui, "Cancel", "Esc") {
+            self.command_text.clear();
+            self.snap_override = None;
+            self.engine.cancel(&mut self.doc);
+            return;
+        }
+        let recent = self.engine.recent_inputs(RECENT);
+        ui.add_enabled_ui(!recent.is_empty(), |ui| {
+            ui.menu_button("Recent Input", |ui| {
+                for input in recent {
+                    if ui.button(&input).clicked() {
+                        self.type_command(&input);
+                    }
+                }
+            });
+        });
+        let keywords = self.engine.current_prompt().map(|p| p.keywords).unwrap_or_default();
+        if !keywords.is_empty() {
+            ui.separator();
+            for k in keywords {
+                if ui.button(k).clicked() {
+                    self.type_command(k);
+                }
+            }
+        }
+        ui.separator();
+        // Snap overrides apply to points, not to picking objects.
+        let points = !self.engine.is_selecting() && !self.engine.is_picking();
+        ui.add_enabled_ui(points, |ui| {
+            ui.menu_button("Snap Overrides", |ui| {
+                for kind in SnapKind::ALL {
+                    if ui.button(kind.label()).clicked() {
+                        self.snap_override = Some(Some(kind));
+                        self.engine.log(format!("{} of", kind.label()));
+                    }
+                }
+                ui.separator();
+                if ui.button("None").clicked() {
+                    self.snap_override = Some(None);
+                    self.engine.log("None of");
+                }
+            });
+        });
+        if item(ui, "Zoom Extents", "ZE") {
+            self.zoom_extents_pending = true;
+        }
+    }
+}

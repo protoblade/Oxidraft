@@ -508,6 +508,15 @@ impl Document {
         !self.redo_stack.is_empty()
     }
 
+    /// Name of the step UNDO would revert ("LINE", "Erase", …).
+    pub fn undo_name(&self) -> Option<&str> {
+        self.undo_stack.last().map(|t| t.name.as_str())
+    }
+
+    pub fn redo_name(&self) -> Option<&str> {
+        self.redo_stack.last().map(|t| t.name.as_str())
+    }
+
     /// Drops all undo/redo history, e.g. right after opening a file.
     pub fn forget_history(&mut self) {
         self.open = None;

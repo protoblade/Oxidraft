@@ -7,6 +7,7 @@ mod cmdline;
 mod icons;
 mod layers;
 mod properties;
+mod shortcut_menu;
 mod theme;
 pub mod update;
 mod view;

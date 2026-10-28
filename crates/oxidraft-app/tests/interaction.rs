@@ -1,7 +1,7 @@
 //! Drives the real app through egui pointer events, the way a user would.
 
 use eframe::egui::{Event, Modifiers, PointerButton, Pos2, vec2};
-use egui_kittest::Harness;
+use egui_kittest::{Harness, kittest::Queryable};
 use oxidraft_app::OxidraftApp;
 use oxidraft_geom::Point;
 use oxidraft_model::{Document, Geometry};
@@ -34,6 +34,24 @@ fn click(h: &mut Harness<'_, OxidraftApp>, pos: Pos2) {
     h.run_steps(1);
     button(h, pos, true);
     button(h, pos, false);
+}
+
+fn right_click(h: &mut Harness<'_, OxidraftApp>, pos: Pos2) {
+    h.hover_at(pos);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    // The menu opens on the release; its items appear a frame later.
+    h.run_steps(2);
+}
+
+/// Clicks a menu item by its accessible label (which includes any shortcut
+/// text, e.g. "Select All Cmd+A").
+fn choose(h: &mut Harness<'_, OxidraftApp>, label: &str) {
+    h.get_by_label(label).click();
+    h.run_steps(2);
 }
 
 fn drag(h: &mut Harness<'_, OxidraftApp>, from: Pos2, to: Pos2) {
@@ -104,4 +122,59 @@ fn dragging_on_empty_space_selects_with_a_window() {
     let (from, to) = (screen(&h, -10.0, 5.0), screen(&h, 110.0, -3.0));
     drag(&mut h, from, to);
     assert_eq!(h.state_mut().engine_mut().selection().len(), 1);
+}
+
+#[test]
+fn right_click_menu_erases_the_selection() {
+    let mut h = app_with_line();
+    let on_line = screen(&h, 50.0, 0.0);
+    click(&mut h, on_line);
+    right_click(&mut h, on_line);
+    choose(&mut h, "Erase Del");
+    assert_eq!(h.state_mut().document_mut().len(), 1, "only the other line is left");
+}
+
+#[test]
+fn right_click_menu_selects_all_when_idle() {
+    let mut h = app_with_line();
+    let empty = screen(&h, 50.0, 30.0);
+    right_click(&mut h, empty);
+    choose(&mut h, "Select All Cmd+A");
+    assert_eq!(h.state_mut().engine_mut().selection().len(), 2);
+}
+
+#[test]
+fn right_click_menu_enter_ends_a_command() {
+    let mut h = app_with_line();
+    h.state_mut().type_command("l");
+    let (a, b) = (screen(&h, 20.0, 20.0), screen(&h, 40.0, 30.0));
+    click(&mut h, a);
+    click(&mut h, b);
+    right_click(&mut h, b);
+    choose(&mut h, "Enter");
+    assert!(!h.state_mut().engine_mut().is_active());
+    assert_eq!(h.state_mut().document_mut().len(), 3);
+}
+
+#[test]
+fn snap_override_from_the_menu_picks_the_midpoint() {
+    let mut h = app_with_line();
+    h.state_mut().type_command("l");
+    let start = screen(&h, 20.0, 30.0);
+    click(&mut h, start);
+    right_click(&mut h, start);
+    choose(&mut h, "Snap Overrides");
+    choose(&mut h, "Midpoint");
+    // Touch the bottom line near its end: the override takes its midpoint.
+    let near_end = screen(&h, 95.0, 0.2);
+    click(&mut h, near_end);
+    // The first point went through screen pixels; the snapped end is exact.
+    let doc = h.state_mut().document_mut();
+    let end = doc.entities().filter_map(|e| match &e.geometry {
+        Geometry::Line { start, end } if start.distance(Point::new(20.0, 30.0)) < 0.5 => Some(*end),
+        _ => None,
+    });
+    let end: Vec<Point> = end.collect();
+    assert_eq!(end.len(), 1);
+    assert!(end[0].approx_eq(Point::new(50.0, 0.0)), "ended at {:?}", end[0]);
 }

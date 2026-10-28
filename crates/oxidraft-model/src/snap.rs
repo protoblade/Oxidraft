@@ -17,6 +17,15 @@ pub enum SnapKind {
 }
 
 impl SnapKind {
+    pub const ALL: [SnapKind; 6] = [
+        SnapKind::Endpoint,
+        SnapKind::Midpoint,
+        SnapKind::Center,
+        SnapKind::Quadrant,
+        SnapKind::Intersection,
+        SnapKind::Insertion,
+    ];
+
     /// Tooltip text shown next to the AutoSnap marker.
     pub fn label(self) -> &'static str {
         match self {
@@ -100,6 +109,38 @@ pub fn find_snap(doc: &Document, cursor: Point, tolerance: f64) -> Option<Snap> 
         .map(|(_, s)| s)
 }
 
+/// A one-shot snap override (Shift+right-click menu in AutoCAD): the `kind`
+/// point of whichever object the aperture touches, however far that point
+/// is from the cursor — the midpoint of the line under the cursor, say.
+pub fn find_override_snap(doc: &Document, cursor: Point, tolerance: f64, kind: SnapKind) -> Option<Snap> {
+    let mut all = Vec::new();
+    let mut near: Vec<Geometry> = Vec::new();
+    for e in doc.entities().filter(|e| doc.is_shown(&e.layer)) {
+        let touched = doc.entity_distance(e, cursor) <= tolerance;
+        if touched {
+            match &e.geometry {
+                Geometry::Insert { placement, .. } => {
+                    all.push(Snap { point: placement.position, kind: SnapKind::Insertion })
+                }
+                Geometry::Text { position, .. } => all.push(Snap { point: *position, kind: SnapKind::Insertion }),
+                _ => {}
+            }
+        }
+        for g in doc.expanded(e).into_iter().filter(|g| g.distance_to(cursor) <= tolerance) {
+            candidates(&g, &mut all);
+            near.push(g);
+        }
+    }
+    for (i, a) in near.iter().enumerate() {
+        for b in &near[i + 1..] {
+            all.extend(intersections(a, b).into_iter().map(|point| Snap { point, kind: SnapKind::Intersection }));
+        }
+    }
+    all.into_iter()
+        .filter(|s| s.kind == kind)
+        .min_by(|a, b| a.point.distance(cursor).total_cmp(&b.point.distance(cursor)))
+}
+
 /// Entities selected by a selection window from `first` to `second` corner.
 ///
 /// Dragging left-to-right makes a *window* (objects entirely inside);
@@ -145,6 +186,10 @@ mod tests {
         let s = find_snap(&d, Point::new(5.2, 0.1), 1.0).unwrap();
         assert_eq!(s.kind, SnapKind::Midpoint);
         assert!(find_snap(&d, Point::new(3.0, 3.0), 1.0).is_none());
+        // An override takes the touched line's midpoint, even from near its end.
+        let s = find_override_snap(&d, Point::new(9.8, 0.2), 0.5, SnapKind::Midpoint).unwrap();
+        assert_eq!(s.point, Point::new(5.0, 0.0));
+        assert!(find_override_snap(&d, Point::new(9.8, 3.0), 0.5, SnapKind::Midpoint).is_none(), "nothing touched");
     }
 
     #[test]
