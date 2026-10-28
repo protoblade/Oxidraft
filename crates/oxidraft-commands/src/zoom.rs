@@ -144,7 +144,7 @@ impl Command for Zoom {
 
     fn prompt(&self) -> Prompt {
         match self.stage {
-            Stage::Start => Prompt::new("Specify corner of window, enter a scale factor (nX or nXP), or")
+            Stage::Start => Prompt::new("Specify corner of window, enter a scale factor (nX or nXP),")
                 .with_keywords(OPTIONS)
                 .with_default("real time"),
             Stage::Corner(_) => Prompt::new("Specify opposite corner"),

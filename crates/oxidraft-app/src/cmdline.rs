@@ -188,7 +188,11 @@ impl OxidraftApp {
                         ui.label(RichText::new(format!("{default}:")).color(theme::TEXT));
                         ui.spacing_mut().item_spacing.x = 4.0;
                     }
+                    // A fixed id: an automatic one changes whenever the
+                    // suggestions or prompt keywords above it do, which drops
+                    // focus (and the next keystroke) for a frame.
                     let edit = TextEdit::singleline(&mut self.command_text)
+                        .id(egui::Id::unique("command_line_input"))
                         .font(FontId::proportional(12.5))
                         .hint_text(if prompt.is_none() { "Type a command" } else { "" })
                         .frame(Frame::NONE)

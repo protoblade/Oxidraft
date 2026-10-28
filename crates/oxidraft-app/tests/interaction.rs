@@ -300,3 +300,23 @@ fn zoom_object_uses_the_objects_already_selected() {
     assert!(after > before * 2.0, "zoomed to the line: {before} -> {after}");
     assert_eq!(h.state_mut().engine_mut().selection().len(), 1, "still selected");
 }
+
+/// Types like a person: one key per frame, without waiting for the app to settle.
+fn type_keys(h: &mut Harness<'_, OxidraftApp>, text: &str) {
+    for c in text.chars() {
+        h.event(Event::Text(c.to_string()));
+        h.run_steps(1);
+    }
+}
+
+#[test]
+fn no_keystroke_is_lost_while_the_command_line_changes() {
+    let mut h = app_with_line();
+    // AutoComplete appears with the first letter, then the ZOOM prompt and
+    // its options replace it; every key still lands.
+    type_keys(&mut h, "zoom o ");
+    let history = h.state_mut().engine_mut().history().to_vec();
+    assert!(history.iter().any(|l| l == "Command: ZOOM"), "{history:?}");
+    assert!(history.last().unwrap().ends_with("[All/Center/Extents/Previous/Scale/Window/Object] <real time>: o"));
+    assert_eq!(h.state_mut().engine_mut().current_prompt().unwrap().text, "Select objects");
+}
