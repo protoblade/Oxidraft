@@ -382,6 +382,7 @@ fn double_clicking_a_block_edits_its_attributes() {
         block: "KW".into(),
         placement: Placement::at(Point::new(50.0, 30.0)),
         attributes: vec![number],
+        clip: None,
     });
     h.run_steps(2);
     let edge = screen(&h, 53.0, 30.0);

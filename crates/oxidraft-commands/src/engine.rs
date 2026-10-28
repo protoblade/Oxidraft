@@ -2,17 +2,72 @@ use oxidraft_geom::{Aabb, Point};
 use oxidraft_model::{Document, EntityId, Geometry, snap};
 
 use crate::{
-    Command, Ctx, Input, Prompt, Selection, Step, UiRequest, Vars, ViewRequest, annotate::Dimension, annotate::MLeader,
-    annotate::MText, annotate::SingleText, arc::Arc, array::Array, array::ArrayKind, attribute::AttDisp,
-    attribute::EattEdit, block::DefineBlock, block::InsertBlock, break_join::Break, break_join::Join, chamfer::Chamfer,
-    circle::Circle, clipboard::CopyClip, clipboard::Paste, dims::DimAngular, dims::DimChain, dims::DimRadial,
-    donut::Donut, draworder::DrawOrder, draworder::TextToFront, ellipse::EllipseCmd, erase::Erase, explode::Explode,
-    fillet::Fillet, grip::GripStretch, hatch::Hatch, inquiry::Area, inquiry::Dist, inquiry::Id, inquiry::Ltscale,
-    layer::LayIso, layer::LayMcur, layer::LayerPick, lengthen::Lengthen, line::Line, list::List, matchprop::MatchProp,
-    mirror::Mirror, move_copy::MoveCopy, offset::Offset, parse_input, pedit::Pedit, pline::Pline, plot::PlotWindow,
-    point::Marks, point::PointCmd, point::PointStyle, polygon::Polygon, rectang::Rectang, revcloud::RevCloud,
-    rotate::Rotate, scale::Scale, select::SelectSimilar, spline::SplineCmd, stretch::Stretch, trim_extend::TrimExtend,
-    underlay::AttachImage, underlay::ImageClip, xline::ConstructionLine, xref::AttachXref, zoom::Zoom,
+    Command, Ctx, Input, Prompt, Selection, Step, UiRequest, Vars, ViewRequest,
+    annotate::Dimension,
+    annotate::MLeader,
+    annotate::MText,
+    annotate::SingleText,
+    arc::Arc,
+    array::Array,
+    array::ArrayKind,
+    attribute::AttDisp,
+    attribute::EattEdit,
+    block::DefineBlock,
+    block::InsertBlock,
+    break_join::Break,
+    break_join::Join,
+    chamfer::Chamfer,
+    circle::Circle,
+    clipboard::CopyClip,
+    clipboard::Paste,
+    dims::DimAngular,
+    dims::DimChain,
+    dims::DimRadial,
+    donut::Donut,
+    draworder::DrawOrder,
+    draworder::TextToFront,
+    ellipse::EllipseCmd,
+    erase::Erase,
+    explode::Explode,
+    fillet::Fillet,
+    grip::GripStretch,
+    hatch::Hatch,
+    inquiry::Area,
+    inquiry::Dist,
+    inquiry::Id,
+    inquiry::Ltscale,
+    layer::LayIso,
+    layer::LayMcur,
+    layer::LayerPick,
+    lengthen::Lengthen,
+    line::Line,
+    list::List,
+    matchprop::MatchProp,
+    mirror::Mirror,
+    move_copy::MoveCopy,
+    offset::Offset,
+    parse_input,
+    pedit::Pedit,
+    pline::Pline,
+    plot::PlotWindow,
+    point::Marks,
+    point::PointCmd,
+    point::PointStyle,
+    polygon::Polygon,
+    rectang::Rectang,
+    revcloud::RevCloud,
+    rotate::Rotate,
+    scale::Scale,
+    select::SelectSimilar,
+    spline::SplineCmd,
+    stretch::Stretch,
+    trim_extend::TrimExtend,
+    underlay::AttachImage,
+    underlay::ImageClip,
+    xclip::{Clip, XClipCommand},
+    xline::ConstructionLine,
+    xref::AttachXref,
+    zoom::Zoom,
 };
 
 /// A command the user can type, with its aliases.
@@ -504,6 +559,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["ICL", "PDFCLIP"],
         description: "Clip an image or PDF underlay to a rectangle or polygon",
         make: Some(|| Box::new(ImageClip::default())),
+    },
+    CommandInfo {
+        name: "XCLIP",
+        aliases: &["XC"],
+        description: "Clip a block reference or xref to a rectangle, polygon or polyline",
+        make: Some(|| Box::new(XClipCommand::default())),
+    },
+    CommandInfo {
+        name: "CLIP",
+        aliases: &[],
+        description: "Clip an xref, block reference, image or PDF underlay",
+        make: Some(|| Box::new(Clip::default())),
     },
     CommandInfo { name: "PREVIEW", aliases: &["PRE"], description: "Show how the drawing will plot", make: None },
     CommandInfo {
@@ -1432,6 +1499,7 @@ mod tests {
             block: "KW".into(),
             placement: Placement::at(Point::new(20.0, 0.0)),
             attributes: vec![attr("KWNOM", "9", false), attr("ELEV", "101.5", true)],
+            clip: None,
         })
     }
 
@@ -2268,6 +2336,68 @@ mod tests {
     }
 
     #[test]
+    fn xclip_clips_turns_off_inverts_and_traces() {
+        use oxidraft_model::{Block, BlockEntity, Color, Placement};
+        let (mut e, mut d) = (engine(), Document::new());
+        let line = Geometry::Line { start: Point::ORIGIN, end: Point::new(10.0, 0.0) };
+        d.define_block(Block {
+            name: "B".into(),
+            base: Point::ORIGIN,
+            entities: vec![BlockEntity::new("0", Color::ByLayer, line)],
+        });
+        let placement = Placement { position: Point::new(100.0, 0.0), scale: 2.0, rotation: 0.0, mirror: false };
+        let id = d.add(Geometry::Insert { block: "B".into(), placement, attributes: Vec::new(), clip: None });
+        let shown = |d: &Document| -> f64 { d.expanded(d.entity(id).unwrap()).iter().map(Geometry::length).sum() };
+        let clip = |d: &Document| match &d.entity(id).unwrap().geometry {
+            Geometry::Insert { clip, .. } => clip.as_deref().cloned(),
+            _ => None,
+        };
+        // The reference runs from 100 to 120: a rectangle keeps 100..110.
+        type_all(&mut e, &mut d, &["xclip"]);
+        click(&mut e, &mut d, 101.0, 0.0);
+        type_all(&mut e, &mut d, &["", "", "", "95,-5", "110,5"]);
+        assert!((shown(&d) - 10.0).abs() < 1e-9, "{}", shown(&d));
+        // Kept in the block's own coordinates.
+        assert!(clip(&d).unwrap().boundary.iter().any(|p| p.approx_eq(Point::new(5.0, 2.5))));
+        for (option, expected) in [("off", 20.0), ("on", 10.0), ("d", 20.0)] {
+            type_all(&mut e, &mut d, &["xc"]);
+            click(&mut e, &mut d, 101.0, 0.0);
+            type_all(&mut e, &mut d, &["", option]);
+            assert!((shown(&d) - expected).abs() < 1e-9, "{option}: {}", shown(&d));
+        }
+        assert!(clip(&d).is_none());
+        // An inverted triangle hides the 2.5 of the line under it.
+        type_all(&mut e, &mut d, &["xclip"]);
+        click(&mut e, &mut d, 101.0, 0.0);
+        type_all(&mut e, &mut d, &["", "n", "i", "p", "105,-5", "110,-5", "110,5", ""]);
+        assert!((shown(&d) - 17.5).abs() < 1e-9, "{}", shown(&d));
+        assert!(clip(&d).unwrap().inverted);
+        // A new boundary asks before replacing the old one; then a polyline's.
+        type_all(&mut e, &mut d, &["rec", "90,-1", "115,1"]);
+        type_all(&mut e, &mut d, &["xclip"]);
+        click(&mut e, &mut d, 101.0, 0.0);
+        type_all(&mut e, &mut d, &["", "n"]);
+        assert!(e.prompt().starts_with("Delete old boundary(s)?"), "{}", e.prompt());
+        type_all(&mut e, &mut d, &["y", "s"]);
+        click(&mut e, &mut d, 90.0, 0.0);
+        assert!((shown(&d) - 15.0).abs() < 1e-9, "{}", shown(&d));
+        // CLIP does the same for a picked reference.
+        type_all(&mut e, &mut d, &["clip"]);
+        click(&mut e, &mut d, 101.0, 0.0);
+        type_all(&mut e, &mut d, &["off"]);
+        assert!(!clip(&d).unwrap().on);
+        type_all(&mut e, &mut d, &["clip"]);
+        click(&mut e, &mut d, 101.0, 0.0);
+        type_all(&mut e, &mut d, &["on"]);
+        // generate Polyline traces the boundary.
+        let before = d.entities().count();
+        type_all(&mut e, &mut d, &["xclip"]);
+        click(&mut e, &mut d, 101.0, 0.0);
+        type_all(&mut e, &mut d, &["", "p"]);
+        assert_eq!(d.entities().count(), before + 1);
+    }
+
+    #[test]
     fn imageclip_clips_and_unclips_a_picture() {
         let (mut e, mut d) = (engine(), Document::new());
         d.add(Geometry::Image {
@@ -2584,7 +2714,7 @@ mod tests {
     #[test]
     fn autocomplete_prefers_exact_alias() {
         let names: Vec<_> = Engine::suggest("c").iter().map(|c| c.name).collect();
-        let expected = vec!["CIRCLE", "COPY", "CHAMFER", "COPYCLIP", "CUTCLIP", "COPYBASE", "PROPERTIES"];
+        let expected = vec!["CIRCLE", "COPY", "CHAMFER", "COPYCLIP", "CUTCLIP", "COPYBASE", "CLIP", "PROPERTIES"];
         assert_eq!(names, expected, "PROPERTIES via its CH alias");
         let names: Vec<_> = Engine::suggest("co").iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["COPY", "COPYCLIP", "COPYBASE"]);

@@ -104,6 +104,8 @@ pub enum Geometry {
         placement: Placement,
         /// Attribute values (DXF ATTRIB), in world coordinates.
         attributes: Vec<Attribute>,
+        /// XCLIP's boundary, if it's clipped.
+        clip: Option<Box<XClip>>,
     },
     /// Text (MTEXT, or single-line TEXT with a bottom-left attachment).
     /// `content` may hold several lines; `width` > 0 wraps long lines.
@@ -231,6 +233,16 @@ impl Attribute {
     }
 }
 
+/// A block reference's clipping boundary (XCLIP), in the block's own
+/// coordinates so it moves with the reference. Only what's inside shows,
+/// or only what's outside when `inverted`; `on` false shows everything.
+#[derive(Debug, Clone, PartialEq)]
+pub struct XClip {
+    pub boundary: Vec<Point>,
+    pub inverted: bool,
+    pub on: bool,
+}
+
 /// Where and how a block reference places its block: the block's base point
 /// lands on `position`, scaled uniformly, rotated, and optionally mirrored
 /// (a negative X scale in DXF).
@@ -255,6 +267,15 @@ impl Placement {
             d.x = -d.x;
         }
         (self.position + d * self.scale).rotated_about(self.position, self.rotation)
+    }
+
+    /// Where world point `p` lies in the block's own coordinates.
+    pub fn local(&self, base: Point, p: Point) -> Point {
+        let mut d = (p.rotated_about(self.position, -self.rotation) - self.position) * (1.0 / self.scale);
+        if self.mirror {
+            d.x = -d.x;
+        }
+        base + d
     }
 
     /// Block-local geometry placed in the world.
@@ -715,7 +736,7 @@ impl Geometry {
                     angle: if flips { *angle } else { mapped_angle(f, origin, *angle) },
                 }
             }
-            Geometry::Insert { block, placement, attributes } => {
+            Geometry::Insert { block, placement, attributes, clip } => {
                 let position = f(placement.position);
                 let axis = f(placement.position.polar(1.0, placement.rotation)) - position;
                 let mut rotation = Point::ORIGIN.angle_to(axis);
@@ -733,6 +754,8 @@ impl Geometry {
                         mirror: placement.mirror != flips,
                     },
                     attributes: attributes.iter().map(|a| a.mapped(f, length_factor, flips)).collect(),
+                    // The boundary is in block coordinates: it moves with the reference.
+                    clip: clip.clone(),
                 }
             }
         }
@@ -1069,6 +1092,7 @@ mod tests {
             block: "B".into(),
             placement: Placement::at(Point::new(5.0, 0.0)),
             attributes: Vec::new(),
+            clip: None,
         };
         let local = Geometry::Line { start: Point::ORIGIN, end: Point::new(3.0, 1.0) };
         // Mirroring the reference must give the same curves as mirroring its contents.

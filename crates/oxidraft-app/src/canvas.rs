@@ -448,6 +448,11 @@ impl OxidraftApp {
                     self.draw_dashed(painter, rect, g, Stroke::new(width, color), pattern.as_deref());
                 }
             }
+            if let Some(frame) = self.doc.clip_frame(&e.geometry) {
+                let color = theme::aci(self.doc.layer(&e.layer).map_or(7, |l| l.color));
+                let width = if selected.contains(&e.id) || hovered.contains(&e.id) { 2.5 } else { 1.0 };
+                self.draw_geometry(painter, rect, &frame, Stroke::new(width, color));
+            }
         }
     }
 

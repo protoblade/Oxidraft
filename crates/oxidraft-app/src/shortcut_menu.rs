@@ -3,7 +3,7 @@
 
 use eframe::egui::{self, Ui};
 use oxidraft_commands::ViewRequest;
-use oxidraft_model::snap::SnapKind;
+use oxidraft_model::{Geometry, snap::SnapKind};
 
 use crate::app::OxidraftApp;
 
@@ -130,6 +130,16 @@ impl OxidraftApp {
                 }
             }
         });
+        // A selected xref (or block reference) can be clipped from here.
+        let reference = self.engine.selection().iter().find_map(|id| match &self.doc.entity(*id)?.geometry {
+            Geometry::Insert { block, .. } => Some(self.doc.xref(block).is_some()),
+            _ => None,
+        });
+        if let Some(xref) = reference
+            && item(ui, if xref { "Clip Xref" } else { "Clip Block Reference" }, "XC")
+        {
+            self.run("XCLIP");
+        }
         ui.separator();
         if item(ui, "Select Similar", "") {
             self.run("SELECTSIMILAR");

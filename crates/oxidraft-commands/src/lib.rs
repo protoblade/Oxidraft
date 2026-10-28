@@ -51,6 +51,7 @@ mod spline;
 mod stretch;
 mod trim_extend;
 mod underlay;
+mod xclip;
 mod xline;
 mod xref;
 mod zoom;

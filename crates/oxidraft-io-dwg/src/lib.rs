@@ -174,6 +174,7 @@ mod tests {
                 attach: Attach::BottomLeft,
                 invisible: false,
             }],
+            clip: None,
         });
         doc
     }
@@ -229,6 +230,7 @@ mod tests {
             block: "SITE".into(),
             placement: Placement::at(Point::new(3.0, 4.0)),
             attributes: Vec::new(),
+            clip: None,
         });
         doc.set_xref(Xref {
             name: "ROADS".into(),
@@ -275,6 +277,49 @@ mod tests {
         for version in [Version::R2000, Version::R2018] {
             let back = read(&write(&doc, version).unwrap()).unwrap().imported.document;
             assert_eq!(xs(&back), vec![1.0, 2.0, 0.0], "{version:?}");
+        }
+    }
+
+    #[test]
+    fn xclip_boundaries_survive() {
+        use oxidraft_model::{Block, BlockEntity, Color, Placement, XClip};
+        let mut doc = Document::new();
+        let line = Geometry::Line { start: Point::ORIGIN, end: Point::new(10.0, 0.0) };
+        doc.define_block(Block {
+            name: "B".into(),
+            base: Point::ORIGIN,
+            entities: vec![BlockEntity::new("0", Color::ByLayer, line)],
+        });
+        let square = vec![Point::new(2.0, -1.0), Point::new(6.0, -1.0), Point::new(6.0, 1.0), Point::new(2.0, 1.0)];
+        let clips = [
+            XClip { boundary: square.clone(), inverted: false, on: true },
+            XClip { boundary: square.clone(), inverted: true, on: true },
+            XClip { boundary: square, inverted: false, on: false },
+        ];
+        for (i, c) in clips.iter().enumerate() {
+            doc.add(Geometry::Insert {
+                block: "B".into(),
+                placement: Placement {
+                    position: Point::new(0.0, i as f64 * 5.0),
+                    scale: 2.0,
+                    rotation: 30.0,
+                    mirror: false,
+                },
+                attributes: Vec::new(),
+                clip: Some(Box::new(c.clone())),
+            });
+        }
+        for version in [Version::R2000, Version::R2018] {
+            let back = read(&write(&doc, version).unwrap()).unwrap().imported.document;
+            let read: Vec<Option<XClip>> = back
+                .entities_in_draw_order()
+                .iter()
+                .map(|e| match &e.geometry {
+                    Geometry::Insert { clip, .. } => clip.as_deref().cloned(),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(read, clips.iter().cloned().map(Some).collect::<Vec<_>>(), "{version:?}");
         }
     }
 

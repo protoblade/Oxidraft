@@ -80,6 +80,13 @@ impl Default for ImageClip {
     }
 }
 
+impl ImageClip {
+    /// Past "Select image to clip", with `id` picked (CLIP picks it).
+    pub(crate) fn picked(id: EntityId) -> Self {
+        Self { stage: Stage::Option { id } }
+    }
+}
+
 fn set_clip(ctx: &mut Ctx, id: EntityId, boundary: Vec<Point>) {
     ctx.doc.update(id, |e| {
         if let Geometry::Image { clip, .. } = &mut e.geometry {

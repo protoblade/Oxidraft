@@ -50,7 +50,8 @@ impl AttachXref {
         // shows or hides all of it.
         let name = doc.xref(&self.xref.name).map_or(self.xref.name.clone(), |x| x.name.clone());
         let layer = oxidraft_model::sanitize_name(&name);
-        let insert = Geometry::Insert { block: name, placement: self.placement(at), attributes: Vec::new() };
+        let insert =
+            Geometry::Insert { block: name, placement: self.placement(at), attributes: Vec::new(), clip: None };
         doc.add_on_layer(insert, &layer, oxidraft_model::Color::ByLayer);
     }
 }

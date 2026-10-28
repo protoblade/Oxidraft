@@ -240,7 +240,12 @@ impl OxidraftApp {
                         "Attaches an image, placed by its georeferencing if it has some; pick many GeoTIFFs to attach them unloaded (IAT)",
                     ),
                     tool(Icon::Pdf, "PDF", Some("PDFATTACH"), "Attaches a page of a PDF as an underlay"),
-                    tool(Icon::ImageClip, "Clip", Some("IMAGECLIP"), "Clips an image or PDF underlay (ICL)"),
+                    tool(
+                        Icon::ImageClip,
+                        "Clip",
+                        Some("CLIP"),
+                        "Clips an xref, block reference, image or PDF underlay to a boundary",
+                    ),
                 ] {
                     self.small_tool(ui, &t);
                 }

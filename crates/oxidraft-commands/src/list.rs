@@ -144,7 +144,7 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
             out.push(at("start point,", *base));
             out.push(at("second point,", *base + *direction * (1.0 / direction.length().max(f64::MIN_POSITIVE))));
         }
-        Geometry::Insert { block, placement, attributes } => {
+        Geometry::Insert { block, placement, attributes, .. } => {
             out.push(value("Block Name:", format!("\"{block}\"")));
             out.push(at("at point,", placement.position));
             out.push(value("X scale factor:", n(if placement.mirror { -placement.scale } else { placement.scale })));

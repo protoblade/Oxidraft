@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use oxidraft_geom::{Aabb, Point};
 
-use crate::entity::{Attribute, Color, Entity, EntityId, Geometry};
+use crate::entity::{Attribute, Color, Entity, EntityId, Geometry, Vertex};
 use crate::linetype::{self, CONTINUOUS, Linetype, Lineweight};
 use crate::underlay::ImageDef;
 use crate::xref::{Xref, is_dependent};
@@ -496,11 +496,12 @@ impl Document {
         }
         // What ByBlock means for everything inside this reference.
         let own = self.resolve(layer, style, by_block);
-        let Geometry::Insert { block, placement, attributes } = g else {
+        let Geometry::Insert { block, placement, attributes, clip } = g else {
             let Inherited { color, linetype, lineweight } = own;
             out.push(Styled { geometry: g.clone(), color, layer: layer.to_string(), linetype, lineweight });
             return;
         };
+        let start = out.len();
         if let Some(def) = self.block(block).filter(|_| depth < MAX_BLOCK_DEPTH) {
             for be in &def.entities {
                 let inner_layer = if be.layer == "0" { layer } else { &be.layer };
@@ -520,11 +521,57 @@ impl Document {
                 lineweight: own.lineweight,
             });
         }
+        // XCLIP: only what's inside the boundary (or outside it) shows.
+        if let Some(c) = clip.as_deref().filter(|c| c.on)
+            && let Some(boundary) = self.clip_boundary(g).filter(|b| b.len() >= 3)
+        {
+            let shown = out.split_off(start);
+            out.extend(crate::clip::clip_styled(shown, &boundary, c.inverted));
+        }
+    }
+
+    /// XCLIP's boundary of a clipped block reference, in world coordinates.
+    pub fn clip_boundary(&self, g: &Geometry) -> Option<Vec<Point>> {
+        let Geometry::Insert { block, placement, clip: Some(c), .. } = g else { return None };
+        let base = self.block(block)?.base;
+        Some(c.boundary.iter().map(|p| placement.apply(base, *p)).collect())
+    }
+
+    /// The extents of a block's contents in its own coordinates, ignoring
+    /// layers that are off.
+    pub fn block_extents(&self, name: &str) -> Option<Aabb> {
+        let def = self.block(name)?;
+        let g = Geometry::Insert {
+            block: def.name.clone(),
+            placement: crate::Placement::at(def.base),
+            attributes: Vec::new(),
+            clip: None,
+        };
+        let mut out = Vec::new();
+        self.expand_into(
+            &g,
+            "0",
+            (Color::ByLayer, linetype::BYLAYER, Lineweight::ByLayer),
+            &Inherited::default(),
+            0,
+            &mut out,
+        );
+        out.iter().map(|s| s.geometry.bounds()).reduce(Aabb::union)
+    }
+
+    /// The frame drawn around a clipped reference (XCLIPFRAME 2: on screen
+    /// and pickable, but not plotted), while its clipping is on.
+    pub fn clip_frame(&self, g: &Geometry) -> Option<Geometry> {
+        let Geometry::Insert { clip: Some(c), .. } = g else { return None };
+        let boundary = self.clip_boundary(g).filter(|b| c.on && b.len() >= 3)?;
+        Some(Geometry::Polyline { vertices: boundary.into_iter().map(Vertex::at).collect(), closed: true })
     }
 
     /// Bounding box of an entity, block contents included.
     pub fn entity_bounds(&self, e: &Entity) -> Aabb {
-        self.expanded(e).iter().map(Geometry::bounds).reduce(Aabb::union).unwrap_or_else(|| e.geometry.bounds())
+        let mut parts = self.expanded(e);
+        parts.extend(self.clip_frame(&e.geometry));
+        parts.iter().map(Geometry::bounds).reduce(Aabb::union).unwrap_or_else(|| e.geometry.bounds())
     }
 
     /// Distance from `p` to the entity's curves (a block reference also
@@ -532,14 +579,17 @@ impl Document {
     pub fn entity_distance(&self, e: &Entity, p: Point) -> f64 {
         let curves = self.expanded(e).iter().map(|g| g.distance_to(p)).fold(f64::INFINITY, f64::min);
         match &e.geometry {
-            Geometry::Insert { placement, .. } => curves.min(placement.position.distance(p)),
+            Geometry::Insert { placement, .. } => {
+                let frame = self.clip_frame(&e.geometry).map_or(f64::INFINITY, |f| f.distance_to(p));
+                curves.min(frame).min(placement.position.distance(p))
+            }
             _ => curves,
         }
     }
 
     /// True if any of the entity's curves lies in the box (crossing selection).
     pub fn entity_touches(&self, e: &Entity, b: &Aabb) -> bool {
-        self.expanded(e).iter().any(|g| g.touches(b))
+        self.expanded(e).iter().chain(&self.clip_frame(&e.geometry)).any(|g| g.touches(b))
     }
 
     /// Bounding box of all entities, or `None` for an empty drawing. Like
@@ -1271,6 +1321,7 @@ mod tests {
             block: "DOOR".into(),
             placement: Placement::at(Point::new(10.0, 0.0)),
             attributes: Vec::new(),
+            clip: None,
         };
         let id = d.add_on_layer(insert, "Doors", Color::ByLayer);
         let e = d.entity(id).unwrap();
@@ -1316,6 +1367,7 @@ mod tests {
                 block: "PT".into(),
                 placement: Placement::at(Point::new(10.0, 0.0)),
                 attributes: vec![attr("NOMER", "17", false), attr("CREATOR", "x", true), attr("KOTA", "", false)],
+                clip: None,
             },
             "Points",
             Color::ByLayer,
@@ -1365,8 +1417,12 @@ mod tests {
             entities: vec![by_block, BlockEntity::new("0", Color::ByLayer, line(2.0))],
         };
         d.define_block(block);
-        let insert =
-            Geometry::Insert { block: "B".into(), placement: Placement::at(Point::ORIGIN), attributes: Vec::new() };
+        let insert = Geometry::Insert {
+            block: "B".into(),
+            placement: Placement::at(Point::ORIGIN),
+            attributes: Vec::new(),
+            clip: None,
+        };
         let id = d.add_on_layer(insert, "Hidden", Color::ByLayer);
         d.update(id, |e| e.linetype = "CENTER".into());
         let styled = d.expanded_styled(d.entity(id).unwrap());
@@ -1382,8 +1438,12 @@ mod tests {
     #[test]
     fn self_referencing_blocks_stop_expanding() {
         let mut d = Document::new();
-        let me =
-            Geometry::Insert { block: "LOOP".into(), placement: Placement::at(Point::ORIGIN), attributes: Vec::new() };
+        let me = Geometry::Insert {
+            block: "LOOP".into(),
+            placement: Placement::at(Point::ORIGIN),
+            attributes: Vec::new(),
+            clip: None,
+        };
         d.define_block(Block {
             name: "LOOP".into(),
             base: Point::ORIGIN,

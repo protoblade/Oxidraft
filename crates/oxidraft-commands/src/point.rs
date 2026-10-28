@@ -115,6 +115,7 @@ impl Marker {
                 block: name.clone(),
                 placement: Placement { rotation: if *align { angle } else { 0.0 }, ..Placement::at(at) },
                 attributes: Vec::new(),
+                clip: None,
             },
         };
         ctx.doc.add(geometry);

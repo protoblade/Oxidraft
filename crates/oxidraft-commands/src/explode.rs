@@ -33,7 +33,7 @@ impl Command for Explode {
                     ctx.messages.push(format!("\"{block}\" is an external reference; bind it to explode it."));
                     not_exploded += 1;
                 }
-                Geometry::Insert { block, placement, attributes } => {
+                Geometry::Insert { block, placement, attributes, .. } => {
                     let Some(def) = ctx.doc.block(block).cloned() else {
                         not_exploded += 1;
                         continue;

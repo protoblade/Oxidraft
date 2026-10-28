@@ -18,6 +18,7 @@ use oxidraft_model::{
     constant_width, hatch, is_dependent, linetype,
 };
 
+mod clip_dxf;
 mod hatch_dxf;
 mod underlay_dxf;
 
@@ -563,6 +564,9 @@ fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
     }
     let mut ex = Exporter { images: underlay_dxf::add_definitions(&mut drawing, doc), ..Default::default() };
     let mut blocks = Vec::new();
+    // Clipped references in blocks: (block, index), for their filters once
+    // they have handles.
+    let mut block_clips: Vec<(String, usize, &Geometry)> = Vec::new();
     for b in doc.blocks().filter(|b| !is_dependent(&b.name)) {
         // An attached drawing is saved as its path; its contents stay in its own file.
         if let Some(x) = doc.xref(&b.name) {
@@ -577,16 +581,20 @@ fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
             blocks.push(block);
             continue;
         }
-        let entities = b
-            .entities
-            .iter()
-            .flat_map(|be| ex.entity(&be.geometry, &be.layer, be.color, &be.linetype, be.lineweight))
-            .collect();
+        let mut entities = Vec::new();
+        for be in &b.entities {
+            for de in ex.entity(&be.geometry, &be.layer, be.color, &be.linetype, be.lineweight) {
+                if is_clipped(&de, &be.geometry) {
+                    block_clips.push((b.name.clone(), entities.len(), &be.geometry));
+                }
+                entities.push(de);
+            }
+        }
         blocks.push(dxf::Block { name: b.name.clone(), base_point: to_dxf(b.base), entities, ..Default::default() });
     }
     // Objects are written in draw order, which is the order AutoCAD draws
     // them in when there's no SORTENTSTABLE.
-    let mut entities: Vec<DxfEntity> = Vec::new();
+    let mut entities: Vec<(DxfEntity, &Geometry)> = Vec::new();
     for e in doc.entities_in_draw_order() {
         for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
             if let (EntityType::Insert(ins), Geometry::Insert { attributes, .. }) = (&mut de.specific, &e.geometry) {
@@ -594,16 +602,48 @@ fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
                     ins.add_attribute(&mut drawing, attribute_to_dxf(a));
                 }
             }
-            entities.push(de);
+            entities.push((de, &e.geometry));
         }
     }
     for b in blocks.into_iter().chain(ex.blocks) {
         drawing.add_block(b);
     }
-    for e in entities {
-        drawing.add_entity(e);
+    for (name, index, g) in block_clips {
+        let handle = drawing.blocks().find(|b| b.name == name).and_then(|b| b.entities.get(index));
+        let Some(handle) = handle.map(|e| e.common.handle) else { continue };
+        let group = clip_filter(&mut drawing, doc, handle, g);
+        let entity = drawing.blocks_mut().find(|b| b.name == name).and_then(|b| b.entities.get_mut(index));
+        if let (Some(e), Some(group)) = (entity, group) {
+            e.common.extension_data_groups.push(group);
+        }
+    }
+    for (e, g) in entities {
+        let clipped = is_clipped(&e, g);
+        let handle = drawing.add_entity(e).common.handle;
+        if clipped
+            && let Some(group) = clip_filter(&mut drawing, doc, handle, g)
+            && let Some(added) = drawing.entities_mut().find(|x| x.common.handle == handle)
+        {
+            added.common.extension_data_groups.push(group);
+        }
     }
     (drawing, ex.hatches)
+}
+
+fn is_clipped(de: &DxfEntity, g: &Geometry) -> bool {
+    matches!((&de.specific, g), (EntityType::Insert(_), Geometry::Insert { clip: Some(_), .. }))
+}
+
+/// Adds the SPATIAL_FILTER of the clipped INSERT `handle` (drawn from `g`),
+/// and returns the group that points the INSERT at it.
+fn clip_filter(
+    drawing: &mut Drawing,
+    doc: &Document,
+    handle: dxf::Handle,
+    g: &Geometry,
+) -> Option<dxf::ExtensionGroup> {
+    let Geometry::Insert { block, clip: Some(c), .. } = g else { return None };
+    Some(clip_dxf::add_filter(drawing, handle, c, doc.block_extents(block)))
 }
 
 /// Converts one DXF entity, or `None` for types Oxidraft doesn't support yet.
@@ -805,6 +845,7 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
                 mirror: (i.x_scale_factor < 0.0) != (i.y_scale_factor < 0.0),
             },
             attributes: i.attributes().map(attribute_from_dxf).collect(),
+            clip: None,
         },
         _ => return None,
     })
@@ -835,6 +876,17 @@ struct Raw {
     /// Each layer's flags (group 70).
     layer_flags: Vec<(String, i16)>,
     hatches: Vec<hatch_dxf::RawHatch>,
+    /// XCLIP boundaries, by the extension dictionary of their INSERT.
+    clips: HashMap<u64, oxidraft_model::XClip>,
+}
+
+/// An INSERT's clip from the file, if it has one.
+fn attach_clip(g: &mut Geometry, e: &DxfEntity, clips: &HashMap<u64, oxidraft_model::XClip>) {
+    if let Geometry::Insert { clip, .. } = g
+        && let Some(c) = clip_dxf::xdictionary_of(&e.common.extension_data_groups).and_then(|h| clips.get(&h))
+    {
+        *clip = Some(Box::new(c.clone()));
+    }
 }
 
 /// Like [`from_drawing`], with what the crate doesn't read.
@@ -909,6 +961,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
             match geometry_from_dxf(&e.specific) {
                 Some(mut geometry) => {
                     style_attributes(&mut geometry, None, &e.common.layer);
+                    attach_clip(&mut geometry, e, &raw.clips);
                     entities.push(BlockEntity {
                         layer: e.common.layer.clone(),
                         color: from_dxf_color(&e.common.color),
@@ -967,6 +1020,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         match picture.or_else(|| geometry_from_dxf(&e.specific)) {
             Some(mut g) => {
                 style_attributes(&mut g, style, &e.common.layer);
+                attach_clip(&mut g, e, &raw.clips);
                 let (color, linetype) = (from_dxf_color(&e.common.color), linetype_from_dxf(&e.common.line_type_name));
                 let id = doc.add_styled(
                     g,
@@ -1089,6 +1143,7 @@ pub fn write<W: Write>(doc: &Document, writer: &mut W) -> Result<(), Error> {
         .collect();
     let fixed = fix_tables(&fix_attributes(&buf, &styles), &layers);
     let fixed = underlay_dxf::rename_type(&fixed, "UNDERLAYDEFINITION", "PDFDEFINITION");
+    let fixed = clip_dxf::drop_unused_planes(&fixed);
     writer.write_all(&hatch_dxf::insert_hatches(&fixed, &hatches)).map_err(Error::IoError)
 }
 
@@ -1212,6 +1267,7 @@ pub fn read<R: BufRead>(reader: &mut R) -> Result<Imported, Error> {
         attributes: attribute_styles(&bytes),
         layer_flags: layer_flags(&bytes),
         hatches: hatch_dxf::read_hatches(&bytes),
+        clips: clip_dxf::read_clips(&bytes),
     };
     Ok(from_drawing_styled(&drawing, raw))
 }
@@ -1346,6 +1402,63 @@ mod tests {
     }
 
     #[test]
+    fn xclip_boundaries_round_trip() {
+        use oxidraft_model::{Block, BlockEntity, XClip};
+        let mut doc = Document::new();
+        let line = Geometry::Line { start: Point::ORIGIN, end: Point::new(10.0, 0.0) };
+        doc.define_block(Block {
+            name: "B".into(),
+            base: Point::new(1.0, 0.0),
+            entities: vec![BlockEntity::new("0", Color::ByLayer, line)],
+        });
+        let square = vec![Point::new(2.0, -1.0), Point::new(6.0, -1.0), Point::new(6.0, 1.0), Point::new(2.0, 1.0)];
+        let clips = [
+            XClip { boundary: square.clone(), inverted: false, on: true },
+            XClip { boundary: square.clone(), inverted: true, on: true },
+            XClip { boundary: square.clone(), inverted: false, on: false },
+        ];
+        let reference = |clip: Option<&XClip>, y: f64| Geometry::Insert {
+            block: "B".into(),
+            placement: Placement { position: Point::new(0.0, y), scale: 2.0, rotation: 30.0, mirror: false },
+            attributes: Vec::new(),
+            clip: clip.cloned().map(Box::new),
+        };
+        for (i, c) in clips.iter().enumerate() {
+            doc.add(reference(Some(c), i as f64 * 10.0));
+        }
+        // A clipped reference inside another block.
+        doc.define_block(Block {
+            name: "OUTER".into(),
+            base: Point::ORIGIN,
+            entities: vec![BlockEntity::new("0", Color::ByLayer, reference(Some(&clips[0]), 0.0))],
+        });
+        doc.add(Geometry::Insert {
+            block: "OUTER".into(),
+            placement: Placement::at(Point::new(100.0, 0.0)),
+            attributes: Vec::new(),
+            clip: None,
+        });
+        let mut buf = Vec::new();
+        write(&doc, &mut buf).unwrap();
+        let back = read(&mut buf.as_slice()).unwrap().document;
+        let clip_of = |g: &Geometry| match g {
+            Geometry::Insert { clip, .. } => clip.as_deref().cloned(),
+            _ => None,
+        };
+        let read: Vec<Option<XClip>> = back.entities_in_draw_order().iter().map(|e| clip_of(&e.geometry)).collect();
+        assert_eq!(read[..3], clips.iter().cloned().map(Some).collect::<Vec<_>>()[..]);
+        assert_eq!(read[3], None);
+        let nested = &back.block("OUTER").unwrap().entities[0].geometry;
+        assert_eq!(clip_of(nested), Some(clips[0].clone()));
+        // What shows is the same.
+        let shown = |d: &Document| -> Vec<f64> {
+            d.entities_in_draw_order().iter().map(|e| d.expanded(e).iter().map(Geometry::length).sum()).collect()
+        };
+        assert_eq!(shown(&back), shown(&doc));
+        assert!((shown(&doc)[0] - 8.0).abs() < 1e-9 && (shown(&doc)[1] - 12.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn xrefs_save_as_their_path() {
         let mut doc = Document::new();
         doc.set_xref(Xref {
@@ -1366,6 +1479,7 @@ mod tests {
             block: "SITE".into(),
             placement: Placement::at(Point::new(10.0, 10.0)),
             attributes: Vec::new(),
+            clip: None,
         });
         assert!(doc.layer("SITE|Boundary").is_some());
 
@@ -1541,6 +1655,7 @@ mod tests {
                 attach: Attach::MiddleCenter,
                 invisible: false,
             }],
+            clip: None,
         });
         doc.add(Geometry::Arc { center: Point::new(1.0, 2.0), radius: 3.0, start_angle: 30.0, end_angle: 300.0 });
         doc.add(Geometry::Polyline {

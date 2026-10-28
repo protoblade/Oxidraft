@@ -69,6 +69,7 @@ impl Command for DefineBlock {
                     block: name.clone(),
                     placement: Placement::at(*base),
                     attributes: Vec::new(),
+                    clip: None,
                 });
                 // INSERT will offer the new block first.
                 ctx.vars.insert_name = Some(name.clone());
@@ -173,6 +174,7 @@ impl Command for InsertBlock {
                     block: block.name.clone(),
                     placement: self.placement(at),
                     attributes: Vec::new(),
+                    clip: None,
                 });
                 ctx.vars.insert_name = Some(block.name.clone());
                 return Ok(Step::Done);

@@ -264,7 +264,7 @@ impl OxidraftApp {
                 ("Basepoint Y", Value::Number(base.y)),
                 ("Angle", Value::Angle(Point::ORIGIN.angle_to(*direction))),
             ],
-            Geometry::Insert { block, placement, attributes } => {
+            Geometry::Insert { block, placement, attributes, .. } => {
                 let mut rows = vec![
                     ("Name", Value::Text(block.clone())),
                     ("Position X", Value::Number(placement.position.x)),

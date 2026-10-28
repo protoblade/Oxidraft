@@ -313,6 +313,7 @@ fn main() {
         block: "KW".into(),
         placement: Placement::at(Point::new(50.0, 50.0)),
         attributes: vec![attribute("KWNOM", "9", 0.0), attribute("ELEV", "101.52", -3.0)],
+        clip: None,
     });
     h.run_steps(1);
     h.state_mut().type_command("eattedit");

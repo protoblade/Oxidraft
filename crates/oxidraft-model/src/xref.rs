@@ -66,10 +66,11 @@ pub fn dependent_name(xref: &str, name: &str) -> String {
 /// The geometry with the blocks it references and its attributes' layers renamed.
 fn renamed_geometry(g: &Geometry, rename: &dyn Fn(&str) -> String) -> Geometry {
     match g {
-        Geometry::Insert { block, placement, attributes } => Geometry::Insert {
+        Geometry::Insert { block, placement, attributes, clip } => Geometry::Insert {
             block: rename(block),
             placement: *placement,
             attributes: attributes.iter().map(|a| crate::Attribute { layer: rename(&a.layer), ..a.clone() }).collect(),
+            clip: clip.clone(),
         },
         g => g.clone(),
     }
@@ -329,6 +330,7 @@ mod tests {
             block: "Tree".into(),
             placement: Placement::at(Point::new(5.0, 5.0)),
             attributes: Vec::new(),
+            clip: None,
         });
         d.set_insbase(Point::new(1.0, 1.0));
         d
@@ -346,6 +348,7 @@ mod tests {
             block: name.into(),
             placement: Placement::at(Point::ORIGIN),
             attributes: Vec::new(),
+            clip: None,
         });
     }
 

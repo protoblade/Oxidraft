@@ -4,6 +4,7 @@
 
 pub mod annotation;
 pub mod boundary;
+mod clip;
 mod document;
 mod entity;
 pub mod hatch;
@@ -15,7 +16,7 @@ mod xref;
 
 pub use annotation::Attach;
 pub use document::{AttributeDisplay, Block, BlockEntity, Document, Layer, Styled, check_name, sanitize_name};
-pub use entity::{Attribute, Color, Entity, EntityId, FAR, Geometry, Placement, Vertex, constant_width};
+pub use entity::{Attribute, Color, Entity, EntityId, FAR, Geometry, Placement, Vertex, XClip, constant_width};
 pub use hatch::HatchPattern;
 pub use linetype::{Linetype, Lineweight};
 pub use oxidraft_geom::{ellipse::Ellipse, spline::Spline};

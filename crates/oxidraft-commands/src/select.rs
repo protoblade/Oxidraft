@@ -261,6 +261,7 @@ mod tests {
             block: name.into(),
             placement: Placement::at(Point::ORIGIN),
             attributes: Vec::new(),
+            clip: None,
         };
         let door = d.add_on_layer(insert("DOOR"), "A", Color::ByLayer);
         let door2 = d.add_on_layer(insert("door"), "A", Color::ByLayer);
