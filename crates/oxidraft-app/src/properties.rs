@@ -3,7 +3,11 @@
 
 use eframe::egui::{self, Frame, Id, Margin, RichText, Ui};
 use oxidraft_geom::{Point, curve::ArcSeg};
-use oxidraft_model::{Color, Entity, EntityId, Geometry};
+use oxidraft_model::{
+    Color, Entity, EntityId, Geometry, HatchPattern,
+    annotation::{format_measurement, measurement},
+    hatch,
+};
 
 use crate::{
     app::OxidraftApp,
@@ -18,6 +22,8 @@ enum Value {
     Text(String),
     Number(f64),
     Angle(f64),
+    /// Editable text (contents, overrides, pattern names).
+    Edit(String),
 }
 
 impl OxidraftApp {
@@ -168,6 +174,40 @@ impl OxidraftApp {
                 ("Rotation", Value::Angle(placement.rotation)),
                 ("Mirrored", Value::Text(if placement.mirror { "Yes" } else { "No" }.into())),
             ],
+            Geometry::Text { position, height, rotation, width, content, .. } => vec![
+                ("Contents", Value::Edit(content.clone())),
+                ("Height", Value::Number(*height)),
+                ("Rotation", Value::Angle(*rotation)),
+                ("Width", Value::Number(*width)),
+                ("Position X", Value::Number(position.x)),
+                ("Position Y", Value::Number(position.y)),
+            ],
+            Geometry::Dimension { p1, p2, rotation, aligned, text, scale, .. } => {
+                let value = measurement(*p1, *p2, *rotation, *aligned);
+                let mut rows = vec![
+                    ("Measurement", Value::Text(format_measurement(value))),
+                    ("Text override", Value::Edit(text.clone().unwrap_or_default())),
+                    ("Dim scale", Value::Number(*scale)),
+                ];
+                if !aligned {
+                    rows.push(("Rotation", Value::Angle(*rotation)));
+                }
+                rows
+            }
+            Geometry::Leader { content, scale, .. } => {
+                vec![("Contents", Value::Edit(content.clone())), ("Scale", Value::Number(*scale))]
+            }
+            Geometry::Hatch { loops, pattern, scale, angle } => {
+                let polys = hatch::polygons(loops);
+                let areas: Vec<f64> = polys.iter().map(|p| hatch::signed_area(p).abs()).collect();
+                let area = areas.iter().copied().fold(0.0, f64::max) * 2.0 - areas.iter().sum::<f64>();
+                vec![
+                    ("Pattern", Value::Edit(pattern.name().to_string())),
+                    ("Scale", Value::Number(*scale)),
+                    ("Angle", Value::Angle(*angle)),
+                    ("Area", Value::Text(fmt(area))),
+                ]
+            }
         };
         egui::Grid::new("props_geometry").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
             for (label, value) in rows {
@@ -179,6 +219,15 @@ impl OxidraftApp {
                     }
                     Value::Number(v) => self.number_field(ui, Id::unique(("prop", e.id, label)), v, false),
                     Value::Angle(v) => self.number_field(ui, Id::unique(("prop", e.id, label)), v, true),
+                    Value::Edit(s) => {
+                        if let Some(new) = self.string_field(ui, Id::unique(("prop", e.id, label)), &s) {
+                            match with_text_property(&e.geometry, label, &new) {
+                                Some(g) => self.edit([e.id], |x| x.geometry = g.clone()),
+                                None => self.engine.log(format!("Invalid value for {label}.")),
+                            }
+                        }
+                        None
+                    }
                 };
                 if let Some(v) = changed {
                     let g = with_property(&e.geometry, label, v);
@@ -210,6 +259,19 @@ impl OxidraftApp {
         None
     }
 
+    /// An editable string that applies on Enter or when it loses focus.
+    fn string_field(&mut self, ui: &mut Ui, id: Id, value: &str) -> Option<String> {
+        let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| value.to_string());
+        let response = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(140.0));
+        self.text_fields.push(id);
+        if response.has_focus() {
+            ui.data_mut(|d| d.insert_temp(id, text.clone()));
+            return None;
+        }
+        ui.data_mut(|d| d.remove::<String>(id));
+        (response.lost_focus() && text != value).then_some(text)
+    }
+
     /// Applies one undoable edit to several objects.
     fn edit(&mut self, ids: impl IntoIterator<Item = EntityId>, f: impl Fn(&mut Entity)) {
         self.doc.begin("PROPERTIES");
@@ -238,6 +300,29 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
         (Geometry::Insert { placement, .. }, "Position Y") => placement.position = Point::new(placement.position.x, v),
         (Geometry::Insert { placement, .. }, "Scale") if v > 0.0 => placement.scale = v,
         (Geometry::Insert { placement, .. }, "Rotation") => placement.rotation = v.rem_euclid(360.0),
+        (Geometry::Text { height, .. }, "Height") if v > 0.0 => *height = v,
+        (Geometry::Text { rotation, .. }, "Rotation") => *rotation = v.rem_euclid(360.0),
+        (Geometry::Text { width, .. }, "Width") if v >= 0.0 => *width = v,
+        (Geometry::Text { position, .. }, "Position X") => position.x = v,
+        (Geometry::Text { position, .. }, "Position Y") => position.y = v,
+        (Geometry::Dimension { scale, .. }, "Dim scale") if v > 0.0 => *scale = v,
+        (Geometry::Dimension { rotation, .. }, "Rotation") => *rotation = v.rem_euclid(360.0),
+        (Geometry::Leader { scale, .. } | Geometry::Hatch { scale, .. }, "Scale") if v > 0.0 => *scale = v,
+        (Geometry::Hatch { angle, .. }, "Angle") => *angle = v.rem_euclid(360.0),
+        _ => return None,
+    }
+    Some(g)
+}
+
+/// The geometry with one text property changed, or `None` if it's invalid.
+fn with_text_property(g: &Geometry, label: &str, s: &str) -> Option<Geometry> {
+    let mut g = g.clone();
+    match (&mut g, label) {
+        (Geometry::Text { content, .. } | Geometry::Leader { content, .. }, "Contents") => *content = s.to_string(),
+        (Geometry::Dimension { text, .. }, "Text override") => {
+            *text = Some(s.to_string()).filter(|t| !t.is_empty());
+        }
+        (Geometry::Hatch { pattern, .. }, "Pattern") => *pattern = HatchPattern::from_name(s)?,
         _ => return None,
     }
     Some(g)
@@ -286,6 +371,26 @@ mod tests {
         );
         assert_eq!(with_property(&circle, "Radius", -1.0), None);
         assert_eq!(with_property(&circle, "End X", 1.0), None);
+    }
+
+    #[test]
+    fn edits_annotation_properties() {
+        let hatch = Geometry::Hatch { loops: Vec::new(), pattern: HatchPattern::Ansi31, scale: 1.0, angle: 0.0 };
+        assert!(matches!(
+            with_text_property(&hatch, "Pattern", "solid"),
+            Some(Geometry::Hatch { pattern: HatchPattern::Solid, .. })
+        ));
+        assert_eq!(with_text_property(&hatch, "Pattern", "nope"), None);
+        let dim = Geometry::Dimension {
+            p1: Point::ORIGIN,
+            p2: Point::new(1.0, 0.0),
+            line: Point::new(0.0, 1.0),
+            rotation: 0.0,
+            aligned: false,
+            text: Some("X".into()),
+            scale: 1.0,
+        };
+        assert!(matches!(with_text_property(&dim, "Text override", ""), Some(Geometry::Dimension { text: None, .. })));
     }
 
     #[test]

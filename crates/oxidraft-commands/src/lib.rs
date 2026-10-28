@@ -6,6 +6,7 @@
 //! [`Engine`] owns the active command, parses what the user types on the
 //! command line, and wraps each command run in one undo transaction.
 
+mod annotate;
 mod arc;
 mod block;
 mod circle;
@@ -16,6 +17,7 @@ mod erase;
 mod explode;
 mod fillet;
 mod grip;
+mod hatch;
 mod input;
 mod line;
 mod matchprop;
@@ -100,11 +102,28 @@ pub struct Vars {
     pub fillet_radius: f64,
     /// INSNAME: the last block inserted.
     pub insert_name: Option<String>,
+    /// TEXTSIZE: default height for new text.
+    pub text_height: f64,
+    /// DIMSCALE: overall scale of new dimensions and leaders.
+    pub dim_scale: f64,
+    /// HPNAME, HPSCALE, HPANG: the hatch pattern and its scale and angle.
+    pub hatch_pattern: oxidraft_model::HatchPattern,
+    pub hatch_scale: f64,
+    pub hatch_angle: f64,
 }
 
 impl Default for Vars {
     fn default() -> Self {
-        Self { offset_distance: None, fillet_radius: 0.0, insert_name: None }
+        Self {
+            offset_distance: None,
+            fillet_radius: 0.0,
+            insert_name: None,
+            text_height: 2.5,
+            dim_scale: 1.0,
+            hatch_pattern: oxidraft_model::HatchPattern::Ansi31,
+            hatch_scale: 1.0,
+            hatch_angle: 0.0,
+        }
     }
 }
 
@@ -164,6 +183,12 @@ pub trait Command {
     /// input then arrives as [`Input::Text`] instead of being parsed as
     /// coordinates or keywords.
     fn wants_text(&self) -> bool {
+        false
+    }
+
+    /// For text prompts: true if spaces are part of the text (MTEXT contents)
+    /// rather than acting as Enter (block names).
+    fn text_with_spaces(&self) -> bool {
         false
     }
 }

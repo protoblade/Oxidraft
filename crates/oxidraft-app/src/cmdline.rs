@@ -206,8 +206,8 @@ impl OxidraftApp {
             });
 
         let enter = ui.input(|i| i.key_pressed(Key::Enter));
-        // Space acts as Enter, as in AutoCAD.
-        let space = self.command_text.ends_with(' ');
+        // Space acts as Enter, as in AutoCAD, except while typing text that contains spaces.
+        let space = !self.engine.accepts_spaces() && self.command_text.ends_with(' ');
         if space {
             self.command_text.pop();
         }

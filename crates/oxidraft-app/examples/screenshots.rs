@@ -12,7 +12,7 @@ use oxidraft_app::{
     update::{Release, UpdateState},
 };
 use oxidraft_geom::Point;
-use oxidraft_model::{Color, Document, Geometry, Layer, Vertex};
+use oxidraft_model::{Attach, Color, Document, Geometry, HatchPattern, Layer, Vertex};
 
 fn sample() -> Document {
     let mut doc = Document::new();
@@ -62,6 +62,35 @@ fn sample() -> Document {
         "0",
         Color::Index(4),
     );
+    // Annotation: a title, overall dimensions, a leader, and the right room hatched
+    // around the table and column.
+    doc.add(Geometry::Text {
+        position: Point::new(0.0, 80.0),
+        height: 4.0,
+        rotation: 0.0,
+        width: 0.0,
+        attach: Attach::TopLeft,
+        content: "GROUND FLOOR PLAN".into(),
+    });
+    for (p1, p2, line, rotation) in [
+        (Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(50.0, -9.0), 0.0),
+        (Point::new(100.0, 0.0), Point::new(100.0, 60.0), Point::new(109.0, 30.0), 90.0),
+        (Point::new(0.0, 60.0), Point::new(60.0, 60.0), Point::new(30.0, 66.0), 0.0),
+    ] {
+        doc.add(Geometry::Dimension { p1, p2, line, rotation, aligned: false, text: None, scale: 1.0 });
+    }
+    doc.add(Geometry::Leader {
+        points: vec![Point::new(82.2, 32.2), Point::new(92.0, 42.0)],
+        content: "CONCRETE COLUMN".into(),
+        scale: 1.0,
+    });
+    if let Some(loops) = oxidraft_model::boundary::boundary_at(&doc, Point::new(65.0, 10.0)) {
+        doc.add_on_layer(
+            Geometry::Hatch { loops, pattern: HatchPattern::Ansi31, scale: 1.5, angle: 0.0 },
+            "Hatch",
+            Color::Index(8),
+        );
+    }
     doc
 }
 
@@ -225,6 +254,22 @@ fn main() {
     h.run_steps(1);
     hover(&mut h, Point::new(10.0, 45.0));
     save(&mut h, &dir, "15-insert-preview");
+
+    // HATCH: picking inside the left room's lower-left area.
+    let mut h = harness();
+    h.state_mut().type_command("h");
+    h.run_steps(1);
+    hover(&mut h, Point::new(30.0, 10.0));
+    save(&mut h, &dir, "16-hatch-pick");
+
+    // DIMLINEAR: the dimension follows the cursor before it's placed.
+    let mut h = harness();
+    h.state_mut().type_command("dli");
+    h.run_steps(1);
+    click(&mut h, Point::new(60.0, 0.0));
+    click(&mut h, Point::new(60.0, 60.0));
+    hover(&mut h, Point::new(54.0, 40.0));
+    save(&mut h, &dir, "17-dimension-preview");
 
     // AutoComplete on the command line.
     let mut h = harness();

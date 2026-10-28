@@ -3,6 +3,11 @@ use oxidraft_geom::{
     curve::{ArcSeg, Seg},
 };
 
+use crate::{
+    annotation::{self, Attach},
+    hatch::{self, HatchPattern},
+};
+
 /// Stable identifier of an entity within one document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EntityId(pub u64);
@@ -64,6 +69,43 @@ pub enum Geometry {
     Insert {
         block: String,
         placement: Placement,
+    },
+    /// Text (MTEXT, or single-line TEXT with a bottom-left attachment).
+    /// `content` may hold several lines; `width` > 0 wraps long lines.
+    Text {
+        position: Point,
+        height: f64,
+        rotation: f64,
+        width: f64,
+        attach: Attach,
+        content: String,
+    },
+    /// A linear dimension measuring `p1` to `p2`, with its dimension line
+    /// through `line`. Rotated (DIMLINEAR) measures along `rotation`;
+    /// aligned (DIMALIGNED) along `p1 -> p2`. `text` overrides the value
+    /// (`<>` stands for the measurement). `scale` is DIMSCALE.
+    Dimension {
+        p1: Point,
+        p2: Point,
+        line: Point,
+        rotation: f64,
+        aligned: bool,
+        text: Option<String>,
+        scale: f64,
+    },
+    /// A multileader: arrowhead at `points[0]`, through the other points,
+    /// then a landing and the text.
+    Leader {
+        points: Vec<Point>,
+        content: String,
+        scale: f64,
+    },
+    /// A hatch: boundary loops filled even-odd with a pattern.
+    Hatch {
+        loops: Vec<Vec<Vertex>>,
+        pattern: HatchPattern,
+        scale: f64,
+        angle: f64,
     },
 }
 
@@ -129,6 +171,49 @@ impl Geometry {
             Geometry::Arc { .. } => "Arc",
             Geometry::Polyline { .. } => "Polyline",
             Geometry::Insert { .. } => "Block Reference",
+            Geometry::Text { .. } => "MText",
+            Geometry::Dimension { aligned: true, .. } => "Aligned Dimension",
+            Geometry::Dimension { .. } => "Rotated Dimension",
+            Geometry::Leader { .. } => "MultiLeader",
+            Geometry::Hatch { .. } => "Hatch",
+        }
+    }
+
+    /// Dimensions and leaders as the lines, arrowheads and text they draw.
+    /// `None` for everything else.
+    pub fn primitives(&self) -> Option<Vec<Geometry>> {
+        match self {
+            Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale } => {
+                Some(annotation::dimension_primitives(*p1, *p2, *line, *rotation, *aligned, text.as_deref(), *scale))
+            }
+            Geometry::Leader { points, content, scale } => Some(annotation::leader_primitives(points, content, *scale)),
+            _ => None,
+        }
+    }
+
+    /// Edges used for bounds, picking and crossing windows. Unlike
+    /// [`Geometry::segments`] this includes text boxes and hatch boundaries,
+    /// which aren't curves to snap to, trim or intersect.
+    fn outline(&self) -> Vec<Seg> {
+        match self {
+            Geometry::Text { position, height, rotation, width, attach, content } => {
+                let b = annotation::text_box(*position, *height, *rotation, *width, *attach, content);
+                (0..4).map(|i| Seg::Line(Segment::new(b[i], b[(i + 1) % 4]))).collect()
+            }
+            Geometry::Hatch { loops, .. } => loops.iter().flat_map(|l| hatch::loop_segments(l)).collect(),
+            _ => self.segments(),
+        }
+    }
+
+    /// True if `p` is inside a text box or a hatched area.
+    pub fn contains(&self, p: Point) -> bool {
+        match self {
+            Geometry::Text { position, height, rotation, width, attach, content } => {
+                let b = annotation::text_box(*position, *height, *rotation, *width, *attach, content);
+                hatch::contains(&[b.to_vec()], p)
+            }
+            Geometry::Hatch { loops, .. } => hatch::contains(&hatch::polygons(loops), p),
+            _ => false,
         }
     }
 
@@ -150,8 +235,13 @@ impl Geometry {
                     })
                     .collect()
             }
-            // Expanded by the document, which knows the block definitions.
-            Geometry::Insert { .. } => Vec::new(),
+            // Expanded by the document (blocks) or by `primitives` (dimensions,
+            // leaders); text and hatches aren't curves.
+            Geometry::Insert { .. }
+            | Geometry::Text { .. }
+            | Geometry::Dimension { .. }
+            | Geometry::Leader { .. }
+            | Geometry::Hatch { .. } => Vec::new(),
         }
     }
 
@@ -164,13 +254,19 @@ impl Geometry {
     }
 
     pub fn bounds(&self) -> Aabb {
-        let segs = self.segments();
+        let segs = self.outline();
         match (segs.first(), self) {
             (Some(first), _) => segs[1..].iter().fold(first.bounds(), |b, s| b.union(s.bounds())),
             (None, Geometry::Polyline { vertices, .. }) if !vertices.is_empty() => {
                 Aabb::from_points(vertices[0].point, vertices[0].point)
             }
             (None, Geometry::Insert { placement, .. }) => Aabb::from_points(placement.position, placement.position),
+            (None, Geometry::Leader { points, .. }) if !points.is_empty() => {
+                points.iter().fold(Aabb::from_points(points[0], points[0]), |b, p| b.union(Aabb::from_points(*p, *p)))
+            }
+            (None, Geometry::Dimension { p1, p2, line, .. }) => {
+                Aabb::from_points(*p1, *p2).union(Aabb::from_points(*line, *line))
+            }
             _ => Aabb::from_points(Point::ORIGIN, Point::ORIGIN),
         }
     }
@@ -203,14 +299,18 @@ impl Geometry {
         Some(signed.abs())
     }
 
-    /// Shortest distance from `p` to the drawn curve (not the filled area).
+    /// Shortest distance from `p` to the drawn curve (not a hatch's filled
+    /// area; anywhere on a text counts as on it).
     pub fn distance_to(&self, p: Point) -> f64 {
-        self.segments().iter().map(|s| s.distance_to(p)).fold(f64::INFINITY, f64::min)
+        if matches!(self, Geometry::Text { .. }) && self.contains(p) {
+            return 0.0;
+        }
+        self.outline().iter().map(|s| s.distance_to(p)).fold(f64::INFINITY, f64::min)
     }
 
-    /// True if any part of the curve lies inside the box (crossing selection).
+    /// True if any part of the object lies inside the box (crossing selection).
     pub fn touches(&self, b: &Aabb) -> bool {
-        self.segments().iter().any(|s| s.touches(b))
+        self.outline().iter().any(|s| s.touches(b))
     }
 
     // ---- parameters (TRIM, EXTEND, FILLET) ---------------------------------
@@ -286,7 +386,7 @@ impl Geometry {
                 Geometry::arc(&ArcSeg { center: *center, radius: *radius, start, sweep })
             }
             Geometry::Polyline { .. } => Geometry::polyline_from_segs(&pieces, false),
-            Geometry::Insert { .. } => return None,
+            _ => return None,
         })
     }
 
@@ -331,6 +431,44 @@ impl Geometry {
                     .collect(),
                 closed: *closed,
             },
+            Geometry::Text { position, height, rotation, width, attach, content } => Geometry::Text {
+                position: f(*position),
+                height: height * length_factor,
+                // Mirrored text stays readable (AutoCAD's MIRRTEXT=0).
+                rotation: if flips { *rotation } else { mapped_angle(&f, *position, *rotation) },
+                width: width * length_factor,
+                attach: *attach,
+                content: content.clone(),
+            },
+            Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale } => Geometry::Dimension {
+                p1: f(*p1),
+                p2: f(*p2),
+                line: f(*line),
+                rotation: mapped_angle(&f, *p1, *rotation),
+                aligned: *aligned,
+                text: text.clone(),
+                scale: scale * length_factor,
+            },
+            Geometry::Leader { points, content, scale } => Geometry::Leader {
+                points: points.iter().map(|p| f(*p)).collect(),
+                content: content.clone(),
+                scale: scale * length_factor,
+            },
+            Geometry::Hatch { loops, pattern, scale, angle } => {
+                let origin = loops.first().and_then(|l| l.first()).map_or(Point::ORIGIN, |v| v.point);
+                Geometry::Hatch {
+                    loops: loops
+                        .iter()
+                        .map(|l| {
+                            l.iter().map(|v| Vertex::new(f(v.point), if flips { -v.bulge } else { v.bulge })).collect()
+                        })
+                        .collect(),
+                    pattern: *pattern,
+                    scale: scale * length_factor,
+                    // Mirrored patterns keep their direction (AutoCAD's MIRRHATCH=0).
+                    angle: if flips { *angle } else { mapped_angle(&f, origin, *angle) },
+                }
+            }
             Geometry::Insert { block, placement } => {
                 let position = f(placement.position);
                 let axis = f(placement.position.polar(1.0, placement.rotation)) - position;
@@ -373,6 +511,27 @@ impl Geometry {
                 closed: *closed,
             },
             Geometry::Insert { placement, .. } => self.translated(shift(placement.position) - placement.position),
+            Geometry::Text { position, .. } => self.translated(shift(*position) - *position),
+            Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale } => Geometry::Dimension {
+                p1: shift(*p1),
+                p2: shift(*p2),
+                line: shift(*line),
+                rotation: *rotation,
+                aligned: *aligned,
+                text: text.clone(),
+                scale: *scale,
+            },
+            Geometry::Leader { points, content, scale } => Geometry::Leader {
+                points: points.iter().map(|p| shift(*p)).collect(),
+                content: content.clone(),
+                scale: *scale,
+            },
+            Geometry::Hatch { loops, pattern, scale, angle } => Geometry::Hatch {
+                loops: loops.iter().map(|l| l.iter().map(|v| Vertex::new(shift(v.point), v.bulge)).collect()).collect(),
+                pattern: *pattern,
+                scale: *scale,
+                angle: *angle,
+            },
         }
     }
 
@@ -395,6 +554,10 @@ impl Geometry {
             }
             Geometry::Polyline { vertices, .. } => vertices.iter().map(|v| v.point).collect(),
             Geometry::Insert { placement, .. } => vec![placement.position],
+            Geometry::Text { position, .. } => vec![*position],
+            Geometry::Dimension { p1, p2, line, .. } => vec![*p1, *p2, *line],
+            Geometry::Leader { points, .. } => points.clone(),
+            Geometry::Hatch { .. } => vec![self.bounds().center()],
         }
     }
 
@@ -420,8 +583,35 @@ impl Geometry {
                 Geometry::Polyline { vertices, closed: *closed }
             }
             (Geometry::Insert { placement, .. }, _) => self.translated(to - placement.position),
+            (Geometry::Text { position, .. }, _) => self.translated(to - *position),
+            (Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale }, i) => {
+                let mut pts = [*p1, *p2, *line];
+                pts[i.min(2)] = to;
+                Geometry::Dimension {
+                    p1: pts[0],
+                    p2: pts[1],
+                    line: pts[2],
+                    rotation: *rotation,
+                    aligned: *aligned,
+                    text: text.clone(),
+                    scale: *scale,
+                }
+            }
+            (Geometry::Leader { points, content, scale }, i) => {
+                let mut points = points.clone();
+                if let Some(p) = points.get_mut(i) {
+                    *p = to;
+                }
+                Geometry::Leader { points, content: content.clone(), scale: *scale }
+            }
+            (Geometry::Hatch { .. }, _) => self.translated(to - self.bounds().center()),
         }
     }
+}
+
+/// Where a transform sends a direction: the angle of `f(at + dir(angle)) - f(at)`.
+fn mapped_angle(f: &impl Fn(Point) -> Point, at: Point, angle: f64) -> f64 {
+    Point::ORIGIN.angle_to(f(at.polar(1.0, angle)) - f(at))
 }
 
 /// Quadrant points of a circle: 0°, 90°, 180°, 270°.

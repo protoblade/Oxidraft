@@ -213,7 +213,7 @@ impl Document {
 
     /// The entity's curves in world coordinates (block references expanded).
     pub fn expanded(&self, e: &Entity) -> Vec<Geometry> {
-        if !matches!(e.geometry, Geometry::Insert { .. }) {
+        if !matches!(e.geometry, Geometry::Insert { .. } | Geometry::Dimension { .. } | Geometry::Leader { .. }) {
             return vec![e.geometry.clone()];
         }
         self.expanded_styled(e).into_iter().map(|(g, _, _)| g).collect()
@@ -227,6 +227,12 @@ impl Document {
         depth: usize,
         out: &mut Vec<(Geometry, u8, String)>,
     ) {
+        if let Some(parts) = g.primitives() {
+            for part in &parts {
+                self.expand_into(part, layer, color, depth + 1, out);
+            }
+            return;
+        }
         let Geometry::Insert { block, placement } = g else {
             out.push((g.clone(), self.color_on(layer, color), layer.to_string()));
             return;

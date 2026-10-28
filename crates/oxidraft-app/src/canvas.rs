@@ -1,13 +1,15 @@
 //! The drawing area (model space): rendering and mouse handling.
 
 use eframe::egui::{
-    Align2, Color32, CursorIcon, Event, FontId, MouseWheelSource, MouseWheelUnit, Painter, PointerButton, Pos2, Rect,
-    Response, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2,
+    self, Align2, Color32, CursorIcon, Event, FontId, MouseWheelSource, MouseWheelUnit, Painter, PointerButton, Pos2,
+    Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2,
 };
 use oxidraft_commands::Tracked;
 use oxidraft_geom::{Aabb, Point, curve::Seg};
 use oxidraft_model::{
-    Geometry,
+    Attach, Geometry, HatchPattern,
+    annotation::text_box,
+    hatch,
     snap::{self, Snap, SnapKind},
 };
 
@@ -299,10 +301,21 @@ impl OxidraftApp {
     }
 
     fn draw_geometry(&self, painter: &Painter, rect: Rect, g: &Geometry, stroke: Stroke) {
-        if let Geometry::Circle { center, radius } = g {
-            let r = (radius * self.view.scale) as f32;
-            painter.circle_stroke(self.view.to_screen(rect, *center), r, stroke);
+        if let Some(parts) = g.primitives() {
+            for part in &parts {
+                self.draw_geometry(painter, rect, part, stroke);
+            }
             return;
+        }
+        match g {
+            Geometry::Circle { center, radius } => {
+                let r = (radius * self.view.scale) as f32;
+                painter.circle_stroke(self.view.to_screen(rect, *center), r, stroke);
+                return;
+            }
+            Geometry::Text { .. } => return self.draw_text(painter, rect, g, stroke),
+            Geometry::Hatch { .. } => return self.draw_hatch(painter, rect, g, stroke),
+            _ => {}
         }
         // Lines, arcs and polylines become one screen polyline, with arcs
         // split finely enough to look smooth at the current zoom.
@@ -322,6 +335,86 @@ impl OxidraftApp {
         }
         if points.len() >= 2 {
             painter.add(Shape::line(points, stroke));
+        }
+    }
+
+    /// Text at its attachment point. AutoCAD's text height is the capital
+    /// height, about 0.7 of the font size.
+    fn draw_text(&self, painter: &Painter, rect: Rect, g: &Geometry, stroke: Stroke) {
+        let Geometry::Text { position, height, rotation, width, attach, content } = g else { return };
+        let anchor = self.view.to_screen(rect, *position);
+        // A selected text glows as a box instead.
+        if stroke.width >= 4.0 {
+            let corners = text_box(*position, *height, *rotation, *width, *attach, content);
+            let pts: Vec<Pos2> = corners.iter().map(|p| self.view.to_screen(rect, *p)).collect();
+            painter.add(Shape::convex_polygon(pts, stroke.color.gamma_multiply(0.5), Stroke::NONE));
+            return;
+        }
+        let px = (*height * self.view.scale / 0.7) as f32;
+        if px < 1.5 {
+            return;
+        }
+        // Few distinct sizes keep egui's glyph cache small while zooming.
+        let size = 2f32.powf((px.min(400.0).log2() * 8.0).round() / 8.0);
+        let text = content.replace("\\P", "\n");
+        let wrap = if *width > 0.0 { (*width * self.view.scale) as f32 } else { f32::INFINITY };
+        let galley = painter.layout(text, FontId::proportional(size), stroke.color, wrap);
+        // Anchor on the type itself, not egui's line box: "top" is the first
+        // line's capital height, "bottom" the last line's baseline.
+        let baseline = |row: &egui::epaint::text::PlacedRow| {
+            row.pos.y + row.row.glyphs.first().map_or(row.row.size.y * 0.8, |g| g.pos.y)
+        };
+        let first = galley.rows.first().map_or(0.0, baseline);
+        let last = galley.rows.last().map_or(0.0, baseline);
+        let (top, width) = (first - size * 0.7, galley.size().x);
+        let offset = match attach {
+            Attach::TopLeft => vec2(0.0, top),
+            Attach::BottomLeft => vec2(0.0, last),
+            Attach::MiddleLeft => vec2(0.0, (top + last) / 2.0),
+            Attach::MiddleRight => vec2(width, (top + last) / 2.0),
+            Attach::BottomCenter => vec2(width / 2.0, last),
+        };
+        // World angles run counterclockwise; egui's clockwise on a y-down screen.
+        let angle = -(*rotation as f32).to_radians();
+        let pos = anchor - egui::emath::Rot2::from_angle(angle) * offset;
+        painter.add(egui::epaint::TextShape::new(pos, galley, stroke.color).with_angle(angle));
+    }
+
+    /// Solid fills as triangles; patterns as lines clipped to the boundary
+    /// (too fine to see at this zoom: a faint fill instead).
+    fn draw_hatch(&self, painter: &Painter, rect: Rect, g: &Geometry, stroke: Stroke) {
+        let Geometry::Hatch { loops, pattern, scale, angle } = g else { return };
+        let polys = hatch::polygons(loops);
+        if stroke.width >= 4.0 {
+            for poly in &polys {
+                let pts: Vec<Pos2> = poly.iter().map(|p| self.view.to_screen(rect, *p)).collect();
+                painter.add(Shape::closed_line(pts, stroke));
+            }
+            return;
+        }
+        let spacing_px = pattern.families().iter().map(|f| f.1).fold(f64::INFINITY, f64::min) * scale * self.view.scale;
+        let fill = |color: egui::Color32| {
+            let mut mesh = egui::Mesh::default();
+            for t in hatch::triangles(&polys) {
+                let i = mesh.vertices.len() as u32;
+                for p in t {
+                    mesh.colored_vertex(self.view.to_screen(rect, p), color);
+                }
+                mesh.add_triangle(i, i + 1, i + 2);
+            }
+            painter.add(Shape::mesh(mesh));
+        };
+        if *pattern == HatchPattern::Solid {
+            fill(stroke.color);
+        } else if spacing_px < 2.0 {
+            fill(stroke.color.gamma_multiply(0.3));
+        } else if let Some(lines) = hatch::pattern_lines(&polys, *pattern, *scale, *angle, 20_000) {
+            for (a, b) in lines {
+                painter.line_segment(
+                    [self.view.to_screen(rect, a), self.view.to_screen(rect, b)],
+                    Stroke::new(1.0, stroke.color),
+                );
+            }
         }
     }
 

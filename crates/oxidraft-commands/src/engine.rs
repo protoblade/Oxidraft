@@ -2,10 +2,11 @@ use oxidraft_geom::{Aabb, Point};
 use oxidraft_model::{Document, EntityId, Geometry, snap};
 
 use crate::{
-    Command, Ctx, Input, Prompt, Selection, Step, Vars, arc::Arc, block::DefineBlock, block::InsertBlock,
-    circle::Circle, erase::Erase, explode::Explode, fillet::Fillet, grip::GripStretch, line::Line,
-    matchprop::MatchProp, mirror::Mirror, move_copy::MoveCopy, offset::Offset, parse_input, pline::Pline,
-    rectang::Rectang, rotate::Rotate, scale::Scale, stretch::Stretch, trim_extend::TrimExtend,
+    Command, Ctx, Input, Prompt, Selection, Step, Vars, annotate::Dimension, annotate::MLeader, annotate::MText,
+    annotate::SingleText, arc::Arc, block::DefineBlock, block::InsertBlock, circle::Circle, erase::Erase,
+    explode::Explode, fillet::Fillet, grip::GripStretch, hatch::Hatch, line::Line, matchprop::MatchProp,
+    mirror::Mirror, move_copy::MoveCopy, offset::Offset, parse_input, pline::Pline, rectang::Rectang, rotate::Rotate,
+    scale::Scale, stretch::Stretch, trim_extend::TrimExtend,
 };
 
 /// A command the user can type, with its aliases.
@@ -133,6 +134,42 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["I"],
         description: "Insert a block reference",
         make: Some(|| Box::new(InsertBlock::default())),
+    },
+    CommandInfo {
+        name: "MTEXT",
+        aliases: &["T", "MT"],
+        description: "Create paragraph text",
+        make: Some(|| Box::new(MText::default())),
+    },
+    CommandInfo {
+        name: "TEXT",
+        aliases: &["DT", "DTEXT"],
+        description: "Create single-line text",
+        make: Some(|| Box::new(SingleText::default())),
+    },
+    CommandInfo {
+        name: "DIMLINEAR",
+        aliases: &["DLI"],
+        description: "Create a horizontal or vertical dimension",
+        make: Some(|| Box::new(Dimension::linear())),
+    },
+    CommandInfo {
+        name: "DIMALIGNED",
+        aliases: &["DAL"],
+        description: "Create a dimension aligned to two points",
+        make: Some(|| Box::new(Dimension::aligned())),
+    },
+    CommandInfo {
+        name: "MLEADER",
+        aliases: &["MLD"],
+        description: "Create a leader with text",
+        make: Some(|| Box::new(MLeader::default())),
+    },
+    CommandInfo {
+        name: "HATCH",
+        aliases: &["H", "BH"],
+        description: "Fill an enclosed area with a pattern",
+        make: Some(|| Box::new(Hatch::default())),
     },
     // Handled by the app, which owns the windows and palettes.
     CommandInfo { name: "LAYER", aliases: &["LA"], description: "Open the Layer Properties Manager", make: None },
@@ -279,6 +316,11 @@ impl Engine {
     /// rather than specify points.
     pub fn is_selecting(&self) -> bool {
         self.active.as_ref().is_none_or(|a| a.cmd.wants_selection())
+    }
+
+    /// True while typing text in which Space is a character, not Enter.
+    pub fn accepts_spaces(&self) -> bool {
+        self.active.as_ref().is_some_and(|a| a.cmd.wants_text() && a.cmd.text_with_spaces())
     }
 
     /// True at a single-object prompt like "Select object to trim:".
@@ -1116,6 +1158,103 @@ mod tests {
         click(&mut e, &mut d, 8.0, 0.0);
         assert!(e.history().last().unwrap().contains("explode"));
         assert_eq!(d.len(), 2);
+    }
+
+    fn texts(d: &Document) -> Vec<(Point, f64, String)> {
+        d.entities()
+            .filter_map(|e| match &e.geometry {
+                Geometry::Text { position, height, content, .. } => Some((*position, *height, content.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn single_line_text_stacks_lines() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["dt", "1,1", "3", "0", "Hello world", "Second line", ""]);
+        let t = texts(&d);
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0], (Point::new(1.0, 1.0), 3.0, "Hello world".to_string()));
+        assert!(t[1].0.approx_eq(Point::new(1.0, 1.0 - 5.0)), "next line 5/3 of the height below");
+        assert!(!e.accepts_spaces() && !e.is_active());
+        type_all(&mut e, &mut d, &["t"]);
+        assert!(e.history().last().unwrap().contains("Text height:  3.0000"), "TEXTSIZE is remembered");
+    }
+
+    #[test]
+    fn mtext_box_sets_position_and_width() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["mtext", "20,0", "0,10"]);
+        assert!(e.accepts_spaces());
+        type_all(&mut e, &mut d, &["General notes\\PSecond paragraph"]);
+        let Geometry::Text { position, width, attach, .. } = only(&d) else { panic!() };
+        assert_eq!((position, width, attach), (Point::new(0.0, 10.0), 20.0, oxidraft_model::Attach::TopLeft));
+    }
+
+    #[test]
+    fn dimlinear_picks_horizontal_or_vertical_from_the_cursor() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["dli", "0,0", "10,3", "5,8"]);
+        assert_eq!(e.history().last().unwrap(), "Dimension text = 10.00");
+        type_all(&mut e, &mut d, &["dli", "0,0", "10,3", "15,1"]);
+        assert_eq!(e.history().last().unwrap(), "Dimension text = 3.00");
+        type_all(&mut e, &mut d, &["dli", "0,0", "10,0", "t", "<> TYP", "5,5"]);
+        assert_eq!(e.history().last().unwrap(), "Dimension text = 10.00 TYP");
+        type_all(&mut e, &mut d, &["dal", "0,0", "3,4", "0,5"]);
+        assert_eq!(e.history().last().unwrap(), "Dimension text = 5.00");
+        assert_eq!(d.len(), 4);
+    }
+
+    #[test]
+    fn dimension_by_selecting_a_line() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["l", "0,0", "0,7", "", "dli", ""]);
+        assert!(e.is_picking());
+        click(&mut e, &mut d, 0.0, 3.0);
+        type_all(&mut e, &mut d, &["-4,3"]);
+        assert_eq!(e.history().last().unwrap(), "Dimension text = 7.00");
+    }
+
+    #[test]
+    fn mleader_with_text() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["mld", "0,0", "10,10", "Check this corner"]);
+        let Geometry::Leader { points, content, .. } = only(&d) else { panic!() };
+        assert_eq!(points, vec![Point::new(0.0, 0.0), Point::new(10.0, 10.0)]);
+        assert_eq!(content, "Check this corner");
+    }
+
+    #[test]
+    fn hatch_a_room_with_a_column_and_pick_it() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["l", "0,0", "10,0", "10,10", "0,10", "c", "c", "7,7", "1"]);
+        type_all(&mut e, &mut d, &["h"]);
+        assert!(e.is_picking());
+        click(&mut e, &mut d, 3.0, 5.0);
+        type_all(&mut e, &mut d, &[""]);
+        let hatch = d.entities().find_map(|x| match &x.geometry {
+            Geometry::Hatch { loops, pattern, .. } => Some((x.id, loops.len(), *pattern)),
+            _ => None,
+        });
+        let (id, loops, pattern) = hatch.expect("a hatch was made");
+        assert_eq!((loops, pattern), (2, oxidraft_model::HatchPattern::Ansi31), "room plus the column island");
+
+        // Clicking inside it (away from walls) selects the hatch.
+        click(&mut e, &mut d, 3.0, 5.0);
+        assert_eq!(e.selection(), &[id]);
+        e.cancel(&mut d);
+
+        // Pattern changes are remembered; Undo removes the last hatch.
+        type_all(&mut e, &mut d, &["h", "p", "solid"]);
+        click(&mut e, &mut d, 7.0, 7.0);
+        type_all(&mut e, &mut d, &["u", ""]);
+        assert_eq!(d.entities().filter(|x| matches!(x.geometry, Geometry::Hatch { .. })).count(), 1);
+        type_all(&mut e, &mut d, &["h"]);
+        assert!(e.history().last().unwrap().contains("SOLID"));
+
+        click(&mut e, &mut d, 30.0, 30.0);
+        assert_eq!(e.history().last().unwrap(), "Valid hatch boundary not found.");
     }
 
     #[test]

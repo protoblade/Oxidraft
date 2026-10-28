@@ -1,7 +1,7 @@
 //! Writes a small sample drawing: `cargo run -p oxidraft-io-dxf --example demo -- demo.dxf`
 
 use oxidraft_geom::Point;
-use oxidraft_model::{Color, Document, Geometry, Layer, Vertex};
+use oxidraft_model::{Attach, Color, Document, Geometry, HatchPattern, Layer, Vertex};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args().nth(1).unwrap_or_else(|| "demo.dxf".into());
@@ -55,6 +55,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "0",
         Color::Index(4),
     );
+
+    // Annotation: a title, overall dimensions, a leader, and the right room hatched
+    // around the table and column.
+    doc.add(Geometry::Text {
+        position: Point::new(0.0, 80.0),
+        height: 4.0,
+        rotation: 0.0,
+        width: 0.0,
+        attach: Attach::TopLeft,
+        content: "GROUND FLOOR PLAN".into(),
+    });
+    for (p1, p2, line, rotation) in [
+        (Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(50.0, -9.0), 0.0),
+        (Point::new(100.0, 0.0), Point::new(100.0, 60.0), Point::new(109.0, 30.0), 90.0),
+        (Point::new(0.0, 60.0), Point::new(60.0, 60.0), Point::new(30.0, 66.0), 0.0),
+    ] {
+        doc.add(Geometry::Dimension { p1, p2, line, rotation, aligned: false, text: None, scale: 1.0 });
+    }
+    doc.add(Geometry::Leader {
+        points: vec![Point::new(82.2, 32.2), Point::new(92.0, 42.0)],
+        content: "CONCRETE COLUMN".into(),
+        scale: 1.0,
+    });
+    if let Some(loops) = oxidraft_model::boundary::boundary_at(&doc, Point::new(65.0, 10.0)) {
+        doc.add_on_layer(
+            Geometry::Hatch { loops, pattern: HatchPattern::Ansi31, scale: 1.5, angle: 0.0 },
+            "Hatch",
+            Color::Index(8),
+        );
+    }
 
     oxidraft_io_dxf::save_file(&doc, &path)?;
     println!("Wrote {path} ({} objects)", doc.len());

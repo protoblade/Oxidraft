@@ -90,16 +90,21 @@ fn visible_others(doc: &Document, id: EntityId) -> Vec<Geometry> {
     doc.entities().filter(|e| e.id != id && doc.is_shown(&e.layer)).flat_map(|e| doc.expanded(e)).collect()
 }
 
-const BLOCKS_NOT_EDITABLE: &str = "Block references can't be trimmed or extended; explode them first.";
+/// Only curves can be trimmed or extended.
+fn check_trimmable(g: &Geometry) -> Result<(), String> {
+    match g {
+        Geometry::Insert { .. } => Err("Block references can't be trimmed or extended; explode them first.".into()),
+        _ if g.segments().is_empty() => Err(format!("{} objects can't be trimmed or extended.", g.name())),
+        _ => Ok(()),
+    }
+}
 
 /// TRIM in Quick mode: every other object is a cutting edge. Returns the
 /// number of document changes (for the command's Undo option).
 pub(crate) fn trim_at(doc: &mut Document, at: Point, tolerance: f64) -> Result<usize, String> {
     let Some(id) = snap::pick(doc, at, tolerance) else { return Ok(0) };
     let Some(e) = doc.entity(id).cloned() else { return Ok(0) };
-    if matches!(e.geometry, Geometry::Insert { .. }) {
-        return Err(BLOCKS_NOT_EDITABLE.into());
-    }
+    check_trimmable(&e.geometry)?;
     let cuts: Vec<f64> = visible_others(doc, id).iter().flat_map(|o| e.geometry.intersection_params(o)).collect();
     match trim(&e.geometry, &cuts, e.geometry.param_of(at))? {
         Trimmed::Erase => {
@@ -127,9 +132,7 @@ pub(crate) fn trim_at(doc: &mut Document, at: Point, tolerance: f64) -> Result<u
 pub(crate) fn extend_at(doc: &mut Document, at: Point, tolerance: f64) -> Result<usize, String> {
     let Some(id) = snap::pick(doc, at, tolerance) else { return Ok(0) };
     let Some(g) = doc.entity(id).map(|e| e.geometry.clone()) else { return Ok(0) };
-    if matches!(g, Geometry::Insert { .. }) {
-        return Err(BLOCKS_NOT_EDITABLE.into());
-    }
+    check_trimmable(&g)?;
     let boundaries: Vec<Seg> = visible_others(doc, id).iter().flat_map(Geometry::segments).collect();
     let extended = extend(&g, &boundaries, g.param_of(at))?;
     doc.modify(id, extended);
@@ -157,7 +160,7 @@ pub(crate) fn offsets(g: &Geometry, distance: f64) -> [Vec<Geometry>; 2] {
                 })
                 .collect()
         }
-        Geometry::Insert { .. } => Vec::new(),
+        _ => Vec::new(),
     })
 }
 

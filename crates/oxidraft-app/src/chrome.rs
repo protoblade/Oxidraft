@@ -35,7 +35,7 @@ const DRAW_LARGE: &[Tool] = &[
 ];
 const DRAW_SMALL: &[Tool] = &[
     tool(Icon::Rectangle, "", Some("RECTANG"), "Rectangle: creates a rectangular polyline (REC)"),
-    tool(Icon::Hatch, "", None, "Hatch (H)"),
+    tool(Icon::Hatch, "", Some("HATCH"), "Hatch: fills an enclosed area with a pattern (H)"),
 ];
 const MODIFY_GRID: &[[Tool; 3]] = &[
     [
@@ -65,11 +65,14 @@ const MODIFY_SMALL: &[Tool] = &[
     tool(Icon::Offset, "", Some("OFFSET"), "Offset: creates parallel copies (O)"),
 ];
 const ANNOTATION_LARGE: &[Tool] = &[
-    tool(Icon::Text, "Text", None, "Creates multiline text (T)"),
-    tool(Icon::Dimension, "Dimension", None, "Creates dimensions (DIM)"),
+    tool(Icon::Text, "Text", Some("MTEXT"), "Creates multiline text (T); single-line text is DT"),
+    tool(Icon::Dimension, "Dimension", Some("DIMLINEAR"), "Creates a horizontal or vertical dimension (DLI)"),
 ];
-const ANNOTATION_SMALL: &[Tool] =
-    &[tool(Icon::Leader, "Leader", None, "Creates a multileader (MLD)"), tool(Icon::Table, "Table", None, "Table")];
+const ANNOTATION_SMALL: &[Tool] = &[
+    tool(Icon::Dimension, "Aligned", Some("DIMALIGNED"), "Creates a dimension aligned to two points (DAL)"),
+    tool(Icon::Leader, "Leader", Some("MLEADER"), "Creates a leader with text (MLD)"),
+    tool(Icon::Table, "Table", None, "Table"),
+];
 const UTILITIES_LARGE: &[Tool] =
     &[tool(Icon::Measure, "Measure", None, "Measures distance, radius, angle, area (MEA)")];
 

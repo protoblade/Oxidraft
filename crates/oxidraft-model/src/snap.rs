@@ -74,8 +74,12 @@ pub fn find_snap(doc: &Document, cursor: Point, tolerance: f64) -> Option<Snap> 
     // Only curves passing near the cursor can produce an intersection there.
     let mut near: Vec<Geometry> = Vec::new();
     for e in doc.entities().filter(|e| doc.is_shown(&e.layer)) {
-        if let Geometry::Insert { placement, .. } = &e.geometry {
-            all.push(Snap { point: placement.position, kind: SnapKind::Insertion });
+        match &e.geometry {
+            Geometry::Insert { placement, .. } => {
+                all.push(Snap { point: placement.position, kind: SnapKind::Insertion })
+            }
+            Geometry::Text { position, .. } => all.push(Snap { point: *position, kind: SnapKind::Insertion }),
+            _ => {}
         }
         for g in doc.expanded(e) {
             candidates(&g, &mut all);
@@ -113,12 +117,19 @@ pub fn window_select(doc: &Document, first: Point, second: Point) -> Vec<EntityI
 /// The entity whose curve is closest to `p`, if within `tolerance`.
 /// Objects on locked, off or frozen layers can't be picked.
 pub fn pick(doc: &Document, p: Point, tolerance: f64) -> Option<EntityId> {
-    doc.entities()
-        .filter(|e| doc.is_editable(&e.layer))
+    let editable = || doc.entities().filter(|e| doc.is_editable(&e.layer));
+    editable()
         .map(|e| (doc.entity_distance(e, p), e.id))
         .filter(|(d, _)| *d <= tolerance)
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, id)| id)
+        .or_else(|| {
+            // Clicking inside a hatched area picks it; the last-drawn hatch is on top.
+            editable()
+                .filter(|e| matches!(e.geometry, Geometry::Hatch { .. }) && e.geometry.contains(p))
+                .last()
+                .map(|e| e.id)
+        })
 }
 
 #[cfg(test)]

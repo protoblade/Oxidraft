@@ -15,6 +15,8 @@ work (LINE, PLINE, OFFSET, TRIM, FILLET, LAYER, DIM, HATCH…).
 | Area | Supported |
 |---|---|
 | Draw | `LINE` (`L`), `PLINE` (`PL`) with tangent Arc / Second pt / Close / Undo, `CIRCLE` (`C`), `ARC` (`A`) by three points or Center/Start/End/Angle, `RECTANG` (`REC`) by corners or Dimensions |
+| Annotation | `MTEXT` (`T`) in a box with Height/Rotation/Width and `\P` paragraphs, single-line `TEXT` (`DT`), `DIMLINEAR` (`DLI`, horizontal/vertical from the cursor, or Rotated) and `DIMALIGNED` (`DAL`) with text override, `MLEADER` (`MLD`); text, dimensions and leaders move, rotate, scale, stretch and edit in the Properties palette |
+| Hatch | `HATCH` (`H`): pick inside any enclosed area — even one formed by separate overlapping lines — and islands inside are left out; or select closed objects. Patterns SOLID, ANSI31, ANSI37, LINE, NET with scale and angle |
 | Blocks | `BLOCK` (`B`) turns objects into a block reference, `INSERT` (`I`) with Scale/Rotate and a live preview, `EXPLODE` (`X`) one level; references move, rotate, scale and mirror like any object |
 | Layers & properties | Layer Properties Manager (`LA`): new, delete, rename, current, On/Freeze/Lock, color — all undoable; the ribbon layer dropdown has LT's bulb/sun/lock toggles; locked layers draw faded and can't be selected. Properties palette (`PR`, Cmd+1, or double-click an object) edits color, layer and geometry; `MATCHPROP` (`MA`) |
 | Modify | `MOVE` (`M`), `COPY` (`CO`), `ROTATE` (`RO`) and `SCALE` (`SC`) with Copy/Reference, `MIRROR` (`MI`), `STRETCH` (`S`), `OFFSET` (`O`) by distance or Through (sharp outside corners), `TRIM` (`TR`) and `EXTEND` (`EX`) in Quick mode with Shift to switch, `FILLET` (`F`) for two lines or all polyline corners, `EXPLODE` (`X`), `ERASE` (`E`), grip editing (click or drag a grip) |
@@ -24,7 +26,7 @@ work (LINE, PLINE, OFFSET, TRIM, FILLET, LAYER, DIM, HATCH…).
 | Input | `x,y`, `@dx,dy`, `@d<angle`; with dynamic input on, next points are relative unless prefixed `#`; direct distance entry |
 | Drafting aids | object snaps: endpoint, midpoint, center, quadrant, intersection (F3); polar tracking (F10); ortho (F8); dynamic input (F12); grid (F7) |
 | View | mouse wheel zooms at the cursor, middle-drag pans, middle double-click zooms extents; trackpad: two-finger pan, pinch zoom; `ZE` |
-| Files | DXF open/save: lines, circles, arcs, polylines with arc segments (LWPOLYLINE, and old-style POLYLINE on import), blocks and block references; layers (on/off) and colors. Saves as DXF R2000. Frozen and locked layer states aren't saved yet |
+| Files | DXF open/save: lines, circles, arcs, polylines with arc segments (LWPOLYLINE, and old-style POLYLINE on import), blocks and block references, MTEXT/TEXT, rotated and aligned dimensions, leaders; layers (on/off) and colors. Saves as DXF R2000. Not yet: frozen/locked layer states, and HATCH entities — hatches are saved as anonymous blocks of pattern lines or solids, so other programs show them and Oxidraft reopens them as block references; a leader's text comes back as separate text |
 | Updates | checks GitHub Releases at startup (set `OXIDRAFT_NO_UPDATE_CHECK=1` to skip); one click downloads, verifies the SHA-256 checksum and replaces the app, then restarts it |
 
 Greyed-out ribbon buttons mark commands that are planned but not built yet.
@@ -94,7 +96,6 @@ Adding a command is usually one new file plus one entry in `COMMANDS`.
 
 ## Roadmap
 
-- **v0.5:** MTEXT, DIMLINEAR, MLEADER, HATCH
 - **v0.6:** layouts, viewports, plot to PDF/SVG
 
 ## Contributing
