@@ -1,0 +1,193 @@
+use oxidraft_geom::{EPSILON, Point};
+use oxidraft_model::{Block, BlockEntity, Geometry, Placement, check_name};
+
+use crate::{
+    Command, Ctx, Input, Prompt, Step, Vars,
+    common::{SELECT, selected_entities},
+};
+
+enum DefineStage {
+    Name,
+    Base { name: String },
+    Select { name: String, base: Point },
+}
+
+/// BLOCK: defines a named block from selected objects and replaces them
+/// with a reference to it (like the dialog's "Convert to block").
+pub struct DefineBlock {
+    stage: DefineStage,
+}
+
+impl Default for DefineBlock {
+    fn default() -> Self {
+        Self { stage: DefineStage::Name }
+    }
+}
+
+impl Command for DefineBlock {
+    fn prompt(&self) -> Prompt {
+        match self.stage {
+            DefineStage::Name => Prompt::new("Enter block name"),
+            DefineStage::Base { .. } => Prompt::new("Specify insertion base point"),
+            DefineStage::Select { .. } => Prompt::new("Select objects"),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (&self.stage, input) {
+            (DefineStage::Name, Input::Text(name)) => {
+                check_name(&name)?;
+                if ctx.doc.block(&name).is_some() {
+                    return Err(format!("A block named \"{name}\" already exists."));
+                }
+                self.stage = DefineStage::Base { name };
+            }
+            (DefineStage::Base { name }, Input::Point(base)) => {
+                self.stage = DefineStage::Select { name: name.clone(), base };
+            }
+            (DefineStage::Select { name, base }, Input::Selection(selection)) => {
+                let selected = selected_entities(&selection, ctx);
+                if selected.is_empty() {
+                    ctx.messages.push("No objects selected; no block was created.".into());
+                    return Ok(Step::Done);
+                }
+                let entities = selected
+                    .iter()
+                    .map(|e| BlockEntity { layer: e.layer.clone(), color: e.color, geometry: e.geometry.clone() })
+                    .collect();
+                ctx.doc.define_block(Block { name: name.clone(), base: *base, entities });
+                for e in &selected {
+                    ctx.doc.remove(e.id);
+                }
+                ctx.doc.add(Geometry::Insert { block: name.clone(), placement: Placement::at(*base) });
+                // INSERT will offer the new block first.
+                ctx.vars.insert_name = Some(name.clone());
+                let n = selected.len();
+                ctx.messages
+                    .push(format!("Block \"{name}\" created from {n} object{}.", if n == 1 { "" } else { "s" }));
+                return Ok(Step::Done);
+            }
+            (DefineStage::Select { .. }, _) => return Err(SELECT.into()),
+            (_, Input::Enter) => return Ok(Step::Done),
+            (DefineStage::Name, _) => return Err("Enter a name for the block.".into()),
+            _ => return Err("Point required.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn wants_text(&self) -> bool {
+        matches!(self.stage, DefineStage::Name)
+    }
+
+    fn wants_selection(&self) -> bool {
+        matches!(self.stage, DefineStage::Select { .. })
+    }
+}
+
+enum InsertStage {
+    Name,
+    Point,
+    Scale,
+    Rotate,
+}
+
+/// INSERT: places a reference to a block, with optional scale and rotation.
+pub struct InsertBlock {
+    stage: InsertStage,
+    /// The last block inserted (INSNAME), offered as the default.
+    default_name: Option<String>,
+    block: Option<Block>,
+    scale: f64,
+    rotation: f64,
+}
+
+impl Default for InsertBlock {
+    fn default() -> Self {
+        Self { stage: InsertStage::Name, default_name: None, block: None, scale: 1.0, rotation: 0.0 }
+    }
+}
+
+impl InsertBlock {
+    fn choose(&mut self, name: &str, ctx: &mut Ctx) -> Result<(), String> {
+        let block =
+            ctx.doc.block(name).cloned().ok_or(format!("Block \"{name}\" not found. Enter ? to list blocks."))?;
+        self.block = Some(block);
+        self.stage = InsertStage::Point;
+        Ok(())
+    }
+
+    fn placement(&self, at: Point) -> Placement {
+        Placement { position: at, scale: self.scale, rotation: self.rotation, mirror: false }
+    }
+}
+
+impl Command for InsertBlock {
+    fn start(&mut self, vars: &Vars) -> Option<String> {
+        self.default_name = vars.insert_name.clone();
+        None
+    }
+
+    fn prompt(&self) -> Prompt {
+        match self.stage {
+            InsertStage::Name => {
+                let p = Prompt::new("Enter block name or [?]");
+                match &self.default_name {
+                    Some(n) => p.with_default(n.clone()),
+                    None => p,
+                }
+            }
+            InsertStage::Point => Prompt::new("Specify insertion point").with_keywords(&["Scale", "Rotate"]),
+            InsertStage::Scale => Prompt::new("Specify scale factor").with_default(format!("{:.4}", self.scale)),
+            InsertStage::Rotate => Prompt::new("Specify rotation angle").with_default(format!("{:.0}", self.rotation)),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (&self.stage, input) {
+            (InsertStage::Name, Input::Text(t)) if t == "?" => {
+                let names: Vec<String> = ctx.doc.blocks().map(|b| b.name.clone()).collect();
+                if names.is_empty() {
+                    ctx.messages.push("No blocks are defined in this drawing.".into());
+                } else {
+                    ctx.messages.push(format!("Defined blocks: {}", names.join(", ")));
+                }
+            }
+            (InsertStage::Name, Input::Text(name)) => self.choose(&name, ctx)?,
+            (InsertStage::Name, Input::Enter) => match self.default_name.clone() {
+                Some(name) => self.choose(&name, ctx)?,
+                None => return Ok(Step::Done),
+            },
+            (InsertStage::Point, Input::Point(at)) => {
+                let block = self.block.as_ref().ok_or("No block chosen.")?;
+                ctx.doc.add(Geometry::Insert { block: block.name.clone(), placement: self.placement(at) });
+                ctx.vars.insert_name = Some(block.name.clone());
+                return Ok(Step::Done);
+            }
+            (InsertStage::Point, Input::Keyword("Scale")) => self.stage = InsertStage::Scale,
+            (InsertStage::Point, Input::Keyword("Rotate")) => self.stage = InsertStage::Rotate,
+            (InsertStage::Scale, Input::Value(s)) if s > EPSILON => {
+                self.scale = s;
+                self.stage = InsertStage::Point;
+            }
+            (InsertStage::Scale, Input::Value(_)) => return Err("Requires a positive nonzero value.".into()),
+            (InsertStage::Rotate, Input::Value(a)) => {
+                self.rotation = a;
+                self.stage = InsertStage::Point;
+            }
+            (InsertStage::Scale | InsertStage::Rotate, Input::Enter) => self.stage = InsertStage::Point,
+            (InsertStage::Point, Input::Enter) => return Ok(Step::Done),
+            _ => return Err("Point or option keyword required.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn preview(&self, cursor: Point) -> Vec<Geometry> {
+        let (InsertStage::Point, Some(block)) = (&self.stage, &self.block) else { return Vec::new() };
+        let placement = self.placement(cursor);
+        block.entities.iter().map(|be| placement.place(block.base, &be.geometry)).collect()
+    }
+
+    fn wants_text(&self) -> bool {
+        matches!(self.stage, InsertStage::Name)
+    }
+}

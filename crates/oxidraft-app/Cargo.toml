@@ -1,0 +1,38 @@
+[package]
+name = "oxidraft-app"
+description = "Oxidraft desktop app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "oxidraft"
+path = "src/main.rs"
+
+[dependencies]
+oxidraft-geom.workspace = true
+oxidraft-model.workspace = true
+oxidraft-commands.workspace = true
+oxidraft-io-dxf.workspace = true
+eframe.workspace = true
+rfd.workspace = true
+ureq = { version = "3", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+flate2 = "1"
+tar = "0.4"
+self-replace = "1"
+sha2 = "0.11"
+semver = "1"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+egui_kittest = { version = "0.37", features = ["eframe", "wgpu"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

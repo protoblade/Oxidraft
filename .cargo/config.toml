@@ -1,0 +1,4 @@
+# This checkout lives in iCloud Drive. Folders ending in `.nosync` are skipped
+# by iCloud, so build output doesn't get uploaded on every compile.
+[build]
+target-dir = "target.nosync"

@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/protoblade/Oxidraft"
+rust-version = "1.95"
+
+[workspace.dependencies]
+oxidraft-geom = { path = "crates/oxidraft-geom", version = "0.1.0" }
+oxidraft-model = { path = "crates/oxidraft-model", version = "0.1.0" }
+oxidraft-commands = { path = "crates/oxidraft-commands", version = "0.1.0" }
+oxidraft-io-dxf = { path = "crates/oxidraft-io-dxf", version = "0.1.0" }
+cavalier_contours = "0.9"
+dxf = "0.6"
+eframe = "0.37"
+rfd = "0.17"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

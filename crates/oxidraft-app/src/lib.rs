@@ -1,0 +1,40 @@
+//! The Oxidraft desktop app: an AutoCAD-style window around the command engine.
+
+mod app;
+mod canvas;
+mod chrome;
+mod cmdline;
+mod icons;
+mod layers;
+mod properties;
+mod theme;
+pub mod update;
+mod view;
+
+pub use app::OxidraftApp;
+
+/// Opens the main window.
+pub fn run() -> eframe::Result {
+    let options = eframe::NativeOptions {
+        viewport: eframe::egui::ViewportBuilder::default()
+            .with_title("Oxidraft")
+            .with_inner_size([1440.0, 900.0])
+            .with_min_inner_size([900.0, 560.0]),
+        ..Default::default()
+    };
+    let file = std::env::args_os().nth(1).map(std::path::PathBuf::from);
+    eframe::run_native(
+        "Oxidraft",
+        options,
+        Box::new(|cc| {
+            let mut app = OxidraftApp::new(cc);
+            if let Some(path) = file {
+                app.open_path(path);
+            }
+            if std::env::var_os(update::DISABLE_ENV).is_none() {
+                app.updater.check(&cc.egui_ctx, false);
+            }
+            Ok(Box::new(app))
+        }),
+    )
+}

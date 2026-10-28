@@ -1,0 +1,16 @@
+[package]
+name = "oxidraft-io-dxf"
+description = "DXF import/export for Oxidraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxidraft-geom.workspace = true
+oxidraft-model.workspace = true
+dxf.workspace = true
+
+[lints]
+workspace = true
