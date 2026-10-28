@@ -23,7 +23,7 @@ impl Command for Explode {
                 Geometry::Polyline { .. } => {
                     ctx.doc.remove(e.id);
                     for seg in e.geometry.segments() {
-                        ctx.doc.add_on_layer(Geometry::from_seg(&seg), &e.layer, e.color);
+                        ctx.doc.add_like(Geometry::from_seg(&seg), &e);
                     }
                 }
                 // One level, as in AutoCAD: nested references stay references.
@@ -36,7 +36,8 @@ impl Command for Explode {
                     ctx.doc.remove(e.id);
                     for be in &def.entities {
                         let layer = if be.layer == "0" { &e.layer } else { &be.layer };
-                        ctx.doc.add_on_layer(placement.place(def.base, &be.geometry), layer, be.color);
+                        let placed = placement.place(def.base, &be.geometry);
+                        ctx.doc.add_styled(placed, layer, be.color, &be.linetype, be.lineweight);
                     }
                     for a in attributes.iter().filter(|a| !a.invisible && !a.value.is_empty()) {
                         // ByBlock only means something inside a reference.

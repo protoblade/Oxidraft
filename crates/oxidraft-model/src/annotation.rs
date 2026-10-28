@@ -1,7 +1,10 @@
 //! Text, dimensions and leaders: their layout in drawing units, and how
 //! dimensions and leaders break down into lines, arrowheads and text.
 
-use oxidraft_geom::{EPSILON, Point};
+use oxidraft_geom::{
+    EPSILON, Point, Segment,
+    curve::{ArcSeg, Seg, carrier_points},
+};
 
 use crate::entity::{Geometry, Vertex};
 use crate::hatch::HatchPattern;
@@ -222,6 +225,163 @@ pub fn dimension_primitives(
         width: 0.0,
         attach: Attach::BottomCenter,
         content: dimension_text(text, measurement(p1, p2, rotation, aligned)),
+    });
+    out
+}
+
+/// DIMDLI: spacing between stacked baseline dimensions, at scale 1.
+pub const BASELINE_SPACING: f64 = 3.75;
+
+/// The value a radius or diameter dimension shows, with its R or Ø prefix.
+pub fn radial_value(center: Point, point: Point, diameter: bool) -> String {
+    let r = center.distance(point);
+    if diameter { format!("Ø{}", format_measurement(2.0 * r)) } else { format!("R{}", format_measurement(r)) }
+}
+
+/// The angle an angular dimension measures, counterclockwise from the ray
+/// through `p1` to the ray through `p2`, in degrees.
+pub fn angular_measurement(vertex: Point, p1: Point, p2: Point) -> f64 {
+    (vertex.angle_to(p2) - vertex.angle_to(p1)).rem_euclid(360.0)
+}
+
+/// The two ray points of an angle at `vertex`, ordered so the
+/// counterclockwise sweep from the first to the second contains `at`.
+pub fn angle_around(vertex: Point, p1: Point, p2: Point, at: Point) -> (Point, Point) {
+    let sweep = ArcSeg::ccw(vertex, 1.0, vertex.angle_to(p1), vertex.angle_to(p2));
+    if sweep.param_of_angle(vertex.angle_to(at)) <= 1.0 { (p1, p2) } else { (p2, p1) }
+}
+
+/// The vertex and ray points of the angle between two lines (extended to
+/// meet) whose sector contains `at`: one of the four angles they make.
+/// `None` for parallel lines.
+pub fn two_line_angle(a: (Point, Point), b: (Point, Point), at: Point) -> Option<(Point, Point, Point)> {
+    let (sa, sb) = (Seg::Line(Segment::new(a.0, a.1)), Seg::Line(Segment::new(b.0, b.1)));
+    let x = *carrier_points(&sa, &sb).first()?;
+    let unit = |p: Point| p * (1.0 / p.length().max(EPSILON));
+    let (d1, d2) = (unit(a.1 - a.0), unit(b.1 - b.0));
+    // Write the location as α·d1 + β·d2: their signs pick the rays.
+    let (v, det) = (at - x, d1.cross(d2));
+    let (alpha, beta) = (v.cross(d2) / det, d1.cross(v) / det);
+    let (r1, r2) = (d1 * alpha.signum(), d2 * beta.signum());
+    // A point on each ray: the line's far end that way, if it reaches out.
+    let on_ray = |line: (Point, Point), r: Point| {
+        let reach = (line.0 - x).dot(r).max((line.1 - x).dot(r));
+        x + r * if reach > EPSILON { reach } else { 1.0 }
+    };
+    let (p1, p2) = (on_ray(a, r1), on_ray(b, r2));
+    Some(if r1.cross(r2) >= 0.0 { (x, p1, p2) } else { (x, p2, p1) })
+}
+
+/// An angle as dimensions show it (DIMADEC 0).
+pub fn format_angle(degrees: f64) -> String {
+    format!("{degrees:.0}°")
+}
+
+/// Text override with `<>` standing for an already formatted value.
+fn override_text(text: Option<&str>, value: String) -> String {
+    match text {
+        Some(t) => t.replace("<>", &value),
+        None => value,
+    }
+}
+
+/// Dimension line, arrowheads and text of a radius or diameter dimension.
+/// Text inside the circle sits on the dimension line; text outside gets a
+/// line out to it from the arrowhead on the circle.
+pub fn radial_primitives(
+    center: Point,
+    point: Point,
+    text_at: Point,
+    diameter: bool,
+    text: Option<&str>,
+    scale: f64,
+) -> Vec<Geometry> {
+    let s = &DIM_STYLE;
+    let r = center.distance(point);
+    if r <= EPSILON {
+        return Vec::new();
+    }
+    let u = (point - center) * (1.0 / r);
+    let content = override_text(text, radial_value(center, point, diameter));
+    let mut out = Vec::new();
+    if center.distance(text_at) > r && point.distance(text_at) > EPSILON {
+        let w = (text_at - point) * (1.0 / point.distance(text_at));
+        out.push(Geometry::Line { start: point, end: text_at });
+        out.push(arrowhead(point, w, s.arrow_size * scale));
+        let right = text_at.x >= point.x;
+        out.push(Geometry::Text {
+            position: text_at + Point::new(if right { s.gap } else { -s.gap } * scale, 0.0),
+            height: s.text_height * scale,
+            rotation: 0.0,
+            width: 0.0,
+            attach: if right { Attach::MiddleLeft } else { Attach::MiddleRight },
+            content,
+        });
+        return out;
+    }
+    let start = if diameter { center - u * r } else { center };
+    out.push(Geometry::Line { start, end: point });
+    out.push(arrowhead(point, -u, s.arrow_size * scale));
+    if diameter {
+        out.push(arrowhead(start, u, s.arrow_size * scale));
+    }
+    let angle = readable(Point::ORIGIN.angle_to(u));
+    let up = Point::ORIGIN.polar(1.0, angle + 90.0);
+    let along = text_at - center;
+    out.push(Geometry::Text {
+        position: center + u * along.dot(u) + up * (s.gap * scale),
+        height: s.text_height * scale,
+        rotation: angle,
+        width: 0.0,
+        attach: Attach::BottomCenter,
+        content,
+    });
+    out
+}
+
+/// Extension lines, dimension arc, arrowheads and text of an angular
+/// dimension at `vertex`, counterclockwise from the ray through `p1` to the
+/// ray through `p2`, with its arc through `arc`.
+pub fn angular_primitives(
+    vertex: Point,
+    p1: Point,
+    p2: Point,
+    arc: Point,
+    text: Option<&str>,
+    scale: f64,
+) -> Vec<Geometry> {
+    let s = &DIM_STYLE;
+    let r = vertex.distance(arc);
+    let (a1, a2) = (vertex.angle_to(p1), vertex.angle_to(p2));
+    let sweep = angular_measurement(vertex, p1, p2);
+    if r <= EPSILON || sweep <= 1e-9 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    // Extension lines run out from the measured points when the arc is beyond them.
+    for (p, a) in [(p1, a1), (p2, a2)] {
+        let (l, u) = (vertex.distance(p), Point::ORIGIN.polar(1.0, a));
+        if r > l + s.ext_offset * scale {
+            out.push(Geometry::Line {
+                start: vertex + u * (l + s.ext_offset * scale),
+                end: vertex + u * (r + s.ext_beyond * scale),
+            });
+        }
+    }
+    out.push(Geometry::Arc { center: vertex, radius: r, start_angle: a1, end_angle: a2 });
+    out.push(arrowhead(vertex.polar(r, a1), Point::ORIGIN.polar(1.0, a1 + 90.0), s.arrow_size * scale));
+    out.push(arrowhead(vertex.polar(r, a2), Point::ORIGIN.polar(1.0, a2 - 90.0), s.arrow_size * scale));
+    // Text along the arc's middle, outside it, never upside down.
+    let mid = a1 + sweep / 2.0;
+    let angle = readable(mid - 90.0);
+    let outward = Point::ORIGIN.polar(1.0, angle + 90.0).dot(Point::ORIGIN.polar(1.0, mid)) > 0.0;
+    out.push(Geometry::Text {
+        position: vertex.polar(r + s.gap * scale, mid),
+        height: s.text_height * scale,
+        rotation: angle,
+        width: 0.0,
+        attach: if outward { Attach::BottomCenter } else { Attach::TopCenter },
+        content: override_text(text, format_angle(sweep)),
     });
     out
 }

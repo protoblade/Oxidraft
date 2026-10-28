@@ -1,7 +1,7 @@
 //! Writes a small sample drawing: `cargo run -p oxidraft-io-dxf --example demo -- demo.dxf`
 
 use oxidraft_geom::Point;
-use oxidraft_model::{Attach, Color, Document, Geometry, HatchPattern, Layer, Vertex};
+use oxidraft_model::{Attach, Color, Document, Geometry, HatchPattern, Layer, Lineweight, Vertex};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args().nth(1).unwrap_or_else(|| "demo.dxf".into());
@@ -85,6 +85,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Color::Index(8),
         );
     }
+
+    // A center line on its own layer, heavier walls, and a solid-filled slab.
+    let mut axes = Layer::new("Axes", 1);
+    axes.linetype = "CENTER".into();
+    doc.add_layer(axes);
+    doc.add_on_layer(
+        Geometry::Line { start: Point::new(30.0, -15.0), end: Point::new(30.0, 75.0) },
+        "Axes",
+        Color::ByLayer,
+    );
+    if let Some(mut walls) = doc.layer("Walls").cloned() {
+        walls.lineweight = Lineweight::Hundredths(50);
+        doc.update_layer(walls);
+    }
+    let slab: Vec<Vertex> = [(70.0, 45.0), (95.0, 45.0), (95.0, 55.0), (70.0, 55.0)]
+        .iter()
+        .map(|&(x, y)| Vertex::at(Point::new(x, y)))
+        .collect();
+    doc.add_on_layer(
+        Geometry::Hatch { loops: vec![slab], pattern: HatchPattern::Solid, scale: 1.0, angle: 0.0 },
+        "Hatch",
+        Color::Index(9),
+    );
+    doc.add(Geometry::AngularDimension {
+        vertex: Point::new(60.0, 0.0),
+        p1: Point::new(100.0, 0.0),
+        p2: Point::new(60.0, 60.0),
+        arc: Point::new(75.0, 15.0),
+        text: None,
+        scale: 1.0,
+    });
 
     oxidraft_io_dxf::save_file(&doc, &path)?;
     println!("Wrote {path} ({} objects)", doc.len());

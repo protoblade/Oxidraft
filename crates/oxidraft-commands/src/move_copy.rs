@@ -24,7 +24,7 @@ impl MoveCopy {
     fn place(&mut self, d: Point, ctx: &mut Ctx) -> Step {
         if self.copy {
             for e in &self.selected {
-                ctx.doc.add_on_layer(e.geometry.translated(d), &e.layer, e.color);
+                ctx.doc.add_like(e.geometry.translated(d), e);
             }
             self.copies += 1;
             Step::Continue

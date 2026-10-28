@@ -3,7 +3,7 @@
 //! layer dropdown.
 
 use eframe::egui::{self, Color32, Id, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, pos2, vec2};
-use oxidraft_model::Layer;
+use oxidraft_model::{Layer, Lineweight};
 
 use crate::{app::OxidraftApp, theme};
 
@@ -131,6 +131,51 @@ pub fn color_menu(ui: &mut Ui, current: u8, id_salt: impl std::hash::Hash + std:
     chosen
 }
 
+/// A dropdown of linetype names. Returns the one picked, if any.
+pub(crate) fn linetype_menu(
+    ui: &mut Ui,
+    current: Option<&str>,
+    names: &[String],
+    salt: impl std::hash::Hash + std::fmt::Debug,
+) -> Option<String> {
+    let mut chosen = None;
+    let shown = egui::ComboBox::from_id_salt(salt).width(120.0).selected_text(current.unwrap_or("*VARIES*")).show_ui(
+        ui,
+        |ui| {
+            for name in names {
+                let on = current.is_some_and(|c| c.eq_ignore_ascii_case(name));
+                if ui.selectable_label(on, name).clicked() {
+                    chosen = Some(name.clone());
+                }
+            }
+        },
+    );
+    shown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Linetype"));
+    chosen
+}
+
+/// A dropdown of lineweights, starting with `special` (ByLayer, ByBlock,
+/// Default as fits). Returns the one picked, if any.
+pub(crate) fn lineweight_menu(
+    ui: &mut Ui,
+    current: Option<Lineweight>,
+    special: &[Lineweight],
+    salt: impl std::hash::Hash + std::fmt::Debug,
+) -> Option<Lineweight> {
+    let mut chosen = None;
+    let text = current.map_or("*VARIES*".into(), Lineweight::label);
+    let shown = egui::ComboBox::from_id_salt(salt).width(90.0).selected_text(text).show_ui(ui, |ui| {
+        let all = special.iter().copied().chain(Lineweight::STANDARD.into_iter().map(Lineweight::Hundredths));
+        for lw in all {
+            if ui.selectable_label(current == Some(lw), lw.label()).clicked() {
+                chosen = Some(lw);
+            }
+        }
+    });
+    shown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Lineweight"));
+    chosen
+}
+
 impl OxidraftApp {
     /// LAYER: the Layer Properties Manager window.
     pub(crate) fn layer_manager(&mut self, ctx: &egui::Context) {
@@ -140,7 +185,7 @@ impl OxidraftApp {
         let mut open = true;
         egui::Window::new("Layer Properties Manager")
             .open(&mut open)
-            .default_size([620.0, 320.0])
+            .default_size([860.0, 320.0])
             .default_pos([260.0, 210.0])
             .resizable(true)
             .collapsible(false)
@@ -189,8 +234,9 @@ impl OxidraftApp {
     fn layer_table(&mut self, ui: &mut Ui) {
         let layers: Vec<Layer> = self.doc.layers().to_vec();
         let current = self.doc.current_layer().to_string();
-        egui::Grid::new("layer_table").striped(true).num_columns(5).spacing([12.0, 4.0]).show(ui, |ui| {
-            for title in ["Status", "Name", "On  Freeze  Lock", "Color", "Objects"] {
+        let linetypes: Vec<String> = self.doc.linetypes().into_iter().map(|l| l.name).collect();
+        egui::Grid::new("layer_table").striped(true).num_columns(7).spacing([12.0, 4.0]).show(ui, |ui| {
+            for title in ["Status", "Name", "On  Freeze  Lock", "Color", "Linetype", "Lineweight", "Objects"] {
                 ui.colored_label(theme::TEXT_DIM, title);
             }
             ui.end_row();
@@ -216,6 +262,14 @@ impl OxidraftApp {
                 });
                 if let Some(color) = color_menu(ui, layer.color, ("layer_color", &layer.name)) {
                     self.doc.update_layer(Layer { color, ..layer.clone() });
+                }
+                let salt = ("layer_linetype", &layer.name);
+                if let Some(linetype) = linetype_menu(ui, Some(&layer.linetype), &linetypes, salt) {
+                    self.doc.update_layer(Layer { linetype, ..layer.clone() });
+                }
+                let salt = ("layer_lineweight", &layer.name);
+                if let Some(lineweight) = lineweight_menu(ui, Some(layer.lineweight), &[Lineweight::Default], salt) {
+                    self.doc.update_layer(Layer { lineweight, ..layer.clone() });
                 }
                 ui.label(self.doc.layer_usage(&layer.name).to_string());
                 ui.end_row();

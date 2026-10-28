@@ -78,7 +78,12 @@ fn boundary_curves(doc: &Document) -> Vec<Seg> {
         .filter(|e| {
             !matches!(
                 e.geometry,
-                Geometry::Text { .. } | Geometry::Dimension { .. } | Geometry::Leader { .. } | Geometry::Hatch { .. }
+                Geometry::Text { .. }
+                    | Geometry::Dimension { .. }
+                    | Geometry::RadialDimension { .. }
+                    | Geometry::AngularDimension { .. }
+                    | Geometry::Leader { .. }
+                    | Geometry::Hatch { .. }
             )
         })
         .flat_map(|e| doc.expanded(e))

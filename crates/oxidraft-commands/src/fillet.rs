@@ -94,12 +94,11 @@ impl Command for Fillet {
                 };
                 let radius = if shift { 0.0 } else { self.radius };
                 let f = fillet_lines((start, end), first_at, line_b, at, radius)?;
-                let (layer, color) =
-                    ctx.doc.entity(first).map(|e| (e.layer.clone(), e.color)).ok_or("Object not found.")?;
+                let source = ctx.doc.entity(first).cloned().ok_or("Object not found.")?;
                 ctx.doc.modify(first, f.first);
                 ctx.doc.modify(second, f.second);
                 if let Some(arc) = f.arc {
-                    ctx.doc.add_on_layer(arc, &layer, color);
+                    ctx.doc.add_like(arc, &source);
                 }
                 return Ok(Step::Done);
             }

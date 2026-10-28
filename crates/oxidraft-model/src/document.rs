@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use oxidraft_geom::{Aabb, Point};
 
 use crate::entity::{Color, Entity, EntityId, Geometry};
+use crate::linetype::{self, CONTINUOUS, Linetype, Lineweight};
 
 /// A named layer. Layer "0" always exists, as in DXF.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,11 +17,23 @@ pub struct Layer {
     pub frozen: bool,
     /// Locked layers are drawn faded and snap, but can't be selected or edited.
     pub locked: bool,
+    /// Linetype of objects drawn ByLayer.
+    pub linetype: String,
+    /// Lineweight of objects drawn ByLayer (Default, or a weight).
+    pub lineweight: Lineweight,
 }
 
 impl Layer {
     pub fn new(name: impl Into<String>, color: u8) -> Self {
-        Self { name: name.into(), color, on: true, frozen: false, locked: false }
+        Self {
+            name: name.into(),
+            color,
+            on: true,
+            frozen: false,
+            locked: false,
+            linetype: CONTINUOUS.into(),
+            lineweight: Lineweight::Default,
+        }
     }
 
     pub fn is_shown(&self) -> bool {
@@ -47,7 +60,49 @@ pub fn check_name(name: &str) -> Result<(), String> {
 pub struct BlockEntity {
     pub layer: String,
     pub color: Color,
+    pub linetype: String,
+    pub lineweight: Lineweight,
     pub geometry: Geometry,
+}
+
+impl BlockEntity {
+    /// An object with ByLayer linetype and lineweight.
+    pub fn new(layer: impl Into<String>, color: Color, geometry: Geometry) -> Self {
+        Self {
+            layer: layer.into(),
+            color,
+            linetype: linetype::BYLAYER.into(),
+            lineweight: Lineweight::ByLayer,
+            geometry,
+        }
+    }
+}
+
+/// One curve, text or fill of an expanded object, with how it's drawn:
+/// its ACI color, layer, linetype name and lineweight, all resolved (no
+/// ByLayer or ByBlock left).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Styled {
+    pub geometry: Geometry,
+    pub color: u8,
+    pub layer: String,
+    pub linetype: String,
+    pub lineweight: Lineweight,
+}
+
+/// What ByBlock means inside a block reference: the reference's own
+/// resolved color, linetype and lineweight.
+#[derive(Clone)]
+struct Inherited {
+    color: u8,
+    linetype: String,
+    lineweight: Lineweight,
+}
+
+impl Default for Inherited {
+    fn default() -> Self {
+        Self { color: 7, linetype: CONTINUOUS.into(), lineweight: Lineweight::Default }
+    }
 }
 
 /// A named block definition; block references place copies of it.
@@ -109,6 +164,10 @@ pub struct Document {
     undo_stack: Vec<Transaction>,
     redo_stack: Vec<Transaction>,
     revision: u64,
+    /// Linetypes the drawing defines, by upper-case name, besides the standard ones.
+    linetypes: BTreeMap<String, Linetype>,
+    /// LTSCALE: global scale of linetype patterns.
+    ltscale: f64,
 }
 
 impl Default for Document {
@@ -128,6 +187,8 @@ impl Document {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             revision: 0,
+            linetypes: BTreeMap::new(),
+            ltscale: 1.0,
         }
     }
 
@@ -192,6 +253,70 @@ impl Document {
         }
     }
 
+    /// The linetype name `name` resolves to on `layer`.
+    fn linetype_on(&self, layer: &str, name: &str, by_block: &str) -> String {
+        if linetype::is_by_layer(name) {
+            self.layer(layer).map_or(CONTINUOUS, |l| &l.linetype).to_string()
+        } else if linetype::is_by_block(name) {
+            by_block.to_string()
+        } else {
+            name.to_string()
+        }
+    }
+
+    /// The lineweight `lw` resolves to on `layer`.
+    fn lineweight_on(&self, layer: &str, lw: Lineweight, by_block: Lineweight) -> Lineweight {
+        match lw {
+            Lineweight::ByLayer => self.layer(layer).map_or(Lineweight::Default, |l| l.lineweight),
+            Lineweight::ByBlock => by_block,
+            lw => lw,
+        }
+    }
+
+    /// The definition of a linetype: the drawing's own, else a standard
+    /// one. `None` for unknown names.
+    pub fn linetype(&self, name: &str) -> Option<Linetype> {
+        if name.eq_ignore_ascii_case(CONTINUOUS) {
+            return Some(Linetype::continuous());
+        }
+        self.linetypes
+            .get(&name.to_ascii_uppercase())
+            .cloned()
+            .or_else(|| linetype::standard().into_iter().find(|l| l.name.eq_ignore_ascii_case(name)))
+    }
+
+    /// Every linetype that can be used: Continuous, the drawing's own and
+    /// the standard ones.
+    pub fn linetypes(&self) -> Vec<Linetype> {
+        let mut out = vec![Linetype::continuous()];
+        out.extend(self.linetypes.values().cloned());
+        for l in linetype::standard() {
+            if !out.iter().any(|o| o.name.eq_ignore_ascii_case(&l.name)) {
+                out.push(l);
+            }
+        }
+        out
+    }
+
+    /// Adds or replaces a linetype definition (from a drawing file).
+    pub fn define_linetype(&mut self, l: Linetype) {
+        if !l.name.eq_ignore_ascii_case(CONTINUOUS) {
+            self.linetypes.insert(l.name.to_ascii_uppercase(), l);
+        }
+    }
+
+    /// LTSCALE.
+    pub fn ltscale(&self) -> f64 {
+        self.ltscale
+    }
+
+    pub fn set_ltscale(&mut self, scale: f64) {
+        if scale > 0.0 && scale != self.ltscale {
+            self.ltscale = scale;
+            self.revision += 1;
+        }
+    }
+
     /// Resolved ACI color of an entity (layer color when `ByLayer`).
     pub fn display_color(&self, e: &Entity) -> u8 {
         self.color_on(&e.layer, e.color, 7)
@@ -205,55 +330,79 @@ impl Document {
         self.blocks.get(name).or_else(|| self.blocks.values().find(|b| b.name.eq_ignore_ascii_case(name)))
     }
 
-    /// The entity's curves in world coordinates, with each curve's display
-    /// color and layer. Block references are expanded recursively; objects on
-    /// layer "0" inside a block take the reference's layer, as in AutoCAD.
-    pub fn expanded_styled(&self, e: &Entity) -> Vec<(Geometry, u8, String)> {
+    /// The entity's curves in world coordinates, with how each is drawn.
+    /// Block references are expanded recursively; objects on layer "0"
+    /// inside a block take the reference's layer, as in AutoCAD.
+    pub fn expanded_styled(&self, e: &Entity) -> Vec<Styled> {
         let mut out = Vec::new();
-        self.expand_into(&e.geometry, &e.layer, e.color, 7, 0, &mut out);
+        let style = (e.color, e.linetype.as_str(), e.lineweight);
+        self.expand_into(&e.geometry, &e.layer, style, &Inherited::default(), 0, &mut out);
         out
     }
 
     /// The entity's curves in world coordinates (block references expanded).
     pub fn expanded(&self, e: &Entity) -> Vec<Geometry> {
-        if !matches!(e.geometry, Geometry::Insert { .. } | Geometry::Dimension { .. } | Geometry::Leader { .. }) {
+        if !matches!(
+            e.geometry,
+            Geometry::Insert { .. }
+                | Geometry::Dimension { .. }
+                | Geometry::RadialDimension { .. }
+                | Geometry::AngularDimension { .. }
+                | Geometry::Leader { .. }
+        ) {
             return vec![e.geometry.clone()];
         }
-        self.expanded_styled(e).into_iter().map(|(g, _, _)| g).collect()
+        self.expanded_styled(e).into_iter().map(|s| s.geometry).collect()
+    }
+
+    fn resolve(&self, layer: &str, style: (Color, &str, Lineweight), by_block: &Inherited) -> Inherited {
+        Inherited {
+            color: self.color_on(layer, style.0, by_block.color),
+            linetype: self.linetype_on(layer, style.1, &by_block.linetype),
+            lineweight: self.lineweight_on(layer, style.2, by_block.lineweight),
+        }
     }
 
     fn expand_into(
         &self,
         g: &Geometry,
         layer: &str,
-        color: Color,
-        by_block: u8,
+        style: (Color, &str, Lineweight),
+        by_block: &Inherited,
         depth: usize,
-        out: &mut Vec<(Geometry, u8, String)>,
+        out: &mut Vec<Styled>,
     ) {
         if let Some(parts) = g.primitives() {
             for part in &parts {
-                self.expand_into(part, layer, color, by_block, depth + 1, out);
+                self.expand_into(part, layer, style, by_block, depth + 1, out);
             }
             return;
         }
+        // What ByBlock means for everything inside this reference.
+        let own = self.resolve(layer, style, by_block);
         let Geometry::Insert { block, placement, attributes } = g else {
-            out.push((g.clone(), self.color_on(layer, color, by_block), layer.to_string()));
+            let Inherited { color, linetype, lineweight } = own;
+            out.push(Styled { geometry: g.clone(), color, layer: layer.to_string(), linetype, lineweight });
             return;
         };
-        // What ByBlock means for everything inside this reference.
-        let own = self.color_on(layer, color, by_block);
         if let Some(def) = self.block(block).filter(|_| depth < MAX_BLOCK_DEPTH) {
             for be in &def.entities {
                 let inner_layer = if be.layer == "0" { layer } else { &be.layer };
                 if self.is_shown(inner_layer) {
                     let placed = placement.place(def.base, &be.geometry);
-                    self.expand_into(&placed, inner_layer, be.color, own, depth + 1, out);
+                    let inner = (be.color, be.linetype.as_str(), be.lineweight);
+                    self.expand_into(&placed, inner_layer, inner, &own, depth + 1, out);
                 }
             }
         }
         for a in attributes.iter().filter(|a| !a.invisible && !a.value.is_empty() && self.is_shown(&a.layer)) {
-            out.push((a.text(), self.color_on(&a.layer, a.color, own), a.layer.clone()));
+            out.push(Styled {
+                geometry: a.text(),
+                color: self.color_on(&a.layer, a.color, own.color),
+                layer: a.layer.clone(),
+                linetype: CONTINUOUS.into(),
+                lineweight: own.lineweight,
+            });
         }
     }
 
@@ -398,6 +547,19 @@ impl Document {
 
     /// Adds an entity on a specific layer (created with color 7 if missing).
     pub fn add_on_layer(&mut self, geometry: Geometry, layer: &str, color: Color) -> EntityId {
+        self.add_styled(geometry, layer, color, linetype::BYLAYER, Lineweight::ByLayer)
+    }
+
+    /// Adds an entity with all its properties (the layer is created with
+    /// color 7 if missing).
+    pub fn add_styled(
+        &mut self,
+        geometry: Geometry,
+        layer: &str,
+        color: Color,
+        linetype: &str,
+        lineweight: Lineweight,
+    ) -> EntityId {
         let layer = match self.layer(layer) {
             Some(l) => l.name.clone(),
             None => {
@@ -407,10 +569,16 @@ impl Document {
         };
         let id = EntityId(self.next_id);
         self.next_id += 1;
-        let entity = Entity { id, layer, color, geometry };
+        let entity = Entity { id, layer, color, linetype: linetype.to_string(), lineweight, geometry };
         self.entities.insert(id, entity.clone());
         self.record(Change::Entity { id, before: None, after: Some(entity) });
         id
+    }
+
+    /// Adds an entity with the layer, color, linetype and lineweight of
+    /// `like` (copies, offsets, pieces of a broken object).
+    pub fn add_like(&mut self, geometry: Geometry, like: &Entity) -> EntityId {
+        self.add_styled(geometry, &like.layer, like.color, &like.linetype, like.lineweight)
     }
 
     /// Removes an entity. Returns false if it doesn't exist.
@@ -701,8 +869,8 @@ mod tests {
             name: "DOOR".into(),
             base: Point::ORIGIN,
             entities: vec![
-                BlockEntity { layer: "0".into(), color: Color::ByLayer, geometry: line(1.0) },
-                BlockEntity { layer: "Red".into(), color: Color::ByLayer, geometry: line(2.0) },
+                BlockEntity::new("0", Color::ByLayer, line(1.0)),
+                BlockEntity::new("Red", Color::ByLayer, line(2.0)),
             ],
         });
         let insert = Geometry::Insert {
@@ -714,8 +882,8 @@ mod tests {
         let e = d.entity(id).unwrap();
         let styled = d.expanded_styled(e);
         assert_eq!(styled.len(), 2);
-        assert_eq!((styled[0].1, styled[0].2.as_str()), (2, "Doors"), "layer 0 takes the reference's layer");
-        assert_eq!((styled[1].1, styled[1].2.as_str()), (1, "Red"));
+        assert_eq!((styled[0].color, styled[0].layer.as_str()), (2, "Doors"), "layer 0 takes the reference's layer");
+        assert_eq!((styled[1].color, styled[1].layer.as_str()), (1, "Red"));
         assert!((d.entity_distance(e, Point::new(11.0, 0.5)) - 0.0).abs() < 1e-9);
         assert_eq!(d.extents().unwrap().min, Point::new(11.0, 0.0));
 
@@ -732,11 +900,11 @@ mod tests {
         d.define_block(Block {
             name: "PT".into(),
             base: Point::ORIGIN,
-            entities: vec![BlockEntity {
-                layer: "0".into(),
-                color: Color::ByBlock,
-                geometry: Geometry::Circle { center: Point::ORIGIN, radius: 0.5 },
-            }],
+            entities: vec![BlockEntity::new(
+                "0",
+                Color::ByBlock,
+                Geometry::Circle { center: Point::ORIGIN, radius: 0.5 },
+            )],
         });
         let attr = |tag: &str, value: &str, invisible| Attribute {
             tag: tag.into(),
@@ -760,8 +928,8 @@ mod tests {
         );
         let styled = d.expanded_styled(d.entity(id).unwrap());
         assert_eq!(styled.len(), 2, "the circle and the one visible, non-empty attribute");
-        assert!(styled.iter().all(|(_, aci, _)| *aci == 3), "ByBlock takes the reference's (layer) color");
-        assert!(matches!(&styled[1].0, Geometry::Text { content, .. } if content == "17"));
+        assert!(styled.iter().all(|s| s.color == 3), "ByBlock takes the reference's (layer) color");
+        assert!(matches!(&styled[1].geometry, Geometry::Text { content, .. } if content == "17"));
 
         // An attribute on an off layer isn't drawn; one with its own color keeps it.
         let mut off = Layer::new("Labels", 5);
@@ -776,13 +944,45 @@ mod tests {
         d.modify(id, g);
         let styled = d.expanded_styled(d.entity(id).unwrap());
         assert_eq!(styled.len(), 2);
-        assert!(matches!(&styled[1], (Geometry::Text { content, .. }, 150, _) if content == "9.81"));
+        assert!(matches!(&styled[1].geometry, Geometry::Text { content, .. } if content == "9.81"));
+        assert_eq!(styled[1].color, 150);
         d.undo();
 
         // Moving the reference moves its attributes.
         let moved = d.entity(id).unwrap().geometry.translated(Point::new(5.0, 5.0));
         let Geometry::Insert { attributes, .. } = moved else { panic!() };
         assert_eq!(attributes[0].position, Point::new(16.0, 5.0));
+    }
+
+    #[test]
+    fn linetypes_and_lineweights_resolve_through_layers_and_blocks() {
+        let mut d = Document::new();
+        let mut hidden = Layer::new("Hidden", 1);
+        (hidden.linetype, hidden.lineweight) = ("HIDDEN".into(), Lineweight::Hundredths(50));
+        d.add_layer(hidden);
+        let by_block = BlockEntity {
+            linetype: linetype::BYBLOCK.into(),
+            lineweight: Lineweight::ByBlock,
+            ..BlockEntity::new("0", Color::ByLayer, line(1.0))
+        };
+        let block = Block {
+            name: "B".into(),
+            base: Point::ORIGIN,
+            entities: vec![by_block, BlockEntity::new("0", Color::ByLayer, line(2.0))],
+        };
+        d.define_block(block);
+        let insert =
+            Geometry::Insert { block: "B".into(), placement: Placement::at(Point::ORIGIN), attributes: Vec::new() };
+        let id = d.add_on_layer(insert, "Hidden", Color::ByLayer);
+        d.update(id, |e| e.linetype = "CENTER".into());
+        let styled = d.expanded_styled(d.entity(id).unwrap());
+        // ByBlock takes the reference's own linetype and its (ByLayer) lineweight.
+        assert_eq!((styled[0].linetype.as_str(), styled[0].lineweight), ("CENTER", Lineweight::Hundredths(50)));
+        // ByLayer on layer 0 inside a block means the reference's layer.
+        assert_eq!(styled[1].linetype, "HIDDEN");
+        assert_eq!(d.linetype("hidden").unwrap().pattern, vec![6.35, -3.175]);
+        assert!(d.linetype("NOSUCH").is_none());
+        assert_eq!(d.linetypes()[0].name, "Continuous");
     }
 
     #[test]
@@ -793,7 +993,7 @@ mod tests {
         d.define_block(Block {
             name: "LOOP".into(),
             base: Point::ORIGIN,
-            entities: vec![BlockEntity { layer: "0".into(), color: Color::ByLayer, geometry: me.clone() }],
+            entities: vec![BlockEntity::new("0", Color::ByLayer, me.clone())],
         });
         let id = d.add(me);
         assert!(d.expanded(d.entity(id).unwrap()).is_empty());

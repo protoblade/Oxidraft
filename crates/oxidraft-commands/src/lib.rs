@@ -8,9 +8,13 @@
 
 mod annotate;
 mod arc;
+mod array;
 mod block;
+mod break_join;
+mod chamfer;
 mod circle;
 mod common;
+mod dims;
 mod edit;
 mod engine;
 mod erase;
@@ -19,6 +23,8 @@ mod fillet;
 mod grip;
 mod hatch;
 mod input;
+mod inquiry;
+mod lengthen;
 mod line;
 mod matchprop;
 mod mirror;
@@ -100,6 +106,9 @@ pub struct Vars {
     pub offset_distance: Option<f64>,
     /// FILLETRAD.
     pub fillet_radius: f64,
+    /// CHAMFERA and CHAMFERB: the first and second chamfer distances.
+    pub chamfer_a: f64,
+    pub chamfer_b: f64,
     /// INSNAME: the last block inserted.
     pub insert_name: Option<String>,
     /// TEXTSIZE: default height for new text.
@@ -117,6 +126,8 @@ impl Default for Vars {
         Self {
             offset_distance: None,
             fillet_radius: 0.0,
+            chamfer_a: 0.0,
+            chamfer_b: 0.0,
             insert_name: None,
             text_height: 2.5,
             dim_scale: 1.0,
@@ -145,6 +156,10 @@ pub trait Command {
     fn start(&mut self, _vars: &Vars) -> Option<String> {
         None
     }
+
+    /// Called once after [`Command::start`], for commands whose prompts
+    /// show something stored in the drawing.
+    fn prepare(&mut self, _doc: &Document) {}
 
     fn prompt(&self) -> Prompt;
 

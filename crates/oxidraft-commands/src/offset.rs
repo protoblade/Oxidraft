@@ -94,11 +94,10 @@ impl Command for Offset {
                     self.stage = Stage::Select;
                     return Err("Cannot offset that object by this distance.".into());
                 }
-                let (layer, color) =
-                    ctx.doc.entity(*id).map(|e| (e.layer.clone(), e.color)).ok_or("Object not found.")?;
+                let source = ctx.doc.entity(*id).cloned().ok_or("Object not found.")?;
                 self.history.push(results.len());
                 for g in results {
-                    ctx.doc.add_on_layer(g, &layer, color);
+                    ctx.doc.add_like(g, &source);
                 }
                 self.stage = Stage::Select;
             }

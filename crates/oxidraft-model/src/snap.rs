@@ -14,10 +14,29 @@ pub enum SnapKind {
     Intersection,
     /// A block reference's insertion point.
     Insertion,
+    /// The foot of the perpendicular from the point you're drawing from.
+    Perpendicular,
+    /// Where a line from the point you're drawing from touches a circle or arc.
+    Tangent,
+    /// The closest point on the object; only when nothing else snaps.
+    Nearest,
 }
 
 impl SnapKind {
-    pub const ALL: [SnapKind; 6] = [
+    pub const ALL: [SnapKind; 9] = [
+        SnapKind::Endpoint,
+        SnapKind::Midpoint,
+        SnapKind::Center,
+        SnapKind::Quadrant,
+        SnapKind::Intersection,
+        SnapKind::Insertion,
+        SnapKind::Perpendicular,
+        SnapKind::Tangent,
+        SnapKind::Nearest,
+    ];
+
+    /// The running snaps that are on in a new session.
+    pub const DEFAULT_RUNNING: [SnapKind; 6] = [
         SnapKind::Endpoint,
         SnapKind::Midpoint,
         SnapKind::Center,
@@ -35,7 +54,16 @@ impl SnapKind {
             SnapKind::Quadrant => "Quadrant",
             SnapKind::Intersection => "Intersection",
             SnapKind::Insertion => "Insertion",
+            SnapKind::Perpendicular => "Perpendicular",
+            SnapKind::Tangent => "Tangent",
+            SnapKind::Nearest => "Nearest",
         }
+    }
+
+    /// Snaps found on the object under the cursor, however far the point is
+    /// from it: they depend on where you're drawing from, or on the cursor.
+    fn on_touched_object(self) -> bool {
+        matches!(self, SnapKind::Perpendicular | SnapKind::Tangent | SnapKind::Nearest)
     }
 }
 
@@ -75,10 +103,53 @@ fn intersections(a: &Geometry, b: &Geometry) -> Vec<Point> {
         .collect()
 }
 
-/// Nearest snap point within `tolerance` of `cursor` (both in drawing units).
-///
-/// Ties go to the earlier [`SnapKind`], so endpoints beat midpoints, etc.
-pub fn find_snap(doc: &Document, cursor: Point, tolerance: f64) -> Option<Snap> {
+/// Perpendicular, tangent and nearest points on a curve: the feet of
+/// perpendiculars and the tangent points from `from`, and the point closest
+/// to `cursor`.
+fn touched_candidates(g: &Geometry, cursor: Point, from: Option<Point>, out: &mut Vec<Snap>) {
+    for seg in g.segments() {
+        out.push(Snap { point: seg.point_at(seg.param_of(cursor)), kind: SnapKind::Nearest });
+        let Some(from) = from else { continue };
+        let mut perpendicular = |point: Point| {
+            // From a point on the curve itself, the "foot" is that point.
+            if !point.approx_eq(from) {
+                out.push(Snap { point, kind: SnapKind::Perpendicular });
+            }
+        };
+        match seg {
+            Seg::Line(l) => {
+                let d = l.end - l.start;
+                let t = (from - l.start).dot(d) / d.dot(d).max(f64::MIN_POSITIVE);
+                if (0.0..=1.0).contains(&t) {
+                    perpendicular(l.start.lerp(l.end, t));
+                }
+            }
+            Seg::Arc(a) => {
+                let dist = a.center.distance(from);
+                if dist <= 1e-9 {
+                    continue;
+                }
+                let toward = a.center.angle_to(from);
+                for angle in [toward, toward + 180.0] {
+                    if a.param_of_angle(angle) <= 1.0 {
+                        perpendicular(a.center.polar(a.radius, angle));
+                    }
+                }
+                if dist > a.radius {
+                    let spread = (a.radius / dist).acos().to_degrees();
+                    for angle in [toward - spread, toward + spread] {
+                        if a.param_of_angle(angle) <= 1.0 {
+                            out.push(Snap { point: a.center.polar(a.radius, angle), kind: SnapKind::Tangent });
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Snap candidates within `tolerance` of `cursor`, among `kinds`.
+fn collect(doc: &Document, cursor: Point, tolerance: f64, kinds: &[SnapKind], from: Option<Point>) -> Vec<Snap> {
     let mut all = Vec::new();
     // Only curves passing near the cursor can produce an intersection there.
     let mut near: Vec<Geometry> = Vec::new();
@@ -97,22 +168,63 @@ pub fn find_snap(doc: &Document, cursor: Point, tolerance: f64) -> Option<Snap> 
             }
         }
     }
+    all.retain(|s| s.point.distance(cursor) <= tolerance);
     for (i, a) in near.iter().enumerate() {
         for b in &near[i + 1..] {
-            all.extend(intersections(a, b).into_iter().map(|point| Snap { point, kind: SnapKind::Intersection }));
+            all.extend(
+                intersections(a, b)
+                    .into_iter()
+                    .filter(|p| p.distance(cursor) <= tolerance)
+                    .map(|point| Snap { point, kind: SnapKind::Intersection }),
+            );
         }
     }
-    all.into_iter()
-        .map(|s| (s.point.distance(cursor), s))
-        .filter(|(d, _)| *d <= tolerance)
-        .min_by(|(da, a), (db, b)| da.total_cmp(db).then_with(|| (a.kind as u8).cmp(&(b.kind as u8))))
-        .map(|(_, s)| s)
+    if kinds.iter().any(|k| k.on_touched_object()) {
+        for g in &near {
+            touched_candidates(g, cursor, from, &mut all);
+        }
+    }
+    all.retain(|s| kinds.contains(&s.kind));
+    all
+}
+
+/// The running object snap at `cursor` (both in drawing units), among the
+/// `kinds` turned on. `from` is the point the command is drawing from, for
+/// Perpendicular and Tangent.
+///
+/// Snaps on the object under the cursor (Perpendicular, Tangent) count from
+/// anywhere along it; the rest must lie within `tolerance`. The closest
+/// wins, ties going to the earlier [`SnapKind`]; Nearest only when nothing
+/// else snaps.
+pub fn find_snap(
+    doc: &Document,
+    cursor: Point,
+    tolerance: f64,
+    kinds: &[SnapKind],
+    from: Option<Point>,
+) -> Option<Snap> {
+    let (nearest, others): (Vec<Snap>, Vec<Snap>) =
+        collect(doc, cursor, tolerance, kinds, from).into_iter().partition(|s| s.kind == SnapKind::Nearest);
+    let closest = |snaps: Vec<Snap>| {
+        snaps
+            .into_iter()
+            .map(|s| (s.point.distance(cursor), s))
+            .min_by(|(da, a), (db, b)| da.total_cmp(db).then_with(|| (a.kind as u8).cmp(&(b.kind as u8))))
+            .map(|(_, s)| s)
+    };
+    closest(others).or_else(|| closest(nearest))
 }
 
 /// A one-shot snap override (Shift+right-click menu in AutoCAD): the `kind`
 /// point of whichever object the aperture touches, however far that point
 /// is from the cursor — the midpoint of the line under the cursor, say.
-pub fn find_override_snap(doc: &Document, cursor: Point, tolerance: f64, kind: SnapKind) -> Option<Snap> {
+pub fn find_override_snap(
+    doc: &Document,
+    cursor: Point,
+    tolerance: f64,
+    kind: SnapKind,
+    from: Option<Point>,
+) -> Option<Snap> {
     let mut all = Vec::new();
     let mut near: Vec<Geometry> = Vec::new();
     for e in doc.entities().filter(|e| doc.is_shown(&e.layer)) {
@@ -128,6 +240,7 @@ pub fn find_override_snap(doc: &Document, cursor: Point, tolerance: f64, kind: S
         }
         for g in doc.expanded(e).into_iter().filter(|g| g.distance_to(cursor) <= tolerance) {
             candidates(&g, &mut all);
+            touched_candidates(&g, cursor, from, &mut all);
             near.push(g);
         }
     }
@@ -177,19 +290,24 @@ pub fn pick(doc: &Document, p: Point, tolerance: f64) -> Option<EntityId> {
 mod tests {
     use super::*;
 
+    const RUNNING: [SnapKind; 6] = SnapKind::DEFAULT_RUNNING;
+
     #[test]
     fn snaps_to_nearest_endpoint_or_midpoint() {
         let mut d = Document::new();
         d.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });
-        let s = find_snap(&d, Point::new(9.8, 0.3), 1.0).unwrap();
+        let s = find_snap(&d, Point::new(9.8, 0.3), 1.0, &RUNNING, None).unwrap();
         assert_eq!(s, Snap { point: Point::new(10.0, 0.0), kind: SnapKind::Endpoint });
-        let s = find_snap(&d, Point::new(5.2, 0.1), 1.0).unwrap();
+        let s = find_snap(&d, Point::new(5.2, 0.1), 1.0, &RUNNING, None).unwrap();
         assert_eq!(s.kind, SnapKind::Midpoint);
-        assert!(find_snap(&d, Point::new(3.0, 3.0), 1.0).is_none());
+        assert!(find_snap(&d, Point::new(3.0, 3.0), 1.0, &RUNNING, None).is_none());
         // An override takes the touched line's midpoint, even from near its end.
-        let s = find_override_snap(&d, Point::new(9.8, 0.2), 0.5, SnapKind::Midpoint).unwrap();
+        let s = find_override_snap(&d, Point::new(9.8, 0.2), 0.5, SnapKind::Midpoint, None).unwrap();
         assert_eq!(s.point, Point::new(5.0, 0.0));
-        assert!(find_override_snap(&d, Point::new(9.8, 3.0), 0.5, SnapKind::Midpoint).is_none(), "nothing touched");
+        assert!(
+            find_override_snap(&d, Point::new(9.8, 3.0), 0.5, SnapKind::Midpoint, None).is_none(),
+            "nothing touched"
+        );
     }
 
     #[test]
@@ -197,13 +315,34 @@ mod tests {
         let mut d = Document::new();
         d.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 10.0) });
         d.add(Geometry::Line { start: Point::new(0.0, 4.0), end: Point::new(10.0, 4.0) });
-        let s = find_snap(&d, Point::new(4.2, 4.1), 1.0).unwrap();
+        let s = find_snap(&d, Point::new(4.2, 4.1), 1.0, &RUNNING, None).unwrap();
         assert_eq!(s.kind, SnapKind::Intersection);
         assert!(s.point.approx_eq(Point::new(4.0, 4.0)));
 
         let mut d = Document::new();
         d.add(Geometry::Circle { center: Point::ORIGIN, radius: 5.0 });
-        assert_eq!(find_snap(&d, Point::new(0.2, 4.9), 1.0).unwrap().kind, SnapKind::Quadrant);
+        assert_eq!(find_snap(&d, Point::new(0.2, 4.9), 1.0, &RUNNING, None).unwrap().kind, SnapKind::Quadrant);
+    }
+
+    #[test]
+    fn perpendicular_tangent_and_nearest() {
+        let mut d = Document::new();
+        d.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(100.0, 0.0) });
+        d.add(Geometry::Circle { center: Point::new(50.0, 50.0), radius: 10.0 });
+        let all = SnapKind::ALL;
+        // Drawing from (30,20): over the line far from its ends, the foot is (30,0).
+        let s = find_snap(&d, Point::new(37.0, 0.2), 0.5, &all, Some(Point::new(30.0, 20.0))).unwrap();
+        assert_eq!((s.kind, s.point), (SnapKind::Perpendicular, Point::new(30.0, 0.0)));
+        // Nothing but Nearest there without a point to draw from.
+        let s = find_snap(&d, Point::new(37.0, 0.2), 0.5, &all, None).unwrap();
+        assert_eq!((s.kind, s.point), (SnapKind::Nearest, Point::new(37.0, 0.0)));
+        assert!(find_snap(&d, Point::new(37.0, 0.2), 0.5, &RUNNING, None).is_none(), "not running by default");
+
+        // From (50,30), 20 below the center of the r=10 circle, the tangents touch at -30° and -150°.
+        let from = Point::new(50.0, 30.0);
+        let s = find_override_snap(&d, Point::new(58.0, 44.0), 0.5, SnapKind::Tangent, Some(from)).unwrap();
+        assert!((s.point - from).dot(s.point - Point::new(50.0, 50.0)).abs() < 1e-9, "radius ⟂ tangent line");
+        assert!(s.point.x > 50.0);
     }
 
     #[test]

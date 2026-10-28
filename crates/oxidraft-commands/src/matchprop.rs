@@ -1,14 +1,14 @@
-use oxidraft_model::{Color, EntityId, snap};
+use oxidraft_model::{Entity, EntityId, snap};
 
 use crate::{Command, Ctx, Input, Prompt, Step};
 
 enum Stage {
     Source,
-    Destination { source: EntityId, layer: String, color: Color },
+    Destination(Entity),
 }
 
-/// MATCHPROP: copies the layer and color of one object onto others, one
-/// click at a time.
+/// MATCHPROP: copies the layer, color, linetype and lineweight of one
+/// object onto others, one click at a time.
 pub struct MatchProp {
     stage: Stage,
 }
@@ -34,16 +34,18 @@ impl Command for MatchProp {
                     ctx.messages.push("No object found.".into());
                     return Ok(Step::Continue);
                 };
-                ctx.messages.push("Current active settings:  Color  Layer".into());
-                self.stage = Stage::Destination { source: e.id, layer: e.layer.clone(), color: e.color };
+                ctx.messages.push("Current active settings:  Color  Layer  Ltype  Lineweight".into());
+                self.stage = Stage::Destination(e.clone());
                 Ok(Step::Continue)
             }
-            (Stage::Destination { layer, color, .. }, Input::Pick { at, .. }) => {
+            (Stage::Destination(source), Input::Pick { at, .. }) => {
                 if let Some(id) = snap::pick(ctx.doc, at, ctx.pick_tolerance) {
-                    let (layer, color) = (layer.clone(), *color);
+                    let source = source.clone();
                     ctx.doc.update(id, |e| {
-                        e.layer = layer;
-                        e.color = color;
+                        e.layer = source.layer;
+                        e.color = source.color;
+                        e.linetype = source.linetype;
+                        e.lineweight = source.lineweight;
                     });
                 }
                 Ok(Step::Continue)
@@ -54,8 +56,8 @@ impl Command for MatchProp {
     }
 
     fn highlighted(&self) -> Vec<EntityId> {
-        match self.stage {
-            Stage::Destination { source, .. } => vec![source],
+        match &self.stage {
+            Stage::Destination(source) => vec![source.id],
             Stage::Source => Vec::new(),
         }
     }

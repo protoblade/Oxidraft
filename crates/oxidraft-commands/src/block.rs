@@ -53,7 +53,13 @@ impl Command for DefineBlock {
                 }
                 let entities = selected
                     .iter()
-                    .map(|e| BlockEntity { layer: e.layer.clone(), color: e.color, geometry: e.geometry.clone() })
+                    .map(|e| BlockEntity {
+                        layer: e.layer.clone(),
+                        color: e.color,
+                        linetype: e.linetype.clone(),
+                        lineweight: e.lineweight,
+                        geometry: e.geometry.clone(),
+                    })
                     .collect();
                 ctx.doc.define_block(Block { name: name.clone(), base: *base, entities });
                 for e in &selected {

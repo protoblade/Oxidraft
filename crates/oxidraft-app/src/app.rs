@@ -18,8 +18,12 @@ pub struct OxidraftApp {
     pub(crate) view: View,
     /// OSNAP (F3).
     pub(crate) osnap: bool,
+    /// OSMODE: which running object snaps are on.
+    pub(crate) osnap_modes: Vec<oxidraft_model::snap::SnapKind>,
     /// GRIDMODE (F7).
     pub(crate) grid: bool,
+    /// LWDISPLAY: draw lines as thick as their lineweight.
+    pub(crate) show_lineweights: bool,
     pub(crate) command_text: String,
     pub(crate) path: Option<PathBuf>,
     /// Document revision at the last save/open, for the `*` unsaved marker.
@@ -75,7 +79,9 @@ impl OxidraftApp {
             engine,
             view: View::default(),
             osnap: true,
+            osnap_modes: oxidraft_model::snap::SnapKind::DEFAULT_RUNNING.to_vec(),
             grid: true,
+            show_lineweights: false,
             command_text: String::new(),
             path: None,
             saved_revision: 0,

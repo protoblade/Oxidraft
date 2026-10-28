@@ -1,4 +1,4 @@
-//! The geometry edits behind TRIM, EXTEND, OFFSET and FILLET, as plain
+//! The geometry edits behind TRIM, EXTEND, OFFSET, FILLET and CHAMFER, as plain
 //! functions on geometry so they can be tested without the command flow.
 
 use oxidraft_geom::{
@@ -120,7 +120,7 @@ pub(crate) fn trim_at(doc: &mut Document, at: Point, tolerance: f64) -> Result<u
             doc.modify(id, first);
             let mut changes = 1;
             for piece in pieces {
-                doc.add_on_layer(piece, &e.layer, e.color);
+                doc.add_like(piece, &e);
                 changes += 1;
             }
             Ok(changes)
@@ -179,15 +179,19 @@ pub(crate) struct Filleted {
     pub arc: Option<Geometry>,
 }
 
-/// Fillets two lines with radius `r` (0 = sharp corner), keeping the parts
-/// on the side of each pick point.
-pub(crate) fn fillet_lines(
-    a: (Point, Point),
-    pick_a: Point,
-    b: (Point, Point),
-    pick_b: Point,
-    r: f64,
-) -> Result<Filleted, String> {
+/// The corner where two lines meet (extended if needed), with each line's
+/// direction away from the corner toward the part to keep and its far end.
+struct Corner {
+    x: Point,
+    u1: Point,
+    far1: Point,
+    u2: Point,
+    far2: Point,
+    /// The angle between the kept parts, in radians.
+    theta: f64,
+}
+
+fn corner(a: (Point, Point), pick_a: Point, b: (Point, Point), pick_b: Point) -> Result<Corner, String> {
     let (sa, sb) = (Seg::Line(oxidraft_geom::Segment::new(a.0, a.1)), Seg::Line(oxidraft_geom::Segment::new(b.0, b.1)));
     let x = *carrier_points(&sa, &sb).first().ok_or("Lines are parallel.")?;
     // Unit direction from the corner toward the part of each line to keep.
@@ -211,10 +215,24 @@ pub(crate) fn fillet_lines(
     if theta < 1e-9 || (std::f64::consts::PI - theta) < 1e-9 {
         return Err("Lines are parallel.".into());
     }
-    // Keep each line's original direction.
-    let rebuild = |line: (Point, Point), far: Point, end: Point| {
-        if line.0.approx_eq(far) { Geometry::Line { start: far, end } } else { Geometry::Line { start: end, end: far } }
-    };
+    Ok(Corner { x, u1, far1, u2, far2, theta })
+}
+
+/// The line from `far` to `end`, keeping the original line's direction.
+fn rebuild(line: (Point, Point), far: Point, end: Point) -> Geometry {
+    if line.0.approx_eq(far) { Geometry::Line { start: far, end } } else { Geometry::Line { start: end, end: far } }
+}
+
+/// Fillets two lines with radius `r` (0 = sharp corner), keeping the parts
+/// on the side of each pick point.
+pub(crate) fn fillet_lines(
+    a: (Point, Point),
+    pick_a: Point,
+    b: (Point, Point),
+    pick_b: Point,
+    r: f64,
+) -> Result<Filleted, String> {
+    let Corner { x, u1, far1, u2, far2, theta } = corner(a, pick_a, b, pick_b)?;
     if r <= EPSILON {
         return Ok(Filleted { first: rebuild(a, far1, x), second: rebuild(b, far2, x), arc: None });
     }
@@ -228,6 +246,55 @@ pub(crate) fn fillet_lines(
     let mid = center + (x - center) * (r / center.distance(x));
     let arc = ArcSeg::through(t1, mid, t2).ok_or("Radius is too large.")?;
     Ok(Filleted { first: rebuild(a, far1, t1), second: rebuild(b, far2, t2), arc: Some(Geometry::arc(&arc)) })
+}
+
+/// Chamfers two lines: cuts `d1` back from the corner along the first and
+/// `d2` along the second, joined by a new line (none when both are 0).
+pub(crate) fn chamfer_lines(
+    a: (Point, Point),
+    pick_a: Point,
+    b: (Point, Point),
+    pick_b: Point,
+    d1: f64,
+    d2: f64,
+) -> Result<Filleted, String> {
+    let Corner { x, u1, far1, u2, far2, .. } = corner(a, pick_a, b, pick_b)?;
+    if d1 > (far1 - x).dot(u1) + EPSILON || d2 > (far2 - x).dot(u2) + EPSILON {
+        return Err("Distance is too large.".into());
+    }
+    let (t1, t2) = (x + u1 * d1, x + u2 * d2);
+    let cut = (!t1.approx_eq(t2)).then_some(Geometry::Line { start: t1, end: t2 });
+    Ok(Filleted { first: rebuild(a, far1, t1), second: rebuild(b, far2, t2), arc: cut })
+}
+
+/// Chamfers every corner between two straight segments of a polyline,
+/// cutting `d1` back along the incoming segment and `d2` along the outgoing
+/// one. Returns the new vertices, the corners chamfered and those skipped
+/// because their segments are too short.
+pub(crate) fn chamfer_polyline(vertices: &[Vertex], closed: bool, d1: f64, d2: f64) -> (Vec<Vertex>, usize, usize) {
+    let n = vertices.len();
+    let mut out = Vec::with_capacity(n * 2);
+    let (mut done, mut short) = (0, 0);
+    for i in 0..n {
+        let has_corner = closed || (i > 0 && i + 1 < n);
+        let (prev, next, v) = (vertices[(i + n - 1) % n], vertices[(i + 1) % n], vertices[i]);
+        if !has_corner || (d1 <= EPSILON && d2 <= EPSILON) || prev.bulge.abs() > 1e-12 || v.bulge.abs() > 1e-12 {
+            out.push(v);
+            continue;
+        }
+        let x = v.point;
+        let (l1, l2) = (prev.point.distance(x), next.point.distance(x));
+        // Each segment may be shared with another chamfered corner.
+        if l1 <= EPSILON || l2 <= EPSILON || d1 > l1 / 2.0 + EPSILON || d2 > l2 / 2.0 + EPSILON {
+            short += usize::from(l1 > EPSILON && l2 > EPSILON);
+            out.push(v);
+            continue;
+        }
+        out.push(Vertex::at(x + (prev.point - x) * (d1 / l1)));
+        out.push(Vertex::at(x + (next.point - x) * (d2 / l2)));
+        done += 1;
+    }
+    (out, done, short)
 }
 
 /// Fillets every corner between two straight segments of a polyline.
@@ -356,6 +423,27 @@ mod tests {
         assert!(center.approx_eq(Point::new(10.0, 2.0)) && (radius - 2.0).abs() < 1e-9);
 
         assert!(fillet_lines(a, Point::new(5.0, 0.0), b, Point::new(12.0, 6.0), 50.0).is_err());
+    }
+
+    #[test]
+    fn chamfer_corner_and_rectangle() {
+        let (a, b) = ((Point::new(0.0, 0.0), Point::new(10.0, 0.0)), (Point::new(12.0, 2.0), Point::new(12.0, 10.0)));
+        let f = chamfer_lines(a, Point::new(5.0, 0.0), b, Point::new(12.0, 6.0), 2.0, 3.0).unwrap();
+        assert_eq!(f.first, line(0.0, 0.0, 10.0, 0.0));
+        assert_eq!(f.second, line(12.0, 3.0, 12.0, 10.0));
+        assert_eq!(f.arc, Some(line(10.0, 0.0, 12.0, 3.0)));
+        assert!(chamfer_lines(a, Point::new(5.0, 0.0), b, Point::new(12.0, 6.0), 20.0, 1.0).is_err());
+
+        let sq: Vec<Vertex> = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+            .iter()
+            .map(|&(x, y)| Vertex::at(Point::new(x, y)))
+            .collect();
+        let (out, done, _) = chamfer_polyline(&sq, true, 1.0, 1.0);
+        assert_eq!((done, out.len()), (4, 8));
+        assert_eq!(out[0].point, Point::new(0.0, 1.0));
+        assert_eq!(out[1].point, Point::new(1.0, 0.0));
+        let g = Geometry::Polyline { vertices: out, closed: true };
+        assert!((g.area().unwrap() - 98.0).abs() < 1e-9);
     }
 
     #[test]

@@ -3,10 +3,12 @@ use oxidraft_model::{Document, EntityId, Geometry, snap};
 
 use crate::{
     Command, Ctx, Input, Prompt, Selection, Step, Vars, annotate::Dimension, annotate::MLeader, annotate::MText,
-    annotate::SingleText, arc::Arc, block::DefineBlock, block::InsertBlock, circle::Circle, erase::Erase,
-    explode::Explode, fillet::Fillet, grip::GripStretch, hatch::Hatch, line::Line, matchprop::MatchProp,
-    mirror::Mirror, move_copy::MoveCopy, offset::Offset, parse_input, pline::Pline, rectang::Rectang, rotate::Rotate,
-    scale::Scale, stretch::Stretch, trim_extend::TrimExtend,
+    annotate::SingleText, arc::Arc, array::Array, array::ArrayKind, block::DefineBlock, block::InsertBlock,
+    break_join::Break, break_join::Join, chamfer::Chamfer, circle::Circle, dims::DimAngular, dims::DimChain,
+    dims::DimRadial, erase::Erase, explode::Explode, fillet::Fillet, grip::GripStretch, hatch::Hatch, inquiry::Area,
+    inquiry::Dist, inquiry::Id, inquiry::Ltscale, lengthen::Lengthen, line::Line, matchprop::MatchProp, mirror::Mirror,
+    move_copy::MoveCopy, offset::Offset, parse_input, pline::Pline, rectang::Rectang, rotate::Rotate, scale::Scale,
+    stretch::Stretch, trim_extend::TrimExtend,
 };
 
 /// A command the user can type, with its aliases.
@@ -111,6 +113,54 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(Fillet::default())),
     },
     CommandInfo {
+        name: "CHAMFER",
+        aliases: &["CHA"],
+        description: "Bevel the corner between two lines",
+        make: Some(|| Box::new(Chamfer::default())),
+    },
+    CommandInfo {
+        name: "BREAK",
+        aliases: &["BR"],
+        description: "Remove the part of an object between two points",
+        make: Some(|| Box::new(Break::two_points())),
+    },
+    CommandInfo {
+        name: "BREAKATPOINT",
+        aliases: &[],
+        description: "Split an object in two at a point",
+        make: Some(|| Box::new(Break::at_point())),
+    },
+    CommandInfo {
+        name: "JOIN",
+        aliases: &["J"],
+        description: "Join lines, arcs and polylines that meet end to end",
+        make: Some(|| Box::new(Join)),
+    },
+    CommandInfo {
+        name: "LENGTHEN",
+        aliases: &["LEN"],
+        description: "Change the length of lines, arcs and open polylines",
+        make: Some(|| Box::new(Lengthen::default())),
+    },
+    CommandInfo {
+        name: "ARRAY",
+        aliases: &["AR"],
+        description: "Copy objects in rows and columns or around a center",
+        make: Some(|| Box::new(Array::new(None))),
+    },
+    CommandInfo {
+        name: "ARRAYRECT",
+        aliases: &[],
+        description: "Copy objects in rows and columns",
+        make: Some(|| Box::new(Array::new(Some(ArrayKind::Rectangular)))),
+    },
+    CommandInfo {
+        name: "ARRAYPOLAR",
+        aliases: &[],
+        description: "Copy objects around a center point",
+        make: Some(|| Box::new(Array::new(Some(ArrayKind::Polar)))),
+    },
+    CommandInfo {
         name: "EXPLODE",
         aliases: &["X"],
         description: "Break polylines into lines and arcs",
@@ -160,6 +210,36 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(Dimension::aligned())),
     },
     CommandInfo {
+        name: "DIMRADIUS",
+        aliases: &["DRA"],
+        description: "Dimension the radius of an arc or circle",
+        make: Some(|| Box::new(DimRadial::radius())),
+    },
+    CommandInfo {
+        name: "DIMDIAMETER",
+        aliases: &["DDI"],
+        description: "Dimension the diameter of an arc or circle",
+        make: Some(|| Box::new(DimRadial::diameter())),
+    },
+    CommandInfo {
+        name: "DIMANGULAR",
+        aliases: &["DAN"],
+        description: "Dimension the angle between lines, of an arc, or at a vertex",
+        make: Some(|| Box::new(DimAngular::default())),
+    },
+    CommandInfo {
+        name: "DIMCONTINUE",
+        aliases: &["DCO"],
+        description: "Continue a chain of linear dimensions",
+        make: Some(|| Box::new(DimChain::continued())),
+    },
+    CommandInfo {
+        name: "DIMBASELINE",
+        aliases: &["DBA"],
+        description: "Add linear dimensions from the same baseline",
+        make: Some(|| Box::new(DimChain::baseline())),
+    },
+    CommandInfo {
         name: "MLEADER",
         aliases: &["MLD"],
         description: "Create a leader with text",
@@ -170,6 +250,30 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["H", "BH"],
         description: "Fill an enclosed area with a pattern",
         make: Some(|| Box::new(Hatch::default())),
+    },
+    CommandInfo {
+        name: "DIST",
+        aliases: &["DI"],
+        description: "Measure the distance and angle between two points",
+        make: Some(|| Box::new(Dist::default())),
+    },
+    CommandInfo {
+        name: "AREA",
+        aliases: &["AA"],
+        description: "Measure the area and perimeter of points or an object",
+        make: Some(|| Box::new(Area::default())),
+    },
+    CommandInfo {
+        name: "ID",
+        aliases: &[],
+        description: "Show the coordinates of a point",
+        make: Some(|| Box::new(Id)),
+    },
+    CommandInfo {
+        name: "LTSCALE",
+        aliases: &["LTS"],
+        description: "Set the global linetype scale",
+        make: Some(|| Box::new(Ltscale::default())),
     },
     // Handled by the app, which owns the windows and palettes.
     CommandInfo { name: "LAYER", aliases: &["LA"], description: "Open the Layer Properties Manager", make: None },
@@ -651,6 +755,7 @@ impl Engine {
         if let Some(intro) = cmd.start(&self.vars) {
             self.log(intro);
         }
+        cmd.prepare(doc);
         self.active = Some(Active { info, cmd });
         if wants_selection {
             // Noun-verb: objects selected before the command are used right away.
@@ -735,6 +840,34 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn inquiry_commands_print_measurements_and_leave_no_undo_step() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["di", "0,0", "30,40"]);
+        assert!(e.history().iter().any(|l| l.starts_with("Distance = 50.0000,  Angle in XY Plane = 53.1301")));
+        type_all(&mut e, &mut d, &["id", "3,4"]);
+        assert!(e.history().iter().any(|l| l == "X = 3.0000     Y = 4.0000     Z = 0.0000"));
+        type_all(&mut e, &mut d, &["aa", "0,0", "10,0", "10,5", "0,5", ""]);
+        assert!(e.history().iter().any(|l| l == "Area = 50.0000, Perimeter = 30.0000"));
+
+        d.add(Geometry::Circle { center: Point::ORIGIN, radius: 1.0 });
+        type_all(&mut e, &mut d, &["area", "o"]);
+        click(&mut e, &mut d, 1.0, 0.0);
+        assert!(e.history().iter().any(|l| l == "Area = 3.1416, Circumference = 6.2832"));
+        assert!(!d.can_undo() || d.undo_name() != Some("AREA"));
+    }
+
+    #[test]
+    fn ltscale_sets_the_drawing_scale() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["lts"]);
+        assert_eq!(e.prompt(), "Enter new linetype scale factor <1.0000>:");
+        type_all(&mut e, &mut d, &["0.5"]);
+        assert_eq!(d.ltscale(), 0.5);
+        type_all(&mut e, &mut d, &["lts", "-1"]);
+        assert!(e.is_active(), "rejects a negative scale");
     }
 
     #[test]
@@ -835,6 +968,121 @@ mod tests {
         assert_eq!(e.selection().len(), 2);
         e.cancel(&mut d);
         assert!(e.selection().is_empty());
+    }
+
+    #[test]
+    fn array_rectangular_and_polar() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["c", "0,0", "1"]);
+        type_all(&mut e, &mut d, &["ar"]);
+        click(&mut e, &mut d, 1.0, 0.0);
+        type_all(&mut e, &mut d, &["", "r", "2", "3", "10", "20"]);
+        assert!(!e.is_active());
+        assert_eq!(d.len(), 6);
+        assert!(d.entities().any(|x| x.geometry == Geometry::Circle { center: Point::new(40.0, 10.0), radius: 1.0 }));
+        type_all(&mut e, &mut d, &["u"]);
+        assert_eq!(d.len(), 1, "one undo step");
+
+        // Four items around (0,10): the circle at (0,0) and three copies a quarter turn apart.
+        type_all(&mut e, &mut d, &["arraypolar"]);
+        click(&mut e, &mut d, 1.0, 0.0);
+        type_all(&mut e, &mut d, &["", "0,10", "4", "", ""]);
+        let mut centers: Vec<Point> = d
+            .entities()
+            .filter_map(|x| if let Geometry::Circle { center, .. } = x.geometry { Some(center) } else { None })
+            .collect();
+        centers.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+        let expected = [(-10.0, 10.0), (0.0, 0.0), (0.0, 20.0), (10.0, 10.0)];
+        assert_eq!(centers.len(), 4);
+        for (c, (x, y)) in centers.iter().zip(expected) {
+            assert!(c.approx_eq(Point::new(x, y)), "{centers:?}");
+        }
+    }
+
+    #[test]
+    fn chamfer_break_join_and_lengthen() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["l", "0,0", "10,0", ""]);
+        type_all(&mut e, &mut d, &["l", "12,2", "12,10", ""]);
+        type_all(&mut e, &mut d, &["cha", "d", "2", ""]);
+        click(&mut e, &mut d, 5.0, 0.0);
+        click(&mut e, &mut d, 12.0, 6.0);
+        assert!(lines(&d).contains(&(Point::new(10.0, 0.0), Point::new(12.0, 2.0))), "{:?}", lines(&d));
+        assert_eq!((e.vars.chamfer_a, e.vars.chamfer_b), (2.0, 2.0));
+
+        // JOIN the three into one polyline, then BREAK a gap in it.
+        type_all(&mut e, &mut d, &["j"]);
+        for (x, y) in [(5.0, 0.0), (11.0, 1.0), (12.0, 6.0)] {
+            click(&mut e, &mut d, x, y);
+        }
+        type_all(&mut e, &mut d, &[""]);
+        assert!(e.history().iter().any(|l| l == "3 objects converted to 1 polyline"));
+        assert_eq!(d.len(), 1);
+        type_all(&mut e, &mut d, &["br"]);
+        click(&mut e, &mut d, 4.0, 0.0);
+        type_all(&mut e, &mut d, &["6,0"]);
+        assert_eq!(d.len(), 2);
+        assert!(lines(&d).is_empty(), "both pieces stay polylines");
+
+        // LENGTHEN a line by a delta at the picked end.
+        let mut d = Document::new();
+        type_all(&mut e, &mut d, &["l", "0,0", "10,0", ""]);
+        type_all(&mut e, &mut d, &["len", "de", "5"]);
+        click(&mut e, &mut d, 9.0, 0.0);
+        type_all(&mut e, &mut d, &[""]);
+        assert_eq!(lines(&d), vec![(Point::new(0.0, 0.0), Point::new(15.0, 0.0))]);
+    }
+
+    #[test]
+    fn radial_angular_and_chained_dimensions() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["c", "0,0", "5"]);
+        type_all(&mut e, &mut d, &["dra"]);
+        click(&mut e, &mut d, 5.0, 0.0);
+        type_all(&mut e, &mut d, &["10,10"]);
+        assert!(e.history().iter().any(|l| l == "Dimension text = 5.00"));
+        let radial = d.entities().last().unwrap().geometry.clone();
+        let Geometry::RadialDimension { point, diameter: false, .. } = radial else { panic!("{radial:?}") };
+        assert!(point.approx_eq(Point::new(5.0, 5.0) * (1.0 / 2f64.sqrt())));
+
+        // Two lines meeting at the origin at 90°; the arc in the first quadrant measures it.
+        let mut d = Document::new();
+        type_all(&mut e, &mut d, &["l", "-10,0", "10,0", ""]);
+        type_all(&mut e, &mut d, &["l", "0,-10", "0,10", ""]);
+        type_all(&mut e, &mut d, &["dan"]);
+        click(&mut e, &mut d, 6.0, 0.0);
+        click(&mut e, &mut d, 0.0, 6.0);
+        type_all(&mut e, &mut d, &["-4,4"]);
+        let Some(Geometry::AngularDimension { vertex, p1, p2, .. }) = d.entities().last().map(|x| x.geometry.clone())
+        else {
+            panic!()
+        };
+        assert!(vertex.approx_eq(Point::ORIGIN));
+        assert!(p1.approx_eq(Point::new(0.0, 10.0)) && p2.approx_eq(Point::new(-10.0, 0.0)), "{p1:?} {p2:?}");
+        assert!(e.history().iter().any(|l| l == "Dimension text = 90°"));
+
+        // A linear dimension, two continued from it, then one from its baseline.
+        let mut d = Document::new();
+        type_all(&mut e, &mut d, &["dli", "0,0", "10,0", "5,5", "dco", "25,0", "40,0", ""]);
+        type_all(&mut e, &mut d, &["dba", "50,0", ""]);
+        let dims: Vec<(Point, Point, Point)> = d
+            .entities()
+            .filter_map(|x| match x.geometry {
+                Geometry::Dimension { p1, p2, line, .. } => Some((p1, p2, line)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dims.len(), 4);
+        assert_eq!(
+            (dims[1].0, dims[1].1, dims[1].2),
+            (Point::new(10.0, 0.0), Point::new(25.0, 0.0), Point::new(5.0, 5.0))
+        );
+        assert_eq!((dims[2].0, dims[2].1), (Point::new(25.0, 0.0), Point::new(40.0, 0.0)));
+        // The baseline builds on the last (25→40), from its first extension line, one DIMDLI up.
+        assert_eq!(
+            (dims[3].0, dims[3].1, dims[3].2),
+            (Point::new(25.0, 0.0), Point::new(50.0, 0.0), Point::new(5.0, 8.75))
+        );
     }
 
     #[test]
@@ -1350,7 +1598,7 @@ mod tests {
     #[test]
     fn autocomplete_prefers_exact_alias() {
         let names: Vec<_> = Engine::suggest("c").iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["CIRCLE", "COPY", "PROPERTIES"], "PROPERTIES via its CH alias");
+        assert_eq!(names, vec!["CIRCLE", "COPY", "CHAMFER", "PROPERTIES"], "PROPERTIES via its CH alias");
         let names: Vec<_> = Engine::suggest("co").iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["COPY"]);
         let names: Vec<_> = Engine::suggest("s").iter().map(|c| c.name).collect();

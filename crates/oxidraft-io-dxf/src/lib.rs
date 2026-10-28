@@ -11,9 +11,13 @@ use dxf::tables::Layer as DxfLayer;
 use dxf::{Color as DxfColor, Drawing, Point as DxfPoint};
 use oxidraft_geom::Point;
 use oxidraft_model::{
-    Attach, Attribute, Block, BlockEntity, Color, Document, Geometry, HatchPattern, Layer, Placement, Vertex,
-    annotation::decode_control_codes, hatch,
+    Attach, Attribute, Block, BlockEntity, Color, Document, Geometry, HatchPattern, Layer, Linetype, Lineweight,
+    Placement, Vertex,
+    annotation::{angle_around, decode_control_codes, two_line_angle},
+    hatch, linetype,
 };
+
+mod hatch_dxf;
 
 pub type Error = dxf::DxfError;
 
@@ -47,6 +51,30 @@ fn from_dxf_color(c: &DxfColor) -> Color {
         Some(i) if !c.is_by_layer() && i > 0 => Color::Index(i),
         _ => Color::ByLayer,
     }
+}
+
+fn linetype_from_dxf(name: &str) -> String {
+    if name.is_empty() || linetype::is_by_layer(name) {
+        linetype::BYLAYER.into()
+    } else if linetype::is_by_block(name) {
+        linetype::BYBLOCK.into()
+    } else {
+        name.to_string()
+    }
+}
+
+fn linetype_to_dxf(name: &str) -> String {
+    if linetype::is_by_layer(name) || linetype::is_by_block(name) {
+        name.to_ascii_uppercase()
+    } else {
+        name.to_string()
+    }
+}
+
+/// An object's lineweight. The dxf crate reads a missing group 370 as 0, so
+/// 0 is taken as ByLayer (AutoCAD's default) rather than as 0.00 mm.
+fn lineweight_from_dxf(v: i16) -> Lineweight {
+    if v == 0 { Lineweight::ByLayer } else { Lineweight::from_dxf(v) }
 }
 
 fn to_dxf_attach(a: Attach) -> AttachmentPoint {
@@ -162,6 +190,8 @@ fn attribute_to_dxf(a: &Attribute) -> dxf::entities::Attribute {
 #[derive(Default)]
 struct Exporter {
     blocks: Vec<dxf::Block>,
+    /// AcDbHatch data for each placeholder POINT, by its X coordinate.
+    hatches: Vec<Vec<(i32, String)>>,
 }
 
 impl Exporter {
@@ -175,12 +205,33 @@ impl Exporter {
                     let mut e = DxfEntity::new(t);
                     e.common.layer = layer.to_string();
                     e.common.color = DxfColor::by_block();
+                    e.common.line_type_name = "BYBLOCK".into();
+                    e.common.lineweight_enum_value = Lineweight::ByBlock.to_dxf();
                     e
                 })
                 .collect(),
             ..Default::default()
         });
         name
+    }
+
+    /// A dimension's drawn parts as an anonymous `*D` block, which other
+    /// programs show as-is, and where its text sits.
+    fn dimension_block(&mut self, g: &Geometry, layer: &str) -> (String, Option<Point>) {
+        let primitives = g.primitives().unwrap_or_default();
+        // Arrowheads are SOLIDs, as in AutoCAD's own dimension blocks.
+        let parts: Vec<EntityType> = primitives
+            .iter()
+            .flat_map(|p| match p {
+                Geometry::Hatch { loops, pattern: HatchPattern::Solid, .. } => solids(loops),
+                _ => self.entities(p, layer),
+            })
+            .collect();
+        let text_mid = primitives.iter().find_map(|p| match p {
+            Geometry::Text { position, .. } => Some(*position),
+            _ => None,
+        });
+        (self.anonymous_block('D', parts, layer), text_mid)
     }
 
     /// DXF entities for one object.
@@ -244,13 +295,7 @@ impl Exporter {
                 })]
             }
             Geometry::Dimension { p1, p2, line, rotation, aligned, text, .. } => {
-                let parts: Vec<EntityType> =
-                    g.primitives().unwrap_or_default().iter().flat_map(|p| self.entities(p, layer)).collect();
-                let text_mid = g.primitives().unwrap_or_default().iter().find_map(|p| match p {
-                    Geometry::Text { position, .. } => Some(*position),
-                    _ => None,
-                });
-                let block_name = self.anonymous_block('D', parts, layer);
+                let (block_name, text_mid) = self.dimension_block(g, layer);
                 let r = if *aligned { p1.angle_to(*p2) } else { *rotation };
                 let u = Point::ORIGIN.polar(1.0, r);
                 let on_line = *line + u * (*p2 - *line).dot(u);
@@ -274,6 +319,54 @@ impl Exporter {
                     ..Default::default()
                 })]
             }
+            // The text point is where the dimension line ends, so it reads back exactly.
+            Geometry::RadialDimension { center, point, text_at, diameter, text, .. } => {
+                let (block_name, _) = self.dimension_block(g, layer);
+                let r = center.distance(*point);
+                let base =
+                    |definition_point_1: Point, dimension_type, actual_measurement| dxf::entities::DimensionBase {
+                        block_name,
+                        definition_point_1: to_dxf(definition_point_1),
+                        text_mid_point: to_dxf(*text_at),
+                        dimension_type,
+                        actual_measurement,
+                        text: text.clone().unwrap_or_default(),
+                        ..Default::default()
+                    };
+                // A diameter runs from the point on the circle to the opposite one.
+                vec![if *diameter {
+                    EntityType::DiameterDimension(dxf::entities::DiameterDimension {
+                        dimension_base: base(*center * 2.0 - *point, DimensionType::Diameter, 2.0 * r),
+                        definition_point_2: to_dxf(*point),
+                        ..Default::default()
+                    })
+                } else {
+                    EntityType::RadialDimension(dxf::entities::RadialDimension {
+                        dimension_base: base(*center, DimensionType::Radius, r),
+                        definition_point_2: to_dxf(*point),
+                        ..Default::default()
+                    })
+                }]
+            }
+            Geometry::AngularDimension { vertex, p1, p2, arc, text, .. } => {
+                let (block_name, text_mid) = self.dimension_block(g, layer);
+                let angle = oxidraft_model::annotation::angular_measurement(*vertex, *p1, *p2);
+                vec![EntityType::AngularThreePointDimension(dxf::entities::AngularThreePointDimension {
+                    dimension_base: dxf::entities::DimensionBase {
+                        block_name,
+                        definition_point_1: to_dxf(*arc),
+                        text_mid_point: to_dxf(text_mid.unwrap_or(*arc)),
+                        dimension_type: DimensionType::AngularThreePoint,
+                        actual_measurement: angle.to_radians(),
+                        text: text.clone().unwrap_or_default(),
+                        ..Default::default()
+                    },
+                    definition_point_2: to_dxf(*p1),
+                    definition_point_3: to_dxf(*p2),
+                    definition_point_4: to_dxf(*vertex),
+                    ..Default::default()
+                })]
+            }
             // A LEADER for the arrow and lines, plus its text as MTEXT.
             Geometry::Leader { points, .. } => {
                 let mut out = vec![EntityType::Leader(dxf::entities::Leader {
@@ -288,59 +381,106 @@ impl Exporter {
                 }
                 out
             }
-            Geometry::Hatch { loops, pattern, scale, angle } => {
-                let polys = hatch::polygons(loops);
-                let parts: Vec<EntityType> = if *pattern == HatchPattern::Solid {
-                    hatch::triangles(&polys)
-                        .into_iter()
-                        .map(|[a, b, c]| {
-                            EntityType::Solid(dxf::entities::Solid {
-                                first_corner: to_dxf(a),
-                                second_corner: to_dxf(b),
-                                third_corner: to_dxf(c),
-                                fourth_corner: to_dxf(c),
-                                ..Default::default()
-                            })
-                        })
-                        .collect()
-                } else {
-                    hatch::pattern_lines(&polys, *pattern, *scale, *angle, 200_000)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|(a, b)| EntityType::Line(dxf::entities::Line::new(to_dxf(a), to_dxf(b))))
-                        .collect()
-                };
-                let name = self.anonymous_block('X', parts, layer);
-                vec![EntityType::Insert(dxf::entities::Insert { name, ..Default::default() })]
+            // A placeholder the crate can write; `write` turns it into a HATCH.
+            Geometry::Hatch { .. } => {
+                self.hatches.push(hatch_dxf::hatch_data(g));
+                let index = (self.hatches.len() - 1) as f64;
+                vec![EntityType::ModelPoint(dxf::entities::ModelPoint {
+                    location: DxfPoint::new(index, 0.0, 0.0),
+                    ..Default::default()
+                })]
             }
         }
     }
 
-    fn entity(&mut self, geometry: &Geometry, layer: &str, color: Color) -> Vec<DxfEntity> {
+    fn entity(
+        &mut self,
+        geometry: &Geometry,
+        layer: &str,
+        color: Color,
+        linetype: &str,
+        lineweight: Lineweight,
+    ) -> Vec<DxfEntity> {
         self.entities(geometry, layer)
             .into_iter()
             .map(|t| {
                 let mut de = DxfEntity::new(t);
                 de.common.layer = layer.to_string();
                 de.common.color = to_dxf_color(color);
+                de.common.line_type_name = linetype_to_dxf(linetype);
+                de.common.lineweight_enum_value = lineweight.to_dxf();
                 de
             })
             .collect()
     }
 }
 
-/// Builds a DXF drawing from a document.
+/// A solid fill as SOLID triangles.
+fn solids(loops: &[Vec<Vertex>]) -> Vec<EntityType> {
+    hatch::triangles(&hatch::polygons(loops))
+        .into_iter()
+        .map(|[a, b, c]| {
+            EntityType::Solid(dxf::entities::Solid {
+                first_corner: to_dxf(a),
+                second_corner: to_dxf(b),
+                third_corner: to_dxf(c),
+                fourth_corner: to_dxf(c),
+                ..Default::default()
+            })
+        })
+        .collect()
+}
+
+/// Builds a DXF drawing from a document. The dxf crate has no HATCH
+/// entity, so hatches are POINT placeholders here; [`write`] turns them into
+/// HATCHes.
 pub fn to_drawing(doc: &Document) -> Drawing {
+    build(doc).0
+}
+
+/// The drawing, and the AcDbHatch data of each hatch placeholder.
+fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
     let mut drawing = Drawing::new();
     // R2000 is the oldest version with lightweight polylines.
     drawing.header.version = AcadVersion::R2000;
+    drawing.header.line_type_scale = doc.ltscale();
+    // Define every linetype in use (Drawing::new() has ByLayer, ByBlock, Continuous).
+    let used = doc
+        .layers()
+        .iter()
+        .map(|l| l.linetype.clone())
+        .chain(doc.entities().map(|e| e.linetype.clone()))
+        .chain(doc.blocks().flat_map(|b| b.entities.iter().map(|e| e.linetype.clone())));
+    let mut defined: Vec<String> = Vec::new();
+    for name in used {
+        let Some(lt) = doc.linetype(&name) else { continue };
+        if lt.pattern.is_empty() || defined.iter().any(|d| d.eq_ignore_ascii_case(&lt.name)) {
+            continue;
+        }
+        defined.push(lt.name.clone());
+        drawing.add_line_type(dxf::tables::LineType {
+            name: lt.name.clone(),
+            description: lt.description.clone(),
+            alignment_code: i32::from(b'A'),
+            element_count: lt.pattern.len() as i32,
+            total_pattern_length: lt.length(),
+            dash_dot_space_lengths: lt.pattern.clone(),
+            ..Default::default()
+        });
+    }
     for l in doc.layers() {
+        let line_type_name = if doc.linetype(&l.linetype).is_some() { l.linetype.clone() } else { "Continuous".into() };
         if l.name == "0" {
-            continue; // Drawing::new() already has layer 0
+            // Drawing::new() already has layer 0.
+            if let Some(zero) = drawing.layers_mut().find(|z| z.name == "0") {
+                zero.line_type_name = line_type_name;
+            }
+            continue;
         }
         drawing.add_layer(DxfLayer {
             name: l.name.clone(),
             color: DxfColor::from_index(l.color),
+            line_type_name,
             is_layer_on: l.on,
             ..Default::default()
         });
@@ -348,12 +488,16 @@ pub fn to_drawing(doc: &Document) -> Drawing {
     let mut ex = Exporter::default();
     let mut blocks = Vec::new();
     for b in doc.blocks() {
-        let entities = b.entities.iter().flat_map(|be| ex.entity(&be.geometry, &be.layer, be.color)).collect();
+        let entities = b
+            .entities
+            .iter()
+            .flat_map(|be| ex.entity(&be.geometry, &be.layer, be.color, &be.linetype, be.lineweight))
+            .collect();
         blocks.push(dxf::Block { name: b.name.clone(), base_point: to_dxf(b.base), entities, ..Default::default() });
     }
     let mut entities: Vec<DxfEntity> = Vec::new();
     for e in doc.entities() {
-        for mut de in ex.entity(&e.geometry, &e.layer, e.color) {
+        for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
             if let (EntityType::Insert(ins), Geometry::Insert { attributes, .. }) = (&mut de.specific, &e.geometry) {
                 for a in attributes {
                     ins.add_attribute(&mut drawing, attribute_to_dxf(a));
@@ -368,7 +512,7 @@ pub fn to_drawing(doc: &Document) -> Drawing {
     for e in entities {
         drawing.add_entity(e);
     }
-    drawing
+    (drawing, ex.hatches)
 }
 
 /// Converts one DXF entity, or `None` for types Oxidraft doesn't support yet.
@@ -437,9 +581,57 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
                 line: from_dxf(&base.definition_point_1),
                 rotation: d.rotation_angle,
                 aligned,
-                text: Some(base.text.clone()).filter(|t| !t.is_empty() && t != "<>"),
+                text: dimension_override(base),
                 scale: 1.0,
             }
+        }
+        EntityType::RadialDimension(d) => Geometry::RadialDimension {
+            center: from_dxf(&d.dimension_base.definition_point_1),
+            point: from_dxf(&d.definition_point_2),
+            text_at: from_dxf(&d.dimension_base.text_mid_point),
+            diameter: false,
+            text: dimension_override(&d.dimension_base),
+            scale: 1.0,
+        },
+        EntityType::DiameterDimension(d) => {
+            let point = from_dxf(&d.definition_point_2);
+            Geometry::RadialDimension {
+                center: point.midpoint(from_dxf(&d.dimension_base.definition_point_1)),
+                point,
+                text_at: from_dxf(&d.dimension_base.text_mid_point),
+                diameter: true,
+                text: dimension_override(&d.dimension_base),
+                scale: 1.0,
+            }
+        }
+        EntityType::AngularThreePointDimension(d) => {
+            let base = &d.dimension_base;
+            let (p2, p3, p4) =
+                (from_dxf(&d.definition_point_2), from_dxf(&d.definition_point_3), from_dxf(&d.definition_point_4));
+            // Two-line angular dimensions give both lines and the arc location;
+            // three-point ones the two ends, the vertex and the arc location.
+            let (vertex, p1, p2, arc) = if matches!(base.dimension_type, DimensionType::Angular) {
+                let arc = from_dxf(&d.definition_point_5);
+                let (vertex, p1, p2) = two_line_angle((p2, p3), (p4, from_dxf(&base.definition_point_1)), arc)?;
+                (vertex, p1, p2, arc)
+            } else {
+                let arc = from_dxf(&base.definition_point_1);
+                let (p1, p2) = angle_around(p4, p2, p3, arc);
+                (p4, p1, p2, arc)
+            };
+            Geometry::AngularDimension { vertex, p1, p2, arc, text: dimension_override(base), scale: 1.0 }
+        }
+        // A 2D SOLID: its corners go 1-2-4-3 around; a triangle repeats the third.
+        EntityType::Solid(s) => {
+            let (a, b, c, d) = (
+                from_dxf(&s.first_corner),
+                from_dxf(&s.second_corner),
+                from_dxf(&s.third_corner),
+                from_dxf(&s.fourth_corner),
+            );
+            let corners = if c.approx_eq(d) { vec![a, b, c] } else { vec![a, b, d, c] };
+            let loops = vec![corners.into_iter().map(Vertex::at).collect()];
+            Geometry::Hatch { loops, pattern: HatchPattern::Solid, scale: 1.0, angle: 0.0 }
         }
         EntityType::Leader(l) if l.vertices.len() >= 2 => {
             Geometry::Leader { points: l.vertices.iter().map(from_dxf).collect(), content: String::new(), scale: 1.0 }
@@ -459,6 +651,11 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
     })
 }
 
+/// A dimension's text override; empty and `<>` mean the measurement.
+fn dimension_override(base: &dxf::entities::DimensionBase) -> Option<String> {
+    Some(base.text.clone()).filter(|t| !t.is_empty() && t != "<>")
+}
+
 /// Attribute definitions other than constant ones only describe the
 /// attributes of future references; they aren't unsupported content.
 fn is_template(e: &EntityType) -> bool {
@@ -468,16 +665,49 @@ fn is_template(e: &EntityType) -> bool {
 /// Builds a document from a DXF drawing. Attributes take their reference's
 /// layer; [`read`] and [`load_file`] also recover their own layer and color.
 pub fn from_drawing(drawing: &Drawing) -> Imported {
-    from_drawing_styled(drawing, None)
+    from_drawing_styled(drawing, Raw::default())
 }
 
-/// Like [`from_drawing`], with each ATTRIB's (layer, color) in file order.
-fn from_drawing_styled(drawing: &Drawing, attribute_styles: Option<Vec<(String, Color)>>) -> Imported {
+/// What the dxf crate doesn't read, scanned from the file's text.
+#[derive(Default)]
+struct Raw {
+    /// Each ATTRIB's (layer, color), in file order.
+    attributes: Option<Vec<(String, Color)>>,
+    /// Each layer's flags (group 70).
+    layer_flags: Vec<(String, i16)>,
+    hatches: Vec<hatch_dxf::RawHatch>,
+}
+
+/// Like [`from_drawing`], with what the crate doesn't read.
+fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
     let mut doc = Document::new();
+    for lt in drawing.line_types() {
+        let special = ["BYLAYER", "BYBLOCK", "CONTINUOUS"].iter().any(|n| lt.name.eq_ignore_ascii_case(n));
+        if !special && !lt.dash_dot_space_lengths.is_empty() {
+            doc.define_linetype(Linetype {
+                name: lt.name.clone(),
+                description: lt.description.clone(),
+                pattern: lt.dash_dot_space_lengths.clone(),
+            });
+        }
+    }
+    if drawing.header.line_type_scale > 0.0 {
+        doc.set_ltscale(drawing.header.line_type_scale);
+    }
     for l in drawing.layers() {
         let color = l.color.index().filter(|&i| i > 0).unwrap_or(7);
         let mut layer = Layer::new(l.name.clone(), color);
         layer.on = l.is_layer_on;
+        if !l.line_type_name.is_empty() {
+            layer.linetype = l.line_type_name.clone();
+        }
+        let weight = l.line_weight.raw_value();
+        layer.lineweight = if weight >= 0 { Lineweight::Hundredths(weight as u16) } else { Lineweight::Default };
+        // Frozen (1) and locked (4) are flags the dxf crate doesn't read.
+        if let Some((_, flags)) = raw.layer_flags.iter().find(|(name, _)| name.eq_ignore_ascii_case(&l.name)) {
+            layer.frozen = flags & 1 != 0;
+            layer.locked = flags & 4 != 0;
+        }
         doc.add_layer(layer.clone());
         doc.update_layer(layer);
     }
@@ -501,11 +731,22 @@ fn from_drawing_styled(drawing: &Drawing, attribute_styles: Option<Vec<(String, 
                     entities.push(BlockEntity {
                         layer: e.common.layer.clone(),
                         color: from_dxf_color(&e.common.color),
+                        linetype: linetype_from_dxf(&e.common.line_type_name),
+                        lineweight: lineweight_from_dxf(e.common.lineweight_enum_value),
                         geometry,
                     });
                 }
                 None => skipped += 1,
             }
+        }
+        for h in raw.hatches.iter().filter(|h| h.block.as_deref() == Some(b.name.as_str())) {
+            entities.push(BlockEntity {
+                layer: h.layer.clone(),
+                color: h.color,
+                linetype: h.linetype.clone(),
+                lineweight: h.lineweight,
+                geometry: h.geometry.clone(),
+            });
         }
         doc.define_block(Block { name: b.name.clone(), base: from_dxf(&b.base_point), entities });
     }
@@ -516,7 +757,7 @@ fn from_drawing_styled(drawing: &Drawing, attribute_styles: Option<Vec<(String, 
         _ => 0,
     };
     let total: usize = drawing.entities().map(attribute_count).sum();
-    let styles = attribute_styles.filter(|s| s.len() == total);
+    let styles = raw.attributes.filter(|s| s.len() == total);
     let mut next = 0;
     for e in drawing.entities() {
         let n = attribute_count(e);
@@ -529,10 +770,21 @@ fn from_drawing_styled(drawing: &Drawing, attribute_styles: Option<Vec<(String, 
         match geometry_from_dxf(&e.specific) {
             Some(mut g) => {
                 style_attributes(&mut g, style, &e.common.layer);
-                doc.add_on_layer(g, &e.common.layer, from_dxf_color(&e.common.color));
+                let (color, linetype) = (from_dxf_color(&e.common.color), linetype_from_dxf(&e.common.line_type_name));
+                doc.add_styled(
+                    g,
+                    &e.common.layer,
+                    color,
+                    &linetype,
+                    lineweight_from_dxf(e.common.lineweight_enum_value),
+                );
             }
             None => skipped += 1,
         }
+    }
+    // Hatches come last; they're drawn behind everything anyway.
+    for h in raw.hatches.into_iter().filter(|h| h.block.is_none() && !h.paper_space) {
+        doc.add_styled(h.geometry, &h.layer, h.color, &h.linetype, h.lineweight);
     }
     // A freshly opened file starts with an empty undo history.
     doc.forget_history();
@@ -607,7 +859,8 @@ fn attribute_styles(dxf: &[u8]) -> Option<Vec<(String, Color)>> {
 
 pub fn write<W: Write>(doc: &Document, writer: &mut W) -> Result<(), Error> {
     let mut buf = Vec::new();
-    to_drawing(doc).save(&mut buf)?;
+    let (drawing, hatches) = build(doc);
+    drawing.save(&mut buf)?;
     // Attributes are written in document order, one INSERT after another.
     let styles: Vec<(String, Color)> = doc
         .entities()
@@ -616,7 +869,82 @@ pub fn write<W: Write>(doc: &Document, writer: &mut W) -> Result<(), Error> {
             _ => Vec::new(),
         })
         .collect();
-    writer.write_all(&fix_attributes(&buf, &styles)).map_err(Error::IoError)
+    let layers: Vec<(String, i16, i16)> = doc
+        .layers()
+        .iter()
+        .map(|l| (l.name.clone(), i16::from(l.frozen) | (i16::from(l.locked) << 2), l.lineweight.to_dxf()))
+        .collect();
+    let fixed = fix_tables(&fix_attributes(&buf, &styles), &layers);
+    writer.write_all(&hatch_dxf::insert_hatches(&fixed, &hatches)).map_err(Error::IoError)
+}
+
+/// The line ending of a code or value line.
+fn eol(line: &str) -> &'static str {
+    if line.ends_with("\r\n") { "\r\n" } else { "\n" }
+}
+
+/// Fills in table data the dxf crate can't write: each layer's flags
+/// (frozen 1, locked 4) and lineweight, from `(name, flags, lineweight)`;
+/// and a type (74, simple) after each linetype dash length, as AutoCAD writes them.
+fn fix_tables(dxf: &[u8], layers: &[(String, i16, i16)]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(dxf);
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut out = String::with_capacity(text.len() + 1024);
+    let mut record = String::new();
+    let mut layer: Option<&(String, i16, i16)> = None;
+    for pair in lines.chunks(2) {
+        let (code, value) = (pair[0].trim(), pair.get(1).map_or("", |v| v.trim()));
+        let end = eol(pair[0]);
+        if code == "0" {
+            record = value.to_string();
+            layer = None;
+        }
+        match (record.as_str(), code, layer) {
+            ("LAYER", "2", _) => layer = layers.iter().find(|l| l.0.eq_ignore_ascii_case(value)),
+            ("LAYER", "70", Some(l)) => {
+                out.push_str(&format!("{}{}{end}", pair[0], l.1));
+                continue;
+            }
+            ("LAYER", "370", Some(l)) => {
+                out.push_str(&format!("{}{}{end}", pair[0], l.2));
+                continue;
+            }
+            ("LTYPE", "49", _) => {
+                pair.iter().for_each(|l| out.push_str(l));
+                out.push_str(&format!(" 74{end}0{end}"));
+                continue;
+            }
+            _ => {}
+        }
+        pair.iter().for_each(|l| out.push_str(l));
+    }
+    out.into_bytes()
+}
+
+/// Each layer's flags (group 70) from the LAYER table.
+fn layer_flags(dxf: &[u8]) -> Vec<(String, i16)> {
+    if dxf.starts_with(b"AutoCAD Binary DXF") {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(dxf);
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    let (mut in_layer, mut name, mut flags) = (false, None, 0);
+    for pair in lines.chunks(2) {
+        let (code, value) = (pair[0].trim(), pair.get(1).map_or("", |v| v.trim()));
+        match code {
+            "0" => {
+                if let Some(n) = name.take() {
+                    out.push((n, flags));
+                }
+                (in_layer, flags) = (value == "LAYER", 0);
+            }
+            "2" if in_layer => name = Some(value.to_string()),
+            "70" if in_layer => flags = value.parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Repairs the dxf crate's ATTRIB output: it writes every attribute on
@@ -665,7 +993,12 @@ pub fn read<R: BufRead>(reader: &mut R) -> Result<Imported, Error> {
     let mut bytes = Vec::new();
     reader.read_to_end(&mut bytes).map_err(Error::IoError)?;
     let drawing = Drawing::load(&mut bytes.as_slice())?;
-    Ok(from_drawing_styled(&drawing, attribute_styles(&bytes)))
+    let raw = Raw {
+        attributes: attribute_styles(&bytes),
+        layer_flags: layer_flags(&bytes),
+        hatches: hatch_dxf::read_hatches(&bytes),
+    };
+    Ok(from_drawing_styled(&drawing, raw))
 }
 
 pub fn save_file(doc: &Document, path: impl AsRef<Path>) -> Result<(), Error> {
@@ -684,6 +1017,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn roundtrip_linetypes_lineweights_and_layer_states() {
+        let mut doc = Document::new();
+        let mut axes = Layer::new("Axes", 1);
+        (axes.linetype, axes.lineweight, axes.frozen) = ("CENTER".into(), Lineweight::Hundredths(50), true);
+        doc.add_layer(axes);
+        let mut fixed = Layer::new("Fixed", 2);
+        fixed.locked = true;
+        doc.add_layer(fixed);
+        doc.define_linetype(Linetype::new("FENCE", "Fence ---x---x", &[5.0, -1.0, 0.0, -1.0]));
+        doc.set_ltscale(0.5);
+        let line = |y: f64| Geometry::Line { start: Point::new(0.0, y), end: Point::new(10.0, y) };
+        doc.add_styled(line(0.0), "Fixed", Color::ByLayer, "FENCE", Lineweight::Hundredths(35));
+        doc.add_on_layer(line(1.0), "Axes", Color::ByLayer);
+
+        let mut buf = Vec::new();
+        write(&doc, &mut buf).unwrap();
+        let text = String::from_utf8_lossy(&buf).replace("\r\n", "\n");
+        assert!(text.contains(" 49\n5.0\n 74\n0\n"), "each dash length has its type");
+        let back = read(&mut buf.as_slice()).unwrap().document;
+
+        let axes = back.layer("Axes").unwrap();
+        assert_eq!((axes.linetype.as_str(), axes.lineweight), ("CENTER", Lineweight::Hundredths(50)));
+        assert!(axes.frozen && !axes.locked);
+        assert!(back.layer("Fixed").unwrap().locked);
+        let styles: Vec<(String, Lineweight)> = back.entities().map(|e| (e.linetype.clone(), e.lineweight)).collect();
+        assert_eq!(
+            styles,
+            vec![("FENCE".into(), Lineweight::Hundredths(35)), (linetype::BYLAYER.into(), Lineweight::ByLayer)]
+        );
+        assert_eq!(back.ltscale(), 0.5);
+        assert_eq!(back.linetype("fence").unwrap().pattern, vec![5.0, -1.0, 0.0, -1.0]);
+    }
+
+    #[test]
     fn roundtrip_preserves_entities_layers_and_colors() {
         let mut doc = Document::new();
         doc.add_layer(Layer::new("Walls", 1));
@@ -700,11 +1067,11 @@ mod tests {
         doc.define_block(Block {
             name: "CHAIR".into(),
             base: Point::new(1.0, 1.0),
-            entities: vec![BlockEntity {
-                layer: "0".into(),
-                color: Color::ByLayer,
-                geometry: Geometry::Circle { center: Point::new(1.0, 1.0), radius: 0.5 },
-            }],
+            entities: vec![BlockEntity::new(
+                "0",
+                Color::ByLayer,
+                Geometry::Circle { center: Point::new(1.0, 1.0), radius: 0.5 },
+            )],
         });
         doc.add(Geometry::Insert {
             block: "CHAIR".into(),
@@ -788,7 +1155,31 @@ mod tests {
             text: None,
             scale: 1.0,
         };
-        for g in [&mtext, &single, &dim, &aligned] {
+        let radius = Geometry::RadialDimension {
+            center: Point::new(50.0, 50.0),
+            point: Point::new(55.0, 50.0),
+            text_at: Point::new(60.0, 50.0),
+            diameter: false,
+            text: None,
+            scale: 1.0,
+        };
+        let diameter = Geometry::RadialDimension {
+            center: Point::new(50.0, 50.0),
+            point: Point::new(50.0, 55.0),
+            text_at: Point::new(50.0, 52.0),
+            diameter: true,
+            text: Some("<> HOLE".into()),
+            scale: 1.0,
+        };
+        let angular = Geometry::AngularDimension {
+            vertex: Point::new(20.0, 0.0),
+            p1: Point::new(30.0, 0.0),
+            p2: Point::new(20.0, 10.0),
+            arc: Point::new(25.0, 4.0),
+            text: None,
+            scale: 1.0,
+        };
+        for g in [&mtext, &single, &dim, &aligned, &radius, &diameter, &angular] {
             doc.add(g.clone());
         }
         doc.add(Geometry::Leader {
@@ -800,7 +1191,8 @@ mod tests {
             .iter()
             .map(|&(x, y)| Vertex::at(Point::new(x, y)))
             .collect();
-        doc.add(Geometry::Hatch { loops: vec![square], pattern: HatchPattern::Ansi31, scale: 1.0, angle: 0.0 });
+        let hatched = Geometry::Hatch { loops: vec![square], pattern: HatchPattern::Ansi31, scale: 2.0, angle: 15.0 };
+        doc.add(hatched.clone());
 
         let mut buf = Vec::new();
         write(&doc, &mut buf).unwrap();
@@ -817,6 +1209,13 @@ mod tests {
                 "missing {want:?}"
             );
         }
+        for want in [&radius, &diameter] {
+            assert!(
+                got.iter().any(|g| matches!(g, Geometry::RadialDimension { .. }) && drawn(g) == drawn(want)),
+                "missing {want:?}"
+            );
+        }
+        assert!(got.contains(&angular));
         let Some(Geometry::Text { rotation, width, content, .. }) =
             got.iter().find(|g| matches!(g, Geometry::Text { content, .. } if content.starts_with("Line one")))
         else {
@@ -826,11 +1225,9 @@ mod tests {
         // The leader keeps its arrow and lines; its text comes back as MTEXT beside it.
         assert!(got.iter().any(|g| matches!(g, Geometry::Leader { points, .. } if points.len() == 2)));
         assert!(got.iter().any(|g| matches!(g, Geometry::Text { content, .. } if content == "NOTE")));
-        // Hatches come back as a reference to an anonymous block of pattern lines.
-        let Some(Geometry::Insert { block, .. }) = got.iter().find(|g| matches!(g, Geometry::Insert { .. })) else {
-            panic!("hatch lost")
-        };
-        assert!(block.starts_with("*X") && !back.block(block).unwrap().entities.is_empty());
+        // Hatches come back as the same hatches, and no POINT placeholder is left.
+        assert!(got.contains(&hatched), "hatch lost");
+        assert!(!String::from_utf8_lossy(&buf).contains("\nPOINT"));
     }
 
     /// The structure of survey exports like the one reported: a block made
@@ -892,7 +1289,7 @@ mod tests {
         // The ByBlock symbol and the attribute take the reference's layer color.
         let drawn = doc.expanded_styled(reference);
         assert_eq!(drawn.len(), 2, "symbol plus the visible attribute");
-        assert!(matches!(&drawn[1].0, Geometry::Text { content, .. } if content == "IV"));
+        assert!(matches!(&drawn[1].geometry, Geometry::Text { content, .. } if content == "IV"));
 
         let Some(Geometry::Text { position, attach, content, .. }) =
             doc.entities().map(|e| &e.geometry).find(|g| matches!(g, Geometry::Text { .. }))

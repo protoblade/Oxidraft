@@ -1,5 +1,7 @@
 //! The drawing area (model space): rendering and mouse handling.
 
+use std::collections::HashMap;
+
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, Event, FontId, MouseWheelSource, MouseWheelUnit, Painter, PointerButton, Pos2,
     Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2,
@@ -7,9 +9,9 @@ use eframe::egui::{
 use oxidraft_commands::Tracked;
 use oxidraft_geom::{Aabb, Point, curve::Seg};
 use oxidraft_model::{
-    Geometry, HatchPattern,
+    Geometry, HatchPattern, Lineweight,
     annotation::text_box,
-    hatch,
+    hatch, linetype,
     snap::{self, Snap, SnapKind},
 };
 
@@ -155,10 +157,11 @@ impl OxidraftApp {
         if self.picks_objects() {
             return CursorState { screen, raw, point: raw, snap: None, tracked: None };
         }
+        let from = self.engine.base_point();
         let snap = match self.snap_override {
-            Some(Some(kind)) => snap::find_override_snap(&self.doc, raw, tolerance, kind),
+            Some(Some(kind)) => snap::find_override_snap(&self.doc, raw, tolerance, kind, from),
             Some(None) => None,
-            None if self.osnap => snap::find_snap(&self.doc, raw, tolerance),
+            None if self.osnap => snap::find_snap(&self.doc, raw, tolerance, &self.osnap_modes, from),
             None => None,
         };
         if let Some(s) = snap {
@@ -289,26 +292,77 @@ impl OxidraftApp {
         };
         let view =
             Aabb::from_points(self.view.to_world(rect, rect.left_bottom()), self.view.to_world(rect, rect.right_top()));
-        for e in self.doc.entities() {
+        // Dash patterns in screen pixels by linetype name, looked up once a frame.
+        let mut patterns: HashMap<String, Option<Vec<f64>>> = HashMap::new();
+        let px_per_unit = self.doc.ltscale() * self.view.scale;
+        // Hatches go behind everything else (AutoCAD's HPDRAWORDER "behind boundary").
+        let (hatches, others): (Vec<_>, Vec<_>) =
+            self.doc.entities().partition(|e| matches!(e.geometry, Geometry::Hatch { .. }));
+        for e in hatches.into_iter().chain(others) {
             if !self.doc.is_shown(&e.layer) || !on_screen(&self.doc.entity_bounds(e), &view) {
                 continue;
             }
-            for (g, aci, layer) in self.doc.expanded_styled(e) {
-                let mut color = theme::aci(aci);
+            for s in self.doc.expanded_styled(e) {
+                let mut color = theme::aci(s.color);
                 // Locked layers draw faded (AutoCAD's LAYLOCKFADECTL).
-                if self.doc.layer(&layer).is_some_and(|l| l.locked) {
+                if self.doc.layer(&s.layer).is_some_and(|l| l.locked) {
                     color = color.gamma_multiply(0.45);
                 }
+                let pattern = patterns.entry(s.linetype.clone()).or_insert_with(|| {
+                    let lt = self.doc.linetype(&s.linetype).filter(|l| !l.is_continuous())?;
+                    // Too fine to see at this zoom: draw it solid, as AutoCAD does.
+                    (lt.length() * px_per_unit >= 3.0).then(|| lt.pattern.iter().map(|d| d * px_per_unit).collect())
+                });
+                let width = if self.show_lineweights { lineweight_px(s.lineweight) } else { 1.0 };
+                let g = &s.geometry;
                 if selected.contains(&e.id) {
-                    self.draw_geometry(painter, rect, &g, Stroke::new(5.0, theme::SELECTION_GLOW));
-                    self.draw_geometry(painter, rect, &g, Stroke::new(1.0, color));
+                    self.draw_geometry(painter, rect, g, Stroke::new(width + 4.0, theme::SELECTION_GLOW));
+                    self.draw_dashed(painter, rect, g, Stroke::new(width, color), pattern.as_deref());
                 } else if hovered.contains(&e.id) {
-                    self.draw_geometry(painter, rect, &g, Stroke::new(2.5, color));
+                    self.draw_dashed(painter, rect, g, Stroke::new(width.max(2.5), color), pattern.as_deref());
                 } else {
-                    self.draw_geometry(painter, rect, &g, Stroke::new(1.0, color));
+                    self.draw_dashed(painter, rect, g, Stroke::new(width, color), pattern.as_deref());
                 }
             }
         }
+    }
+
+    /// Draws a curve with a dash pattern given in screen pixels; text,
+    /// fills and continuous curves draw as usual.
+    fn draw_dashed(&self, painter: &Painter, rect: Rect, g: &Geometry, stroke: Stroke, pattern: Option<&[f64]>) {
+        let Some(pattern) = pattern.filter(|_| !g.segments().is_empty()) else {
+            return self.draw_geometry(painter, rect, g, stroke);
+        };
+        let path: Vec<Point> =
+            self.screen_path(rect, g).into_iter().map(|p| Point::new(f64::from(p.x), f64::from(p.y))).collect();
+        let to_pos = |p: &Point| pos2(p.x as f32, p.y as f32);
+        for run in linetype::dashes(&path, pattern, 1.0) {
+            if let [dot] = run[..] {
+                painter.circle_filled(to_pos(&dot), (stroke.width / 2.0).max(0.8), stroke.color);
+            } else {
+                painter.add(Shape::line(run.iter().map(to_pos).collect(), stroke));
+            }
+        }
+    }
+
+    /// A curve's lines and arcs as one screen polyline, with arcs split
+    /// finely enough to look smooth at the current zoom.
+    fn screen_path(&self, rect: Rect, g: &Geometry) -> Vec<Pos2> {
+        let mut points: Vec<Pos2> = Vec::new();
+        for seg in g.segments() {
+            let steps = match seg {
+                Seg::Line(_) => 1,
+                Seg::Arc(a) => {
+                    let screen_len = a.length() * self.view.scale;
+                    (screen_len / 4.0).clamp(4.0, 720.0) as usize
+                }
+            };
+            let first = usize::from(!points.is_empty());
+            for i in first..=steps {
+                points.push(self.view.to_screen(rect, seg.point_at(i as f64 / steps as f64)));
+            }
+        }
+        points
     }
 
     fn draw_geometry(&self, painter: &Painter, rect: Rect, g: &Geometry, stroke: Stroke) {
@@ -328,22 +382,7 @@ impl OxidraftApp {
             Geometry::Hatch { .. } => return self.draw_hatch(painter, rect, g, stroke),
             _ => {}
         }
-        // Lines, arcs and polylines become one screen polyline, with arcs
-        // split finely enough to look smooth at the current zoom.
-        let mut points: Vec<Pos2> = Vec::new();
-        for seg in g.segments() {
-            let steps = match seg {
-                Seg::Line(_) => 1,
-                Seg::Arc(a) => {
-                    let screen_len = a.length() * self.view.scale;
-                    (screen_len / 4.0).clamp(4.0, 720.0) as usize
-                }
-            };
-            let first = usize::from(!points.is_empty());
-            for i in first..=steps {
-                points.push(self.view.to_screen(rect, seg.point_at(i as f64 / steps as f64)));
-            }
-        }
+        let points = self.screen_path(rect, g);
         if points.len() >= 2 {
             painter.add(Shape::line(points, stroke));
         }
@@ -544,6 +583,11 @@ fn arrow(painter: &Painter, from: Pos2, to: Pos2, color: Color32) {
     ));
 }
 
+/// Screen width of a lineweight: its size at 96 dpi, at least one pixel.
+fn lineweight_px(lw: Lineweight) -> f32 {
+    lw.mm().map_or(1.0, |mm| (mm * 96.0 / 25.4) as f32).max(1.0)
+}
+
 /// AutoSnap markers in AutoCAD's shapes.
 fn draw_snap_marker(painter: &Painter, at: Pos2, kind: SnapKind) {
     let stroke = Stroke::new(2.0, theme::AUTOSNAP);
@@ -572,6 +616,23 @@ fn draw_snap_marker(painter: &Painter, at: Pos2, kind: SnapKind) {
             let r = Rect::from_center_size(at, vec2(s, s) * 1.4);
             painter.rect_stroke(r.translate(vec2(-2.0, 2.0)), 0.0, stroke, StrokeKind::Middle);
             painter.rect_stroke(r.translate(vec2(2.0, -2.0)), 0.0, stroke, StrokeKind::Middle);
+        }
+        // A right angle with its corner marked.
+        SnapKind::Perpendicular => {
+            let pts = vec![at + vec2(-s, -s), at + vec2(-s, s), at + vec2(s, s)];
+            painter.add(Shape::line(pts, stroke));
+            let corner = vec![at + vec2(-s, 0.0), at + vec2(0.0, 0.0), at + vec2(0.0, s)];
+            painter.add(Shape::line(corner, stroke));
+        }
+        // A circle with a line touching its top.
+        SnapKind::Tangent => {
+            painter.circle_stroke(at, s * 0.8, stroke);
+            painter.line_segment([at + vec2(-s, -s * 0.8), at + vec2(s, -s * 0.8)], stroke);
+        }
+        // An hourglass.
+        SnapKind::Nearest => {
+            let pts = vec![at + vec2(-s, -s), at + vec2(s, -s), at + vec2(-s, s), at + vec2(s, s)];
+            painter.add(Shape::closed_line(pts, stroke));
         }
     }
 }

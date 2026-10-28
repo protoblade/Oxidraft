@@ -4,14 +4,14 @@
 use eframe::egui::{self, Frame, Id, Margin, RichText, Ui};
 use oxidraft_geom::{Point, curve::ArcSeg};
 use oxidraft_model::{
-    Color, Entity, EntityId, Geometry, HatchPattern,
-    annotation::{format_measurement, measurement},
-    hatch,
+    Color, Entity, EntityId, Geometry, HatchPattern, Lineweight,
+    annotation::{angular_measurement, format_angle, format_measurement, measurement, radial_value},
+    hatch, linetype,
 };
 
 use crate::{
     app::OxidraftApp,
-    layers::{NAMED_COLORS, color_name, swatch},
+    layers::{NAMED_COLORS, color_name, linetype_menu, lineweight_menu, swatch},
     theme,
 };
 
@@ -121,6 +121,41 @@ impl OxidraftApp {
                 }
             }
             ui.end_row();
+
+            // Linetype and lineweight; new objects are always ByLayer.
+            ui.label("Linetype");
+            let names: Vec<String> = [linetype::BYLAYER, linetype::BYBLOCK]
+                .into_iter()
+                .map(String::from)
+                .chain(self.doc.linetypes().into_iter().map(|l| l.name))
+                .collect();
+            let common_linetype = if selected.is_empty() {
+                Some(linetype::BYLAYER.into())
+            } else {
+                common(selected.iter().map(|e| e.linetype.clone()))
+            };
+            let picked = ui.add_enabled_ui(!selected.is_empty(), |ui| {
+                linetype_menu(ui, common_linetype.as_deref(), &names, "props_linetype")
+            });
+            if let Some(linetype) = picked.inner {
+                self.edit(selected.iter().map(|e| e.id), |e| e.linetype = linetype.clone());
+            }
+            ui.end_row();
+
+            ui.label("Lineweight");
+            let common_weight = if selected.is_empty() {
+                Some(Lineweight::ByLayer)
+            } else {
+                common(selected.iter().map(|e| e.lineweight))
+            };
+            let special = [Lineweight::ByLayer, Lineweight::ByBlock, Lineweight::Default];
+            let picked = ui.add_enabled_ui(!selected.is_empty(), |ui| {
+                lineweight_menu(ui, common_weight, &special, "props_lineweight")
+            });
+            if let Some(lineweight) = picked.inner {
+                self.edit(selected.iter().map(|e| e.id), |e| e.lineweight = lineweight);
+            }
+            ui.end_row();
         });
     }
 
@@ -203,6 +238,16 @@ impl OxidraftApp {
                 }
                 rows
             }
+            Geometry::RadialDimension { center, point, diameter, text, scale, .. } => vec![
+                ("Measurement", Value::Text(radial_value(*center, *point, *diameter))),
+                ("Text override", Value::Edit(text.clone().unwrap_or_default())),
+                ("Dim scale", Value::Number(*scale)),
+            ],
+            Geometry::AngularDimension { vertex, p1, p2, text, scale, .. } => vec![
+                ("Measurement", Value::Text(format_angle(angular_measurement(*vertex, *p1, *p2)))),
+                ("Text override", Value::Edit(text.clone().unwrap_or_default())),
+                ("Dim scale", Value::Number(*scale)),
+            ],
             Geometry::Leader { content, scale, .. } => {
                 vec![("Contents", Value::Edit(content.clone())), ("Scale", Value::Number(*scale))]
             }
@@ -314,7 +359,12 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
         (Geometry::Text { width, .. }, "Width") if v >= 0.0 => *width = v,
         (Geometry::Text { position, .. }, "Position X") => position.x = v,
         (Geometry::Text { position, .. }, "Position Y") => position.y = v,
-        (Geometry::Dimension { scale, .. }, "Dim scale") if v > 0.0 => *scale = v,
+        (
+            Geometry::Dimension { scale, .. }
+            | Geometry::RadialDimension { scale, .. }
+            | Geometry::AngularDimension { scale, .. },
+            "Dim scale",
+        ) if v > 0.0 => *scale = v,
         (Geometry::Dimension { rotation, .. }, "Rotation") => *rotation = v.rem_euclid(360.0),
         (Geometry::Leader { scale, .. } | Geometry::Hatch { scale, .. }, "Scale") if v > 0.0 => *scale = v,
         (Geometry::Hatch { angle, .. }, "Angle") => *angle = v.rem_euclid(360.0),
@@ -333,7 +383,12 @@ fn with_text_property(g: &Geometry, label: &str, s: &str) -> Option<Geometry> {
     }
     match (&mut g, label) {
         (Geometry::Text { content, .. } | Geometry::Leader { content, .. }, "Contents") => *content = s.to_string(),
-        (Geometry::Dimension { text, .. }, "Text override") => {
+        (
+            Geometry::Dimension { text, .. }
+            | Geometry::RadialDimension { text, .. }
+            | Geometry::AngularDimension { text, .. },
+            "Text override",
+        ) => {
             *text = Some(s.to_string()).filter(|t| !t.is_empty());
         }
         (Geometry::Hatch { pattern, .. }, "Pattern") => *pattern = HatchPattern::from_name(s)?,

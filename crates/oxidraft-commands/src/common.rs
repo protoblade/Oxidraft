@@ -15,7 +15,7 @@ pub(crate) fn apply(selected: &[Entity], copy: bool, ctx: &mut Ctx, f: impl Fn(&
     for e in selected {
         let g = f(&e.geometry);
         if copy {
-            ctx.doc.add_on_layer(g, &e.layer, e.color);
+            ctx.doc.add_like(g, e);
         } else {
             ctx.doc.modify(e.id, g);
         }

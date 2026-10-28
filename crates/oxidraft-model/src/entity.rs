@@ -6,6 +6,7 @@ use oxidraft_geom::{
 use crate::{
     annotation::{self, Attach},
     hatch::{self, HatchPattern},
+    linetype::Lineweight,
 };
 
 /// Stable identifier of an entity within one document.
@@ -94,6 +95,27 @@ pub enum Geometry {
         line: Point,
         rotation: f64,
         aligned: bool,
+        text: Option<String>,
+        scale: f64,
+    },
+    /// A radius (DIMRADIUS) or diameter (DIMDIAMETER) dimension of the
+    /// circle around `center` through `point`, with its text at `text_at`.
+    RadialDimension {
+        center: Point,
+        point: Point,
+        text_at: Point,
+        diameter: bool,
+        text: Option<String>,
+        scale: f64,
+    },
+    /// An angular dimension (DIMANGULAR): the angle at `vertex`,
+    /// counterclockwise from the ray through `p1` to the ray through `p2`,
+    /// drawn as an arc through `arc`.
+    AngularDimension {
+        vertex: Point,
+        p1: Point,
+        p2: Point,
+        arc: Point,
         text: Option<String>,
         scale: f64,
     },
@@ -219,6 +241,9 @@ impl Geometry {
             Geometry::Text { .. } => "MText",
             Geometry::Dimension { aligned: true, .. } => "Aligned Dimension",
             Geometry::Dimension { .. } => "Rotated Dimension",
+            Geometry::RadialDimension { diameter: true, .. } => "Diametric Dimension",
+            Geometry::RadialDimension { .. } => "Radial Dimension",
+            Geometry::AngularDimension { .. } => "Angular Dimension",
             Geometry::Leader { .. } => "MultiLeader",
             Geometry::Hatch { .. } => "Hatch",
         }
@@ -230,6 +255,12 @@ impl Geometry {
         match self {
             Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale } => {
                 Some(annotation::dimension_primitives(*p1, *p2, *line, *rotation, *aligned, text.as_deref(), *scale))
+            }
+            Geometry::RadialDimension { center, point, text_at, diameter, text, scale } => {
+                Some(annotation::radial_primitives(*center, *point, *text_at, *diameter, text.as_deref(), *scale))
+            }
+            Geometry::AngularDimension { vertex, p1, p2, arc, text, scale } => {
+                Some(annotation::angular_primitives(*vertex, *p1, *p2, *arc, text.as_deref(), *scale))
             }
             Geometry::Leader { points, content, scale } => Some(annotation::leader_primitives(points, content, *scale)),
             _ => None,
@@ -285,6 +316,8 @@ impl Geometry {
             Geometry::Insert { .. }
             | Geometry::Text { .. }
             | Geometry::Dimension { .. }
+            | Geometry::RadialDimension { .. }
+            | Geometry::AngularDimension { .. }
             | Geometry::Leader { .. }
             | Geometry::Hatch { .. } => Vec::new(),
         }
@@ -311,6 +344,10 @@ impl Geometry {
             }
             (None, Geometry::Dimension { p1, p2, line, .. }) => {
                 Aabb::from_points(*p1, *p2).union(Aabb::from_points(*line, *line))
+            }
+            (None, Geometry::RadialDimension { point, text_at, .. }) => Aabb::from_points(*point, *text_at),
+            (None, Geometry::AngularDimension { p1, p2, arc, .. }) => {
+                Aabb::from_points(*p1, *p2).union(Aabb::from_points(*arc, *arc))
             }
             _ => Aabb::from_points(Point::ORIGIN, Point::ORIGIN),
         }
@@ -494,6 +531,26 @@ impl Geometry {
                 text: text.clone(),
                 scale: scale * length_factor,
             },
+            Geometry::RadialDimension { center, point, text_at, diameter, text, scale } => Geometry::RadialDimension {
+                center: f(*center),
+                point: f(*point),
+                text_at: f(*text_at),
+                diameter: *diameter,
+                text: text.clone(),
+                scale: scale * length_factor,
+            },
+            // A reflection turns counterclockwise into clockwise: swap the rays.
+            Geometry::AngularDimension { vertex, p1, p2, arc, text, scale } => {
+                let (p1, p2) = if flips { (p2, p1) } else { (p1, p2) };
+                Geometry::AngularDimension {
+                    vertex: f(*vertex),
+                    p1: f(*p1),
+                    p2: f(*p2),
+                    arc: f(*arc),
+                    text: text.clone(),
+                    scale: scale * length_factor,
+                }
+            }
             Geometry::Leader { points, content, scale } => Geometry::Leader {
                 points: points.iter().map(|p| f(*p)).collect(),
                 content: content.clone(),
@@ -567,6 +624,22 @@ impl Geometry {
                 text: text.clone(),
                 scale: *scale,
             },
+            Geometry::RadialDimension { center, point, text_at, diameter, text, scale } => Geometry::RadialDimension {
+                center: shift(*center),
+                point: shift(*point),
+                text_at: shift(*text_at),
+                diameter: *diameter,
+                text: text.clone(),
+                scale: *scale,
+            },
+            Geometry::AngularDimension { vertex, p1, p2, arc, text, scale } => Geometry::AngularDimension {
+                vertex: shift(*vertex),
+                p1: shift(*p1),
+                p2: shift(*p2),
+                arc: shift(*arc),
+                text: text.clone(),
+                scale: *scale,
+            },
             Geometry::Leader { points, content, scale } => Geometry::Leader {
                 points: points.iter().map(|p| shift(*p)).collect(),
                 content: content.clone(),
@@ -602,6 +675,8 @@ impl Geometry {
             Geometry::Insert { placement, .. } => vec![placement.position],
             Geometry::Text { position, .. } => vec![*position],
             Geometry::Dimension { p1, p2, line, .. } => vec![*p1, *p2, *line],
+            Geometry::RadialDimension { center, point, text_at, .. } => vec![*center, *point, *text_at],
+            Geometry::AngularDimension { vertex, p1, p2, arc, .. } => vec![*vertex, *p1, *p2, *arc],
             Geometry::Leader { points, .. } => points.clone(),
             Geometry::Hatch { .. } => vec![self.bounds().center()],
         }
@@ -643,6 +718,30 @@ impl Geometry {
                     scale: *scale,
                 }
             }
+            (Geometry::RadialDimension { center, point, text_at, diameter, text, scale }, i) => {
+                let mut pts = [*center, *point, *text_at];
+                pts[i.min(2)] = to;
+                Geometry::RadialDimension {
+                    center: pts[0],
+                    point: pts[1],
+                    text_at: pts[2],
+                    diameter: *diameter,
+                    text: text.clone(),
+                    scale: *scale,
+                }
+            }
+            (Geometry::AngularDimension { vertex, p1, p2, arc, text, scale }, i) => {
+                let mut pts = [*vertex, *p1, *p2, *arc];
+                pts[i.min(3)] = to;
+                Geometry::AngularDimension {
+                    vertex: pts[0],
+                    p1: pts[1],
+                    p2: pts[2],
+                    arc: pts[3],
+                    text: text.clone(),
+                    scale: *scale,
+                }
+            }
             (Geometry::Leader { points, content, scale }, i) => {
                 let mut points = points.clone();
                 if let Some(p) = points.get_mut(i) {
@@ -676,6 +775,9 @@ pub struct Entity {
     pub id: EntityId,
     pub layer: String,
     pub color: Color,
+    /// A linetype name, or ByLayer / ByBlock (see [`crate::linetype`]).
+    pub linetype: String,
+    pub lineweight: Lineweight,
     pub geometry: Geometry,
 }
 

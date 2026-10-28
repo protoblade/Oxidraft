@@ -2,8 +2,8 @@
 //! status bar, laid out like AutoCAD LT's.
 
 use eframe::egui::{
-    self, Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, Rect, Response, Sense, Stroke, Ui, pos2,
-    vec2,
+    self, Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, Rect, Response, Sense, Shape, Stroke,
+    Ui, pos2, vec2,
 };
 
 use crate::{
@@ -56,7 +56,7 @@ const MODIFY_GRID: &[[Tool; 3]] = &[
     [
         tool(Icon::Stretch, "Stretch", Some("STRETCH"), "Stretches objects crossed by a window (S)"),
         tool(Icon::Scale, "Scale", Some("SCALE"), "Enlarges or reduces objects (SC)"),
-        tool(Icon::Array, "Array", None, "Creates copies of objects in a pattern (AR)"),
+        tool(Icon::Array, "Array", Some("ARRAY"), "Copies objects in rows and columns or around a center (AR)"),
     ],
 ];
 const MODIFY_SMALL: &[Tool] = &[
@@ -73,8 +73,12 @@ const ANNOTATION_SMALL: &[Tool] = &[
     tool(Icon::Leader, "Leader", Some("MLEADER"), "Creates a leader with text (MLD)"),
     tool(Icon::Table, "Table", None, "Table"),
 ];
-const UTILITIES_LARGE: &[Tool] =
-    &[tool(Icon::Measure, "Measure", None, "Measures distance, radius, angle, area (MEA)")];
+const UTILITIES_LARGE: &[Tool] = &[tool(
+    Icon::Measure,
+    "Measure",
+    Some("DIST"),
+    "Measures the distance between two points (DI); also AREA (AA) and ID",
+)];
 
 const NOT_YET: &str = "Not available in Oxidraft yet";
 
@@ -387,11 +391,37 @@ impl OxidraftApp {
                     self.update_badge(ui);
                     ui.label(egui::RichText::new("1:1").color(theme::TEXT_DIM));
                     ui.add_space(6.0);
+                    let mut lwt = self.show_lineweights;
+                    if status_toggle(ui, "LWT", &mut lwt, "Show/Hide Lineweight") {
+                        self.show_lineweights = lwt;
+                        self.log_toggle("Lineweight display", lwt);
+                    }
                     let mut dyn_on = self.engine.dynamic_input;
                     if status_toggle(ui, "DYN", &mut dyn_on, "Dynamic Input (F12)") {
                         self.engine.dynamic_input = dyn_on;
                         self.log_toggle("Dynamic Input", dyn_on);
                     }
+                    // AutoCAD's OSNAP dropdown: which running snaps are on.
+                    let (rect, arrow) = ui.allocate_exact_size(vec2(12.0, 22.0), Sense::click());
+                    if arrow.hovered() {
+                        ui.painter().rect_filled(rect, 2.0, theme::RIBBON_HOVER);
+                    }
+                    let c = rect.center();
+                    let tip = vec![c + vec2(-3.5, -1.5), c + vec2(3.5, -1.5), c + vec2(0.0, 2.5)];
+                    ui.painter().add(Shape::convex_polygon(tip, theme::TEXT_DIM, Stroke::NONE));
+                    let arrow = arrow.on_hover_text("Running object snaps");
+                    egui::Popup::menu(&arrow).show(|ui| {
+                        for kind in oxidraft_model::snap::SnapKind::ALL {
+                            let mut on = self.osnap_modes.contains(&kind);
+                            if ui.checkbox(&mut on, kind.label()).changed() {
+                                self.osnap_modes.retain(|k| *k != kind);
+                                if on {
+                                    self.osnap_modes.push(kind);
+                                    self.osnap = true;
+                                }
+                            }
+                        }
+                    });
                     let mut osnap = self.osnap;
                     if status_toggle(ui, "OSNAP", &mut osnap, "Object Snap (F3)") {
                         self.osnap = osnap;
