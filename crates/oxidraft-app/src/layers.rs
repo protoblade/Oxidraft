@@ -176,6 +176,9 @@ pub(crate) fn lineweight_menu(
     chosen
 }
 
+/// The Layer Properties Manager window's id.
+pub const LAYER_MANAGER: &str = "layer_manager";
+
 impl OxidraftApp {
     /// LAYER: the Layer Properties Manager window.
     pub(crate) fn layer_manager(&mut self, ctx: &egui::Context) {
@@ -184,21 +187,29 @@ impl OxidraftApp {
         }
         let mut open = true;
         egui::Window::new("Layer Properties Manager")
+            .id(egui::Id::unique(LAYER_MANAGER))
             .open(&mut open)
             .default_size([860.0, 320.0])
             .default_pos([260.0, 210.0])
+            .constrain_to(self.dialog_area(ctx))
             .resizable(true)
             .collapsible(false)
             .show(ctx, |ui| {
                 self.layer_toolbar(ui);
                 ui.separator();
-                egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| self.layer_table(ui));
-                ui.separator();
-                let shown = self.doc.layers().iter().filter(|l| l.is_shown()).count();
-                ui.colored_label(
-                    theme::TEXT_DIM,
-                    format!("All: {shown} layers displayed of {} total layers", self.doc.layers().len()),
-                );
+                // The count stays at the bottom and the table scrolls above it,
+                // so a long table can't push the window past its limit.
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    let shown = self.doc.layers().iter().filter(|l| l.is_shown()).count();
+                    ui.colored_label(
+                        theme::TEXT_DIM,
+                        format!("All: {shown} layers displayed of {} total layers", self.doc.layers().len()),
+                    );
+                    ui.separator();
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| self.layer_table(ui));
+                    });
+                });
             });
         if !open {
             self.layer_manager_open = false;

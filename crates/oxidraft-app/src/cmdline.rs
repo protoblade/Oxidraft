@@ -29,6 +29,8 @@ impl OxidraftApp {
                 ui.set_width(width);
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                 self.suggestions(ui, width);
+                // Dialogs stay above this line; AutoComplete may cover them.
+                self.command_line_top = ui.cursor().top();
                 self.history_lines(ui, width);
                 self.input_bar(ui, width);
             });

@@ -320,3 +320,32 @@ fn no_keystroke_is_lost_while_the_command_line_changes() {
     assert!(history.last().unwrap().ends_with("[All/Center/Extents/Previous/Scale/Window/Object] <real time>: o"));
     assert_eq!(h.state_mut().engine_mut().current_prompt().unwrap().text, "Select objects");
 }
+
+#[test]
+fn the_layer_manager_stays_above_the_command_line() {
+    let mut h = app_with_line();
+    // Enough layers to fill a tall window.
+    for i in 0..40 {
+        h.state_mut().document_mut().add_layer(oxidraft_model::Layer::new(format!("L{i}"), 7));
+    }
+    h.state_mut().type_command("la");
+    h.run_steps(3);
+    let id = eframe::egui::Id::unique(oxidraft_app::LAYER_MANAGER);
+    let window = |h: &Harness<'_, OxidraftApp>| h.ctx.memory(|m| m.area_rect(id)).expect("layer manager shown");
+    let top = h.state().command_line_top();
+    let check = |h: &Harness<'_, OxidraftApp>, what: &str| {
+        let w = window(h);
+        assert!(w.bottom() <= top, "{what}: window {w:?} reaches below the command line at {top}");
+    };
+    // Resize it by its corner, then move it by its title bar, to the bottom of the screen.
+    let before = window(&h).height();
+    let corner = window(&h).right_bottom() - vec2(3.0, 3.0);
+    drag(&mut h, corner, Pos2::new(corner.x, 795.0));
+    h.run_steps(3);
+    check(&h, "resized");
+    assert!(window(&h).height() > before + 100.0, "it grew down to the command line");
+    let title = window(&h).center_top() + vec2(0.0, 12.0);
+    drag(&mut h, title, Pos2::new(title.x, 790.0));
+    h.run_steps(3);
+    check(&h, "moved");
+}

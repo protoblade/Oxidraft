@@ -14,6 +14,7 @@ pub mod update;
 mod view;
 
 pub use app::OxidraftApp;
+pub use layers::LAYER_MANAGER;
 
 /// Opens the main window.
 pub fn run() -> eframe::Result {

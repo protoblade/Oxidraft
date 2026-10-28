@@ -47,6 +47,7 @@ impl OxidraftApp {
             .collapsible(false)
             .resizable(false)
             .default_pos([340.0, 220.0])
+            .constrain_to(self.dialog_area(ctx))
             .show(ctx, |ui| {
                 egui::Grid::new("qselect").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                     ui.label("Apply to:");

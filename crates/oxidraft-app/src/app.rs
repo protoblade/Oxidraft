@@ -45,6 +45,8 @@ pub struct OxidraftApp {
     pub(crate) cursor: Option<Point>,
     /// Drawing area from the last frame.
     pub(crate) canvas_rect: Rect,
+    /// Top of the command line's history and input from the last frame.
+    pub(crate) command_line_top: f32,
     pub(crate) ribbon_tab: usize,
     /// F2: show more command history.
     pub(crate) history_expanded: bool,
@@ -103,6 +105,7 @@ impl OxidraftApp {
             title: String::new(),
             cursor: None,
             canvas_rect: Rect::NOTHING,
+            command_line_top: f32::INFINITY,
             ribbon_tab: 0,
             history_expanded: false,
             suggestion: 0,
@@ -151,6 +154,11 @@ impl OxidraftApp {
     /// Zooms so the window between two corners fills the view.
     pub fn zoom_to(&mut self, a: Point, b: Point) {
         self.pending_views.push(ViewRequest::Window(oxidraft_geom::Aabb::from_points(a, b)));
+    }
+
+    /// Top of the command line's history and input, in screen points.
+    pub fn command_line_top(&self) -> f32 {
+        self.command_line_top
     }
 
     /// Screen position of a drawing point, as of the last frame.
@@ -272,6 +280,14 @@ impl OxidraftApp {
         let cursor = self.cursor.unwrap_or(Point::ORIGIN);
         let tolerance = self.pick_tolerance();
         self.engine.submit(&text, &mut self.doc, cursor, tolerance);
+    }
+
+    /// Where dialogs may go: above the command line, which floats over
+    /// everything else.
+    pub(crate) fn dialog_area(&self, ctx: &egui::Context) -> Rect {
+        let screen = ctx.content_rect();
+        let bottom = (self.command_line_top - 6.0).clamp(screen.top() + 200.0, screen.bottom());
+        Rect::from_min_max(screen.min, egui::pos2(screen.right(), bottom))
     }
 
     /// True while the keyboard belongs to a palette or dialog text field.
