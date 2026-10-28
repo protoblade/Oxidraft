@@ -33,6 +33,9 @@ semver = "1"
 [lints]
 workspace = true
 
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["eframe", "wgpu"] }
 image = { version = "0.25", default-features = false, features = ["png"] }

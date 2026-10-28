@@ -19,7 +19,10 @@ pub fn run() -> eframe::Result {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Oxidraft")
             .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([900.0, 560.0]),
+            .with_min_inner_size([900.0, 560.0])
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon.png")).unwrap_or_default(),
+            ),
         ..Default::default()
     };
     let file = std::env::args_os().nth(1).map(std::path::PathBuf::from);

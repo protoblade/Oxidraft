@@ -1,5 +1,6 @@
 /target
 /target.nosync
+/dist
 .DS_Store
 # Local sample files (large, not ours to redistribute)
 /samples

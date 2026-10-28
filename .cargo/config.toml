@@ -2,3 +2,8 @@
 # by iCloud, so build output doesn't get uploaded on every compile.
 [build]
 target-dir = "target.nosync"
+
+# Link the C runtime statically on Windows so oxidraft.exe runs without the
+# Visual C++ redistributable installed.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

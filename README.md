@@ -33,11 +33,18 @@ Greyed-out ribbon buttons mark commands that are planned but not built yet.
 
 ## Install
 
-Download the archive for your platform from the
-[Releases page](https://github.com/protoblade/Oxidraft/releases), extract it and
-run `oxidraft` (`oxidraft.exe` on Windows). Builds are not code-signed yet: on
-macOS, a browser download may need `xattr -d com.apple.quarantine oxidraft`
-before the first run. After that the app updates itself.
+From the [Releases page](https://github.com/protoblade/Oxidraft/releases):
+
+- **Windows:** run `Oxidraft-<version>-windows-x64-setup.exe`. It installs for
+  your user only (no admin rights), adds a Start menu entry and an uninstaller,
+  and can make Oxidraft open `.dxf` files. Prefer no installer? Unzip
+  `oxidraft-<version>-windows-x64.zip` and run `oxidraft.exe`.
+- **macOS / Linux:** extract `oxidraft-<version>-<target>.tar.gz` and run
+  `oxidraft`.
+
+The builds aren't code-signed yet. Windows SmartScreen may warn on first run
+(choose *More info* → *Run anyway*); on macOS a browser download may need
+`xattr -d com.apple.quarantine oxidraft`. After that the app updates itself.
 
 ## Run from source
 
@@ -72,6 +79,9 @@ The [Release workflow](.github/workflows/release.yml) builds macOS (Apple
 Silicon and Intel), Linux and Windows, and publishes
 `oxidraft-<version>-<target>.tar.gz` plus a `.sha256` for each — the names the
 in-app updater looks for. The updater only sees releases of a public repository.
+For Windows it also builds the installer ([Inno Setup script](packaging/windows/oxidraft.iss))
+and a zip, and installs, runs and uninstalls the app on the runner before
+anything is published. The app icon comes from `python3 packaging/make_icon.py`.
 
 ## Workspace layout
 
