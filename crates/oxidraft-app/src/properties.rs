@@ -39,6 +39,13 @@ impl OxidraftApp {
                     if ui.add(egui::Button::new("x").frame(false)).on_hover_text("Close (Cmd+1)").clicked() {
                         self.properties_open = false;
                     }
+                    if ui
+                        .small_button("Quick Select")
+                        .on_hover_text("Select objects by type and property (QSELECT)")
+                        .clicked()
+                    {
+                        self.open_quick_select();
+                    }
                 });
             });
             let selected: Vec<Entity> =

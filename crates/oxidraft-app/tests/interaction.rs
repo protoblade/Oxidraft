@@ -1,6 +1,6 @@
 //! Drives the real app through egui pointer events, the way a user would.
 
-use eframe::egui::{Event, Modifiers, PointerButton, Pos2, vec2};
+use eframe::egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 use oxidraft_app::OxidraftApp;
 use oxidraft_geom::Point;
@@ -177,4 +177,85 @@ fn snap_override_from_the_menu_picks_the_midpoint() {
     let end: Vec<Point> = end.collect();
     assert_eq!(end.len(), 1);
     assert!(end[0].approx_eq(Point::new(50.0, 0.0)), "ended at {:?}", end[0]);
+}
+
+#[test]
+fn zoom_window_then_previous() {
+    let mut h = app_with_line();
+    let (before_a, before_b) = (screen(&h, 0.0, 0.0), screen(&h, 100.0, 0.0));
+    h.state_mut().type_command("z");
+    let (a, b) = (screen(&h, 40.0, 20.0), screen(&h, 60.0, 40.0));
+    click(&mut h, a);
+    click(&mut h, b);
+    h.run_steps(2);
+    // The 20-unit square fills the view: at least twice the pixels per unit.
+    let per_unit_before = (before_b.x - before_a.x) / 100.0;
+    let per_unit = (screen(&h, 60.0, 0.0).x - screen(&h, 40.0, 0.0).x) / 20.0;
+    assert!(per_unit > per_unit_before * 2.0, "{per_unit_before} -> {per_unit} px per unit");
+
+    h.state_mut().type_command("z");
+    h.state_mut().type_command("p");
+    h.run_steps(2);
+    assert!(screen(&h, 0.0, 0.0).distance(before_a) < 0.5 && screen(&h, 100.0, 0.0).distance(before_b) < 0.5);
+}
+
+#[test]
+fn pan_drags_the_view_with_the_left_button_until_escape() {
+    let mut h = app_with_line();
+    h.state_mut().type_command("p");
+    h.run_steps(1);
+    let before = screen(&h, 50.0, 30.0);
+    drag(&mut h, before, before + vec2(120.0, 0.0));
+    h.run_steps(1);
+    let after = screen(&h, 50.0, 30.0);
+    assert!((after.x - before.x - 120.0).abs() < 1.0 && (after.y - before.y).abs() < 1.0, "{before:?} -> {after:?}");
+    assert!(h.state_mut().engine_mut().selection().is_empty(), "panning doesn't select");
+
+    // Esc ends it: a click selects again.
+    h.key_press(Key::Escape);
+    h.run_steps(1);
+    let on_line = screen(&h, 50.0, 0.0);
+    click(&mut h, on_line);
+    assert_eq!(h.state_mut().engine_mut().selection().len(), 1);
+}
+
+#[test]
+fn select_similar_from_the_right_click_menu() {
+    let mut h = app_with_line();
+    let on_line = screen(&h, 50.0, 0.0);
+    click(&mut h, on_line);
+    assert_eq!(h.state_mut().engine_mut().selection().len(), 1);
+    right_click(&mut h, on_line);
+    choose(&mut h, "Select Similar");
+    assert_eq!(h.state_mut().engine_mut().selection().len(), 2, "the other line on layer 0 too");
+}
+
+#[test]
+fn quick_select_dialog_selects_by_layer() {
+    let mut h = app_with_line();
+    h.state_mut().type_command("qselect");
+    h.run_steps(2);
+    // Defaults: the entire drawing, any type, Layer = 0.
+    choose(&mut h, "OK");
+    assert_eq!(h.state_mut().engine_mut().selection().len(), 2);
+    assert!(h.state_mut().engine_mut().history().iter().any(|l| l == "2 items selected."));
+}
+
+#[test]
+fn zoom_object_uses_the_objects_already_selected() {
+    let mut h = app_with_line();
+    // Zoom out first, so zooming to the line changes the view.
+    h.state_mut().type_command("z");
+    h.state_mut().type_command(".25x");
+    h.run_steps(2);
+    let on_line = screen(&h, 50.0, 0.0);
+    click(&mut h, on_line);
+    assert_eq!(h.state_mut().engine_mut().selection().len(), 1);
+    let before = screen(&h, 100.0, 0.0).x - screen(&h, 0.0, 0.0).x;
+    h.state_mut().type_command("z");
+    h.state_mut().type_command("o");
+    h.run_steps(2);
+    let after = screen(&h, 100.0, 0.0).x - screen(&h, 0.0, 0.0).x;
+    assert!(after > before * 2.0, "zoomed to the line: {before} -> {after}");
+    assert_eq!(h.state_mut().engine_mut().selection().len(), 1, "still selected");
 }

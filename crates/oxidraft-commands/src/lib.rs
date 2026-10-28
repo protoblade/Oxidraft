@@ -34,11 +34,14 @@ mod pline;
 mod rectang;
 mod rotate;
 mod scale;
+mod select;
 mod stretch;
 mod trim_extend;
+mod zoom;
 
 pub use engine::{COMMANDS, CommandInfo, Engine, Tracked};
 pub use input::{Input, parse_input};
+pub use select::{QuickOperator, QuickProperty, QuickSelect, SimilarMode, color_label, object_type, select_similar};
 
 use oxidraft_geom::{Aabb, Point};
 use oxidraft_model::{Document, EntityId, Geometry};
@@ -92,6 +95,28 @@ impl std::fmt::Display for Prompt {
     }
 }
 
+/// A change of view a command asks for. The app owns the view and makes
+/// the change.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ViewRequest {
+    /// The whole drawing (ZOOM Extents and All).
+    Extents,
+    /// Fit a region (ZOOM Window and Object).
+    Window(Aabb),
+    /// The view before the last change (ZOOM Previous).
+    Previous,
+    /// Magnify the current view by a factor (ZOOM nX, In, Out).
+    Magnify(f64),
+    /// Show the extents magnified by a factor (ZOOM n).
+    OfExtents(f64),
+    /// Center on a point, showing `height` drawing units top to bottom.
+    Center { center: Point, height: f64 },
+    /// Real-time zoom: drag up to zoom in, down to zoom out.
+    RealtimeZoom,
+    /// Real-time pan: drag to move the view.
+    RealtimePan,
+}
+
 /// Result of feeding one input to a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
@@ -119,6 +144,12 @@ pub struct Vars {
     pub hatch_pattern: oxidraft_model::HatchPattern,
     pub hatch_scale: f64,
     pub hatch_angle: f64,
+    /// SELECTSIMILARMODE.
+    pub select_similar: SimilarMode,
+    /// VIEWSIZE and VIEWCTR: the height and center of the view, kept up to
+    /// date by the app.
+    pub view_size: f64,
+    pub view_center: Point,
 }
 
 impl Default for Vars {
@@ -134,6 +165,9 @@ impl Default for Vars {
             hatch_pattern: oxidraft_model::HatchPattern::Ansi31,
             hatch_scale: 1.0,
             hatch_angle: 0.0,
+            select_similar: SimilarMode::default(),
+            view_size: 100.0,
+            view_center: Point::ORIGIN,
         }
     }
 }
@@ -148,6 +182,10 @@ pub struct Ctx<'a> {
     pub pick_tolerance: f64,
     /// Lines to print in the command history.
     pub messages: Vec<String>,
+    /// A change of view for the app to make.
+    pub view: Option<ViewRequest>,
+    /// Objects to leave selected when the command ends (SELECTSIMILAR).
+    pub select: Option<Vec<EntityId>>,
 }
 
 pub trait Command {
@@ -160,6 +198,10 @@ pub trait Command {
     /// Called once after [`Command::start`], for commands whose prompts
     /// show something stored in the drawing.
     fn prepare(&mut self, _doc: &Document) {}
+
+    /// For commands that don't ask to select objects: the objects selected
+    /// before the command started (ZOOM's Object option uses them).
+    fn preselected(&mut self, _ids: &[EntityId]) {}
 
     fn prompt(&self) -> Prompt;
 

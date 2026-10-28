@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use eframe::egui::{self, Key, Modifiers, Rect};
-use oxidraft_commands::Engine;
+use oxidraft_commands::{Engine, QuickSelect, ViewRequest};
 use oxidraft_geom::Point;
 use oxidraft_model::Document;
 
@@ -29,8 +29,17 @@ pub struct OxidraftApp {
     /// Document revision at the last save/open, for the `*` unsaved marker.
     pub(crate) saved_revision: u64,
     pub(crate) zoom_extents_pending: bool,
-    /// A region to zoom to on the next frame (ZOOM Window).
-    pub(crate) zoom_window: Option<oxidraft_geom::Aabb>,
+    /// View changes to make on the next frame (from menus and buttons;
+    /// commands' come from the engine).
+    pub(crate) pending_views: Vec<ViewRequest>,
+    /// The Quick Select dialog's choices while it's open.
+    pub(crate) quick_select: Option<QuickSelect>,
+    /// Earlier views, for ZOOM Previous.
+    pub(crate) view_history: Vec<View>,
+    /// Real-time PAN or ZOOM: the left mouse button moves the view.
+    pub(crate) realtime: Option<ViewRequest>,
+    /// When the last wheel, pinch or pan gesture happened (seconds).
+    pub(crate) last_gesture: f64,
     pub(crate) title: String,
     /// Snapped/tracked cursor in drawing units, from the last frame.
     pub(crate) cursor: Option<Point>,
@@ -86,7 +95,11 @@ impl OxidraftApp {
             path: None,
             saved_revision: 0,
             zoom_extents_pending: false,
-            zoom_window: None,
+            pending_views: Vec::new(),
+            quick_select: None,
+            view_history: Vec::new(),
+            realtime: None,
+            last_gesture: f64::NEG_INFINITY,
             title: String::new(),
             cursor: None,
             canvas_rect: Rect::NOTHING,
@@ -113,6 +126,7 @@ impl OxidraftApp {
         self.doc = doc;
         self.saved_revision = self.doc.revision();
         self.zoom_extents_pending = true;
+        self.view_history.clear();
     }
 
     pub fn engine_mut(&mut self) -> &mut Engine {
@@ -136,7 +150,7 @@ impl OxidraftApp {
 
     /// Zooms so the window between two corners fills the view.
     pub fn zoom_to(&mut self, a: Point, b: Point) {
-        self.zoom_window = Some(oxidraft_geom::Aabb::from_points(a, b));
+        self.pending_views.push(ViewRequest::Window(oxidraft_geom::Aabb::from_points(a, b)));
     }
 
     /// Screen position of a drawing point, as of the last frame.
@@ -227,12 +241,13 @@ impl OxidraftApp {
     /// Commands about files and the view, which the engine doesn't know about.
     fn run_app_command(&mut self, name: &str) -> bool {
         match name.trim().to_ascii_uppercase().as_str() {
-            "ZE" | "ZOOM" => self.zoom_extents_pending = true,
+            "ZE" => self.pending_views.push(ViewRequest::Extents),
             "SAVE" | "QSAVE" => self.save(false),
             "SAVEAS" => self.save(true),
             "OPEN" => self.open_dialog(),
             "NEW" => self.new_drawing(),
             "LAYER" | "LA" => self.layer_manager_open = true,
+            "QSELECT" => self.open_quick_select(),
             "PROPERTIES" | "PR" | "PROPS" | "MO" | "CH" => self.properties_open = true,
             _ => return false,
         }
@@ -271,6 +286,13 @@ impl OxidraftApp {
             self.properties_open = !self.properties_open;
         }
         if self.editing_field(ctx) {
+            return;
+        }
+        // Esc or Enter ends real-time pan or zoom, and nothing else.
+        if self.realtime.is_some()
+            && ctx.input_mut(|i| i.consume_key(none, Key::Escape) || i.consume_key(none, Key::Enter))
+        {
+            self.realtime = None;
             return;
         }
         let empty = self.command_text.is_empty();
@@ -381,6 +403,7 @@ impl eframe::App for OxidraftApp {
             self.canvas(ui);
         });
         self.layer_manager(&ctx);
+        self.quick_select_dialog(&ctx);
         self.update_window(&ctx);
         self.command_line(&ctx);
     }

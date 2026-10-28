@@ -2,13 +2,13 @@ use oxidraft_geom::{Aabb, Point};
 use oxidraft_model::{Document, EntityId, Geometry, snap};
 
 use crate::{
-    Command, Ctx, Input, Prompt, Selection, Step, Vars, annotate::Dimension, annotate::MLeader, annotate::MText,
-    annotate::SingleText, arc::Arc, array::Array, array::ArrayKind, block::DefineBlock, block::InsertBlock,
-    break_join::Break, break_join::Join, chamfer::Chamfer, circle::Circle, dims::DimAngular, dims::DimChain,
-    dims::DimRadial, erase::Erase, explode::Explode, fillet::Fillet, grip::GripStretch, hatch::Hatch, inquiry::Area,
-    inquiry::Dist, inquiry::Id, inquiry::Ltscale, lengthen::Lengthen, line::Line, matchprop::MatchProp, mirror::Mirror,
-    move_copy::MoveCopy, offset::Offset, parse_input, pline::Pline, rectang::Rectang, rotate::Rotate, scale::Scale,
-    stretch::Stretch, trim_extend::TrimExtend,
+    Command, Ctx, Input, Prompt, Selection, Step, Vars, ViewRequest, annotate::Dimension, annotate::MLeader,
+    annotate::MText, annotate::SingleText, arc::Arc, array::Array, array::ArrayKind, block::DefineBlock,
+    block::InsertBlock, break_join::Break, break_join::Join, chamfer::Chamfer, circle::Circle, dims::DimAngular,
+    dims::DimChain, dims::DimRadial, erase::Erase, explode::Explode, fillet::Fillet, grip::GripStretch, hatch::Hatch,
+    inquiry::Area, inquiry::Dist, inquiry::Id, inquiry::Ltscale, lengthen::Lengthen, line::Line, matchprop::MatchProp,
+    mirror::Mirror, move_copy::MoveCopy, offset::Offset, parse_input, pline::Pline, rectang::Rectang, rotate::Rotate,
+    scale::Scale, select::SelectSimilar, stretch::Stretch, trim_extend::TrimExtend, zoom::Zoom,
 };
 
 /// A command the user can type, with its aliases.
@@ -275,6 +275,25 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Set the global linetype scale",
         make: Some(|| Box::new(Ltscale::default())),
     },
+    CommandInfo {
+        name: "ZOOM",
+        aliases: &["Z"],
+        description: "Zoom to a window, a scale, the extents, the previous view, …",
+        make: Some(|| Box::new(Zoom::default())),
+    },
+    CommandInfo { name: "PAN", aliases: &["P"], description: "Pan the view by dragging", make: None },
+    CommandInfo {
+        name: "SELECTSIMILAR",
+        aliases: &[],
+        description: "Select all objects like the selected ones",
+        make: Some(|| Box::new(SelectSimilar::default())),
+    },
+    CommandInfo {
+        name: "QSELECT",
+        aliases: &[],
+        description: "Select objects by type and property (Quick Select)",
+        make: None,
+    },
     // Handled by the app, which owns the windows and palettes.
     CommandInfo { name: "LAYER", aliases: &["LA"], description: "Open the Layer Properties Manager", make: None },
     CommandInfo {
@@ -339,6 +358,8 @@ pub struct Engine {
     pub dynamic_input: bool,
     /// Settings remembered between commands (OFFSETDIST, FILLETRAD, …).
     pub vars: Vars,
+    /// View changes asked for since the app last took them.
+    view_requests: Vec<ViewRequest>,
 }
 
 impl Default for Engine {
@@ -366,10 +387,16 @@ impl Engine {
             polar_increment: 90.0,
             dynamic_input: true,
             vars: Vars::default(),
+            view_requests: Vec::new(),
         }
     }
 
     // ---- state queries ------------------------------------------------------
+
+    /// View changes commands asked for since the last call, oldest first.
+    pub fn take_view_requests(&mut self) -> Vec<ViewRequest> {
+        std::mem::take(&mut self.view_requests)
+    }
 
     pub fn history(&self) -> &[String] {
         &self.history
@@ -454,6 +481,16 @@ impl Engine {
         }
         self.window_start = None;
         self.selection = doc.entities().filter(|e| doc.is_editable(&e.layer)).map(|e| e.id).collect();
+        self.selection_windows.clear();
+    }
+
+    /// Replaces the selection (QSELECT, SELECTSIMILAR), when no command runs.
+    pub fn set_selection(&mut self, ids: Vec<EntityId>) {
+        if self.active.is_some() {
+            return;
+        }
+        self.window_start = None;
+        self.selection = ids;
         self.selection_windows.clear();
     }
 
@@ -756,6 +793,9 @@ impl Engine {
             self.log(intro);
         }
         cmd.prepare(doc);
+        if !wants_selection {
+            cmd.preselected(&self.selection);
+        }
         self.active = Some(Active { info, cmd });
         if wants_selection {
             // Noun-verb: objects selected before the command are used right away.
@@ -772,6 +812,11 @@ impl Engine {
     fn run_immediate(&mut self, name: &str, doc: &mut Document) {
         let msg = match name {
             "UNDO" => doc.undo().unwrap_or_else(|| "Nothing to undo.".into()),
+            // Real-time pan: the app takes over the mouse until Esc or Enter.
+            "PAN" => {
+                self.view_requests.push(ViewRequest::RealtimePan);
+                "Press Esc or Enter to exit, or right-click to exit.".into()
+            }
             "REDO" => doc.redo().unwrap_or_else(|| "Nothing to redo.".into()),
             "HELP" => COMMANDS
                 .iter()
@@ -795,9 +840,12 @@ impl Engine {
         if let Input::Point(p) = input {
             self.last_point = Some(p);
         }
-        let mut ctx = Ctx { doc, vars: &mut self.vars, cursor, pick_tolerance, messages: Vec::new() };
+        let mut ctx =
+            Ctx { doc, vars: &mut self.vars, cursor, pick_tolerance, messages: Vec::new(), view: None, select: None };
         let result = active.cmd.input(input, &mut ctx);
         let messages = std::mem::take(&mut ctx.messages);
+        self.view_requests.extend(ctx.view);
+        let select = ctx.select.take();
         if let Some(b) = active.cmd.base_point() {
             self.last_point = Some(b);
         }
@@ -807,6 +855,9 @@ impl Engine {
             Ok(Step::Done) => {
                 self.active = None;
                 doc.commit();
+                if let Some(ids) = select {
+                    self.set_selection(ids);
+                }
             }
             Err(e) => self.log(e),
         }
@@ -868,6 +919,74 @@ mod tests {
         assert_eq!(d.ltscale(), 0.5);
         type_all(&mut e, &mut d, &["lts", "-1"]);
         assert!(e.is_active(), "rejects a negative scale");
+    }
+
+    #[test]
+    fn select_similar_leaves_the_matches_selected() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["l", "0,0", "10,0", "", "l", "0,5", "10,5", "", "c", "50,50", "2"]);
+        click(&mut e, &mut d, 5.0, 0.0);
+        type_all(&mut e, &mut d, &["selectsimilar"]);
+        assert!(!e.is_active());
+        assert_eq!(e.selection().len(), 2, "both lines, not the circle");
+        assert!(e.history().iter().any(|l| l == "2 found"));
+
+        // Settings: also match color; a red line no longer matches the others.
+        let red = d.entities().next().unwrap().id;
+        d.update(red, |x| x.color = oxidraft_model::Color::Index(1));
+        e.cancel(&mut d);
+        type_all(&mut e, &mut d, &["selectsimilar", "se", "c", "x"]);
+        click(&mut e, &mut d, 5.0, 0.0);
+        type_all(&mut e, &mut d, &[""]);
+        assert_eq!(e.selection(), &[red]);
+    }
+
+    #[test]
+    fn zoom_asks_the_app_for_view_changes() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["z"]);
+        click(&mut e, &mut d, 0.0, 0.0);
+        click(&mut e, &mut d, 10.0, 5.0);
+        let window = ViewRequest::Window(Aabb::from_points(Point::ORIGIN, Point::new(10.0, 5.0)));
+        assert_eq!(e.take_view_requests(), vec![window]);
+        type_all(&mut e, &mut d, &["z", "2x", "zoom", "e", "z", "p", "z", "s", ".5", "z", "c", "3,4", "20"]);
+        assert_eq!(
+            e.take_view_requests(),
+            vec![
+                ViewRequest::Magnify(2.0),
+                ViewRequest::Extents,
+                ViewRequest::Previous,
+                ViewRequest::OfExtents(0.5),
+                ViewRequest::Center { center: Point::new(3.0, 4.0), height: 20.0 },
+            ]
+        );
+        assert!(e.take_view_requests().is_empty());
+        type_all(&mut e, &mut d, &["z", "", "p"]);
+        assert_eq!(e.take_view_requests(), vec![ViewRequest::RealtimeZoom, ViewRequest::RealtimePan]);
+
+        // Object: the bounds of what's selected.
+        d.add(Geometry::Circle { center: Point::new(50.0, 50.0), radius: 2.0 });
+        type_all(&mut e, &mut d, &["z", "o"]);
+        click(&mut e, &mut d, 52.0, 50.0);
+        type_all(&mut e, &mut d, &[""]);
+        let b = Aabb::from_points(Point::new(48.0, 48.0), Point::new(52.0, 52.0));
+        assert_eq!(e.take_view_requests(), vec![ViewRequest::Window(b)]);
+        assert!(e.selection().is_empty());
+
+        // Objects selected first: Object zooms to them at once, and they stay selected.
+        click(&mut e, &mut d, 52.0, 50.0);
+        let circle = e.selection().to_vec();
+        type_all(&mut e, &mut d, &["z"]);
+        assert_eq!(e.highlighted(), circle, "still shown selected");
+        type_all(&mut e, &mut d, &["o"]);
+        assert!(!e.is_active());
+        assert_eq!(e.take_view_requests(), vec![ViewRequest::Window(b)]);
+        assert_eq!(e.selection(), circle.as_slice());
+        // Any other zoom keeps them selected too.
+        type_all(&mut e, &mut d, &["z", "e"]);
+        assert_eq!(e.selection(), circle.as_slice());
+        e.take_view_requests();
+        assert!(!d.can_undo() || d.undo_name() != Some("ZOOM"), "zooming doesn't change the drawing");
     }
 
     #[test]
@@ -1602,7 +1721,7 @@ mod tests {
         let names: Vec<_> = Engine::suggest("co").iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["COPY"]);
         let names: Vec<_> = Engine::suggest("s").iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["STRETCH", "SCALE"]);
+        assert_eq!(names, vec!["STRETCH", "SCALE", "SELECTSIMILAR"]);
     }
 
     #[test]

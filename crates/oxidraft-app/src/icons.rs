@@ -42,6 +42,8 @@ pub enum Icon {
     Save,
     Undo,
     Redo,
+    Pan,
+    Zoom,
 }
 
 /// Accent colors used inside icons, as in AutoCAD's icon set.
@@ -285,6 +287,18 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
                 let y = 0.25 + 0.2 * i as f32;
                 pen.closed(&[(0.3, y), (0.9, y), (0.7, y + 0.2), (0.1, y + 0.2)], col);
             }
+        }
+        Icon::Pan => {
+            for to in [(0.5, 0.08), (0.92, 0.5), (0.5, 0.92), (0.08, 0.5)] {
+                pen.arrow((0.5, 0.5), to, c);
+            }
+            pen.dot((0.5, 0.5), 0.07, blue);
+        }
+        Icon::Zoom => {
+            pen.circle((0.42, 0.42), 0.27, c);
+            pen.line(&[(0.62, 0.62), (0.9, 0.9)], c);
+            pen.line(&[(0.3, 0.42), (0.54, 0.42)], blue);
+            pen.line(&[(0.42, 0.3), (0.42, 0.54)], blue);
         }
         Icon::Measure => {
             pen.closed(&[(0.08, 0.38), (0.92, 0.38), (0.92, 0.66), (0.08, 0.66)], c);

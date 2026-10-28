@@ -2,6 +2,7 @@
 //! you're doing, like AutoCAD's Default, Edit and Command menus.
 
 use eframe::egui::{self, Ui};
+use oxidraft_commands::ViewRequest;
 use oxidraft_model::snap::SnapKind;
 
 use crate::app::OxidraftApp;
@@ -66,11 +67,12 @@ impl OxidraftApp {
             self.run("REDO");
         }
         ui.separator();
-        if item(ui, "Zoom Extents", "ZE") {
-            self.zoom_extents_pending = true;
-        }
+        self.view_items(ui, false);
         if item(ui, "Select All", "Cmd+A") {
             self.engine.select_all(&self.doc);
+        }
+        if item(ui, "Quick Select...", "") {
+            self.open_quick_select();
         }
         ui.separator();
         if item(ui, "Layer Properties...", "LA") {
@@ -98,8 +100,14 @@ impl OxidraftApp {
             }
         }
         ui.separator();
+        if item(ui, "Select Similar", "") {
+            self.run("SELECTSIMILAR");
+        }
         if item(ui, "Deselect All", "Esc") {
             self.engine.cancel(&mut self.doc);
+        }
+        if item(ui, "Quick Select...", "") {
+            self.open_quick_select();
         }
         ui.separator();
         if item(ui, "Properties", "Cmd+1") {
@@ -156,8 +164,39 @@ impl OxidraftApp {
                 }
             });
         });
-        if item(ui, "Zoom Extents", "ZE") {
-            self.zoom_extents_pending = true;
+        self.view_items(ui, true);
+    }
+
+    /// Pan and the Zoom submenu. While a command runs, only the zooms that
+    /// need no picking are offered, so the command carries on afterwards.
+    pub(crate) fn view_items(&mut self, ui: &mut Ui, during_command: bool) {
+        if item(ui, "Pan", "P") {
+            self.pending_views.push(ViewRequest::RealtimePan);
+        }
+        ui.menu_button("Zoom", |ui| self.zoom_items(ui, during_command));
+    }
+
+    /// The zoom options, for the Zoom submenu and the navigation bar.
+    pub(crate) fn zoom_items(&mut self, ui: &mut Ui, during_command: bool) {
+        ui.set_min_width(170.0);
+        let mut zoom = |ui: &mut Ui, label: &str, shortcut: &str, request: ViewRequest| {
+            if item(ui, label, shortcut) {
+                self.pending_views.push(request);
+            }
+        };
+        zoom(ui, "Realtime", "", ViewRequest::RealtimeZoom);
+        zoom(ui, "Previous", "Z P", ViewRequest::Previous);
+        zoom(ui, "Extents", "ZE", ViewRequest::Extents);
+        zoom(ui, "In", "Z 2X", ViewRequest::Magnify(2.0));
+        zoom(ui, "Out", "Z .5X", ViewRequest::Magnify(0.5));
+        if !during_command {
+            ui.separator();
+            for (label, option) in [("Window", "W"), ("Object", "O"), ("Center", "C")] {
+                if item(ui, label, &format!("Z {option}")) {
+                    self.run("ZOOM");
+                    self.type_command(option);
+                }
+            }
         }
     }
 }

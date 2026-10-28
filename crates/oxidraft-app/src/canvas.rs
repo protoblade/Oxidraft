@@ -6,7 +6,7 @@ use eframe::egui::{
     self, Align2, Color32, CursorIcon, Event, FontId, MouseWheelSource, MouseWheelUnit, Painter, PointerButton, Pos2,
     Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2,
 };
-use oxidraft_commands::Tracked;
+use oxidraft_commands::{Tracked, ViewRequest};
 use oxidraft_geom::{Aabb, Point, curve::Seg};
 use oxidraft_model::{
     Geometry, HatchPattern, Lineweight,
@@ -15,7 +15,12 @@ use oxidraft_model::{
     snap::{self, Snap, SnapKind},
 };
 
-use crate::{app::OxidraftApp, theme, view::View};
+use crate::{
+    app::OxidraftApp,
+    icons::{self, Icon},
+    theme,
+    view::View,
+};
 
 /// AutoSnap aperture and pickbox radius, in screen points.
 pub const APERTURE: f32 = 10.0;
@@ -50,30 +55,41 @@ impl OxidraftApp {
         self.canvas_rect = rect;
         let painter = ui.painter_at(rect);
 
-        if self.zoom_extents_pending || self.zoom_window.is_some() {
+        // A newly opened drawing fits the view, with no earlier view to go back to.
+        if self.zoom_extents_pending {
             self.zoom_extents_pending = false;
-            match self.zoom_window.take().or_else(|| self.doc.extents()) {
-                Some(b) => {
-                    // Keep the drawing clear of the viewport label and the command line.
-                    let fit = Rect::from_min_max(rect.min + vec2(24.0, 36.0), rect.max - vec2(24.0, 120.0));
-                    self.view.zoom_extents(rect, fit, b);
-                }
+            match self.doc.extents() {
+                Some(b) => self.view.zoom_extents(rect, fit_area(rect), b),
                 None => self.view = View::default(),
             }
         }
+        let requests: Vec<ViewRequest> = self.pending_views.drain(..).chain(self.engine.take_view_requests()).collect();
+        for r in requests {
+            self.apply_view(r, rect);
+        }
         self.navigate(ui, &response, rect);
+        // VIEWSIZE and VIEWCTR, for ZOOM Center's default.
+        self.engine.vars.view_size = f64::from(rect.height()) / self.view.scale;
+        self.engine.vars.view_center = self.view.center;
 
         // While dragging a grip the pointer may leave the hover state; keep tracking it.
         let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos());
         let cursor = pointer.map(|screen| self.resolve_cursor(rect, screen));
         self.cursor = cursor.as_ref().map(|c| c.point);
-        self.handle_clicks(ui, &response, cursor.as_ref());
-        // Right-click opens the shortcut menu (Enter, options, editing…). This
-        // runs every frame: once open, the pointer is over the menu, not here.
-        if response.secondary_clicked() {
-            self.engine.cancel_window();
+        // Real-time pan and zoom own the mouse; right-click ends them.
+        if self.realtime.is_some() {
+            if response.secondary_clicked() {
+                self.realtime = None;
+            }
+        } else {
+            self.handle_clicks(ui, &response, cursor.as_ref());
+            // Right-click opens the shortcut menu (Enter, options, editing…). This
+            // runs every frame: once open, the pointer is over the menu, not here.
+            if response.secondary_clicked() {
+                self.engine.cancel_window();
+            }
+            response.context_menu(|ui| self.shortcut_menu(ui));
         }
-        response.context_menu(|ui| self.shortcut_menu(ui));
 
         if self.grid {
             self.draw_grid(&painter, rect);
@@ -87,18 +103,24 @@ impl OxidraftApp {
         }
         self.draw_grips(&painter, rect, cursor.as_ref());
         if let Some(c) = &cursor {
-            self.draw_window(&painter, rect, c);
-            self.draw_tracking(&painter, rect, c);
-            if let Some(s) = c.snap {
-                draw_snap_marker(&painter, self.view.to_screen(rect, s.point), s.kind);
+            let dragging = response.dragged_by(PointerButton::Primary);
+            let icon = match self.realtime {
+                Some(ViewRequest::RealtimeZoom) => CursorIcon::ZoomIn,
+                Some(_) if dragging => CursorIcon::Grabbing,
+                Some(_) => CursorIcon::Grab,
+                None if response.dragged_by(PointerButton::Middle) => CursorIcon::Grabbing,
+                None => CursorIcon::None,
+            };
+            if self.realtime.is_none() {
+                self.draw_window(&painter, rect, c);
+                self.draw_tracking(&painter, rect, c);
+                if let Some(s) = c.snap {
+                    draw_snap_marker(&painter, self.view.to_screen(rect, s.point), s.kind);
+                }
+                self.draw_cursor(&painter, rect, c);
+                self.draw_tooltips(&painter, rect, c);
             }
-            self.draw_cursor(&painter, rect, c);
-            self.draw_tooltips(&painter, rect, c);
-            ui.ctx().set_cursor_icon(if response.dragged_by(PointerButton::Middle) {
-                CursorIcon::Grabbing
-            } else {
-                CursorIcon::None
-            });
+            ui.ctx().set_cursor_icon(icon);
         }
         painter.text(
             rect.left_top() + vec2(8.0, 6.0),
@@ -107,6 +129,31 @@ impl OxidraftApp {
             FontId::proportional(12.0),
             theme::TEXT_DIM,
         );
+        self.navigation_bar(ui, rect);
+    }
+
+    /// AutoCAD's navigation bar at the right edge of the drawing: Pan, and
+    /// Zoom with its options.
+    fn navigation_bar(&mut self, ui: &Ui, rect: Rect) {
+        let frame = egui::Frame::NONE
+            .fill(theme::RIBBON.gamma_multiply(0.9))
+            .corner_radius(3)
+            .inner_margin(egui::Margin::same(3));
+        egui::Area::new(egui::Id::unique("navigation_bar"))
+            .fixed_pos(rect.right_top() + vec2(-40.0, 34.0))
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                frame.show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    let panning = self.realtime == Some(ViewRequest::RealtimePan);
+                    if nav_button(ui, Icon::Pan, panning, "Pan (P)").clicked() {
+                        self.realtime = if panning { None } else { Some(ViewRequest::RealtimePan) };
+                    }
+                    let zoom = nav_button(ui, Icon::Zoom, false, "Zoom");
+                    let during_command = self.engine.is_active();
+                    egui::Popup::menu(&zoom).show(|ui| self.zoom_items(ui, during_command));
+                });
+            });
     }
 
     /// True when clicks pick objects (selection sets or single-object prompts)
@@ -119,14 +166,28 @@ impl OxidraftApp {
     /// pans with two fingers and zooms with a pinch. Middle drag pans,
     /// double-clicking the middle button zooms to extents.
     fn navigate(&mut self, ui: &Ui, response: &Response, rect: Rect) {
+        let before = self.view;
         if response.double_clicked_by(PointerButton::Middle) {
-            self.zoom_extents_pending = true;
+            self.pending_views.push(ViewRequest::Extents);
         }
         if response.dragged_by(PointerButton::Middle) {
             let d = response.drag_delta();
             self.view.pan(d.x, d.y);
         }
+        // Real-time PAN drags the drawing along; real-time ZOOM zooms in as
+        // you drag up and out as you drag down, about the view's center.
+        if let Some(mode) = self.realtime
+            && response.dragged_by(PointerButton::Primary)
+        {
+            let d = response.drag_delta();
+            match mode {
+                ViewRequest::RealtimeZoom => self.view.zoom_at(rect, rect.center(), f64::from((-d.y / 150.0).exp())),
+                _ => self.view.pan(d.x, d.y),
+            }
+        }
+        self.remember_gesture(ui, before);
         let Some(hover) = response.hover_pos() else { return };
+        let before = self.view;
         let events = ui.input(|i| i.events.clone());
         for e in events {
             match e {
@@ -149,6 +210,66 @@ impl OxidraftApp {
                 _ => {}
             }
         }
+        self.remember_gesture(ui, before);
+    }
+
+    /// A run of wheel, pinch and drag moves is one step for ZOOM Previous:
+    /// the view before it is remembered once the view has been still for a second.
+    fn remember_gesture(&mut self, ui: &Ui, before: View) {
+        if self.view == before {
+            return;
+        }
+        let now = ui.input(|i| i.time);
+        if now - self.last_gesture > 1.0 {
+            self.remember_view(before);
+        }
+        self.last_gesture = now;
+    }
+
+    /// Keeps a view for ZOOM Previous (the last 25, as AutoCAD keeps 10).
+    pub(crate) fn remember_view(&mut self, v: View) {
+        if self.view_history.last() != Some(&v) {
+            self.view_history.push(v);
+            if self.view_history.len() > 25 {
+                self.view_history.remove(0);
+            }
+        }
+    }
+
+    /// Carries out a ZOOM option, a PAN, or a menu's zoom.
+    fn apply_view(&mut self, request: ViewRequest, rect: Rect) {
+        let before = self.view;
+        match request {
+            ViewRequest::Extents => match self.doc.extents() {
+                Some(b) => self.view.zoom_extents(rect, fit_area(rect), b),
+                None => self.view = View::default(),
+            },
+            ViewRequest::Window(b) => self.view.zoom_extents(rect, fit_area(rect), b),
+            ViewRequest::Previous => {
+                match self.view_history.pop() {
+                    Some(v) => self.view = v,
+                    None => self.engine.log("No previous view saved."),
+                }
+                return;
+            }
+            ViewRequest::Magnify(f) => self.view.zoom_at(rect, rect.center(), f),
+            ViewRequest::OfExtents(f) => {
+                let mut fitted = self.view;
+                if let Some(b) = self.doc.extents() {
+                    fitted.zoom_extents(rect, fit_area(rect), b);
+                }
+                self.view.scale = (fitted.scale * f).clamp(1e-6, 1e9);
+            }
+            ViewRequest::Center { center, height } => {
+                self.view.center = center;
+                self.view.scale = (f64::from(rect.height()) / height.max(1e-9)).clamp(1e-6, 1e9);
+            }
+            ViewRequest::RealtimeZoom | ViewRequest::RealtimePan => {
+                self.realtime = Some(request);
+                return;
+            }
+        }
+        self.remember_view(before);
     }
 
     fn resolve_cursor(&self, rect: Rect, screen: Pos2) -> CursorState {
@@ -568,6 +689,24 @@ impl OxidraftApp {
 }
 
 /// Cheap bounding-box test to skip drawing objects outside the view.
+/// A square icon button for the navigation bar, highlighted while `on`.
+fn nav_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
+    if on {
+        ui.painter().rect_filled(rect, 2.0, theme::ACCENT.gamma_multiply(0.35));
+    } else if response.hovered() {
+        ui.painter().rect_filled(rect, 2.0, theme::RIBBON_HOVER);
+    }
+    icons::paint(ui.painter(), rect.shrink(4.0), icon, theme::TEXT, true);
+    response.on_hover_text(tip)
+}
+
+/// The part of the canvas a zoomed region fills, clear of the viewport
+/// label and the floating command line.
+fn fit_area(rect: Rect) -> Rect {
+    Rect::from_min_max(rect.min + vec2(24.0, 36.0), rect.max - vec2(24.0, 120.0))
+}
+
 fn on_screen(b: &Aabb, view: &Aabb) -> bool {
     b.max.x >= view.min.x && b.min.x <= view.max.x && b.max.y >= view.min.y && b.min.y <= view.max.y
 }

@@ -4,7 +4,7 @@ use eframe::egui::{Pos2, Rect, pos2};
 use oxidraft_geom::{Aabb, Point};
 
 /// Which part of the drawing is on screen. World Y points up, screen Y down.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct View {
     /// World point shown at the center of the canvas.
     pub center: Point,

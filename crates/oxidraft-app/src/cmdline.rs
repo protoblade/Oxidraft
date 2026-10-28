@@ -28,7 +28,7 @@ impl OxidraftApp {
             .show(ctx, |ui| {
                 ui.set_width(width);
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-                self.suggestions(ui);
+                self.suggestions(ui, width);
                 self.history_lines(ui, width);
                 self.input_bar(ui, width);
             });
@@ -81,7 +81,8 @@ impl OxidraftApp {
         }
     }
 
-    fn suggestions(&mut self, ui: &mut egui::Ui) {
+    /// AutoComplete: matching commands in a list as wide as the command line.
+    fn suggestions(&mut self, ui: &mut egui::Ui, width: f32) {
         if self.engine.is_active() {
             return;
         }
@@ -95,9 +96,9 @@ impl OxidraftApp {
             .stroke(Stroke::new(1.0, theme::TOOLTIP_EDGE))
             .inner_margin(Margin::same(3))
             .show(ui, |ui| {
-                ui.set_width(280.0);
+                ui.set_width(width - 6.0);
                 for (i, c) in list.iter().enumerate() {
-                    let (rect, response) = ui.allocate_exact_size(vec2(274.0, 22.0), Sense::click());
+                    let (rect, response) = ui.allocate_exact_size(vec2(width - 6.0, 22.0), Sense::click());
                     if i == self.suggestion || response.hovered() {
                         ui.painter().rect_filled(rect, 2.0, theme::ACCENT.gamma_multiply(0.35));
                     }
