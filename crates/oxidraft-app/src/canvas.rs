@@ -7,9 +7,9 @@ use eframe::egui::{
     Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2,
 };
 use oxidraft_commands::{Tracked, ViewRequest};
-use oxidraft_geom::{Aabb, Point, curve::Seg};
+use oxidraft_geom::{Aabb, Point, curve::Seg, intersect::clip_segment};
 use oxidraft_model::{
-    Geometry, HatchPattern, Lineweight,
+    Geometry, HatchPattern, Lineweight, Vertex,
     annotation::text_box,
     hatch, linetype,
     snap::{self, Snap, SnapKind},
@@ -413,8 +413,7 @@ impl OxidraftApp {
             }
             _ => Vec::new(),
         };
-        let view =
-            Aabb::from_points(self.view.to_world(rect, rect.left_bottom()), self.view.to_world(rect, rect.right_top()));
+        let view = self.world_rect(rect);
         // Dash patterns in screen pixels by linetype name, looked up once a frame.
         let mut patterns: HashMap<String, Option<Vec<f64>>> = HashMap::new();
         let px_per_unit = self.doc.ltscale() * self.view.scale;
@@ -453,7 +452,9 @@ impl OxidraftApp {
     /// Draws a curve with a dash pattern given in screen pixels; text,
     /// fills and continuous curves draw as usual.
     fn draw_dashed(&self, painter: &Painter, rect: Rect, g: &Geometry, stroke: Stroke, pattern: Option<&[f64]>) {
-        let Some(pattern) = pattern.filter(|_| !g.segments().is_empty()) else {
+        let wide = matches!(g, Geometry::Polyline { vertices, .. }
+            if vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0));
+        let Some(pattern) = pattern.filter(|_| !wide && !g.segments().is_empty()) else {
             return self.draw_geometry(painter, rect, g, stroke);
         };
         let path: Vec<Point> =
@@ -468,9 +469,22 @@ impl OxidraftApp {
         }
     }
 
+    /// The part of the drawing the canvas shows.
+    fn world_rect(&self, rect: Rect) -> Aabb {
+        Aabb::from_points(self.view.to_world(rect, rect.left_bottom()), self.view.to_world(rect, rect.right_top()))
+    }
+
     /// A curve's lines and arcs as one screen polyline, with arcs split
-    /// finely enough to look smooth at the current zoom.
+    /// finely enough to look smooth at the current zoom. Construction lines
+    /// and rays are cut to the view.
     fn screen_path(&self, rect: Rect, g: &Geometry) -> Vec<Pos2> {
+        if g.is_infinite() {
+            let Some(Seg::Line(s)) = g.segments().first().copied() else { return Vec::new() };
+            let view = self.world_rect(rect.expand(4.0));
+            return clip_segment(s, &view)
+                .map(|c| vec![self.view.to_screen(rect, c.start), self.view.to_screen(rect, c.end)])
+                .unwrap_or_default();
+        }
         let mut points: Vec<Pos2> = Vec::new();
         for seg in g.segments() {
             let steps = match seg {
@@ -504,12 +518,59 @@ impl OxidraftApp {
             Geometry::Point { position } => return self.draw_point(painter, rect, *position, stroke),
             Geometry::Text { .. } => return self.draw_text(painter, rect, g, stroke),
             Geometry::Hatch { .. } => return self.draw_hatch(painter, rect, g, stroke),
+            Geometry::Polyline { vertices, closed }
+                if vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0) =>
+            {
+                return self.draw_wide(painter, rect, vertices, *closed, stroke);
+            }
             _ => {}
         }
         let points = self.screen_path(rect, g);
         if points.len() >= 2 {
             painter.add(Shape::line(points, stroke));
         }
+    }
+
+    /// A wide or tapered polyline, filled (AutoCAD's FILLMODE on). One width
+    /// throughout strokes the whole path, with mitered corners; tapers fill
+    /// each segment on its own. A thicker stroke (selection, rollover)
+    /// widens it by the extra pixels.
+    fn draw_wide(&self, painter: &Painter, rect: Rect, vertices: &[Vertex], closed: bool, stroke: Stroke) {
+        let extra = (stroke.width - 1.0).max(0.0);
+        let g = Geometry::Polyline { vertices: vertices.to_vec(), closed };
+        if let Some(w) = oxidraft_model::constant_width(vertices) {
+            let mut path = self.screen_path(rect, &g);
+            if closed && path.len() > 2 && path[0].distance(path[path.len() - 1]) < 0.01 {
+                path.pop();
+            }
+            let width = ((w * self.view.scale) as f32 + extra).max(stroke.width);
+            let stroke = Stroke::new(width, stroke.color);
+            painter.add(if closed { Shape::closed_line(path, stroke) } else { Shape::line(path, stroke) });
+            return;
+        }
+        let mut mesh = egui::Mesh::default();
+        for (seg, v) in g.segments().iter().zip(vertices) {
+            let steps = match seg {
+                Seg::Line(_) => 1,
+                Seg::Arc(a) => ((a.length() * self.view.scale / 4.0).clamp(4.0, 720.0)) as usize,
+            };
+            let first = mesh.vertices.len() as u32;
+            for i in 0..=steps {
+                let t = i as f64 / steps as f64;
+                let half = (v.start_width + (v.end_width - v.start_width) * t) / 2.0;
+                let half = half.max(0.5 / self.view.scale) + f64::from(extra) / 2.0 / self.view.scale;
+                let (p, d) = (seg.point_at(t), seg.tangent_at(t));
+                let n = Point::new(-d.y, d.x) * half;
+                mesh.colored_vertex(self.view.to_screen(rect, p + n), stroke.color);
+                mesh.colored_vertex(self.view.to_screen(rect, p - n), stroke.color);
+            }
+            for i in 0..steps as u32 {
+                let k = first + 2 * i;
+                mesh.add_triangle(k, k + 1, k + 2);
+                mesh.add_triangle(k + 1, k + 3, k + 2);
+            }
+        }
+        painter.add(Shape::mesh(mesh));
     }
 
     /// A point in the PDMODE style and PDSIZE size: by default a dot, and

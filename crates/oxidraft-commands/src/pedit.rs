@@ -1,6 +1,6 @@
-//! PEDIT: edits polylines. Close or open them, join objects to them,
-//! straighten their arcs or reverse them; lines and arcs can be turned into
-//! polylines first.
+//! PEDIT: edits polylines. Close or open them, join objects to them, set
+//! their width, straighten their arcs or reverse them; lines and arcs can
+//! be turned into polylines first.
 
 use oxidraft_model::{EntityId, Geometry, snap};
 
@@ -9,9 +9,9 @@ use crate::{
     break_join::{JOIN_TOL, Piece, ends, grow_chain, reversed},
 };
 
-const OPEN_OPTIONS: &[&str] = &["Close", "Join", "Decurve", "Reverse"];
-const CLOSED_OPTIONS: &[&str] = &["Open", "Join", "Decurve", "Reverse"];
-const MULTIPLE_OPTIONS: &[&str] = &["Close", "Open", "Join", "Decurve", "Reverse"];
+const OPEN_OPTIONS: &[&str] = &["Close", "Join", "Width", "Decurve", "Reverse"];
+const CLOSED_OPTIONS: &[&str] = &["Open", "Join", "Width", "Decurve", "Reverse"];
+const MULTIPLE_OPTIONS: &[&str] = &["Close", "Open", "Join", "Width", "Decurve", "Reverse"];
 
 #[derive(Clone, Copy, PartialEq)]
 enum Stage {
@@ -24,10 +24,11 @@ enum Stage {
     Options,
     Join,
     Fuzz,
+    Width,
 }
 
-/// PEDIT, with Close/Open, Join, Decurve and Reverse, for one polyline or
-/// several (Multiple).
+/// PEDIT, with Close/Open, Join, Width, Decurve and Reverse, for one
+/// polyline or several (Multiple).
 pub struct Pedit {
     stage: Stage,
     ids: Vec<EntityId>,
@@ -91,13 +92,15 @@ impl Pedit {
                 self.closed = false;
             }
             "Decurve" => self.each(ctx, |vertices, closed| Geometry::Polyline {
-                vertices: vertices.into_iter().map(|v| oxidraft_model::Vertex::at(v.point)).collect(),
+                vertices: vertices.into_iter().map(|v| oxidraft_model::Vertex { bulge: 0.0, ..v }).collect(),
                 closed,
             }),
             "Reverse" => self.each(ctx, |vertices, closed| {
+                let width = oxidraft_model::constant_width(&vertices).unwrap_or(0.0);
                 let segs = Geometry::Polyline { vertices, closed }.segments();
-                Geometry::polyline_from_segs(&reversed(&segs), closed)
+                Geometry::polyline_from_segs(&reversed(&segs), closed).with_width(width)
             }),
+            "Width" => self.stage = Stage::Width,
             "Join" if self.multiple => self.stage = Stage::Fuzz,
             "Join" if self.closed => return Err("The polyline is closed; Open it to join objects to it.".into()),
             "Join" => self.stage = Stage::Join,
@@ -166,6 +169,7 @@ impl Command for Pedit {
                 Prompt::new("Enter an option").with_keywords(keywords).with_default("eXit")
             }
             Stage::Fuzz => Prompt::new("Enter fuzz distance").with_default("0.0000"),
+            Stage::Width => Prompt::new("Specify new width for all segments"),
         }
     }
 
@@ -247,6 +251,12 @@ impl Command for Pedit {
                 self.options()
             }
             (Stage::Fuzz, _) => Err("Requires a distance of 0 or more.".into()),
+            (Stage::Width, Input::Value(w)) if w >= 0.0 => {
+                self.each(ctx, |vertices, closed| Geometry::Polyline { vertices, closed }.with_width(w));
+                self.options()
+            }
+            (Stage::Width, Input::Enter) => self.options(),
+            (Stage::Width, _) => Err("Requires a width of 0 or more.".into()),
             (_, Input::Enter) => Ok(Step::Done),
             (Stage::Select, _) => Err("Select a polyline, or type M for Multiple.".into()),
             (Stage::Options, _) => Err("Choose an option, or press Enter to exit.".into()),

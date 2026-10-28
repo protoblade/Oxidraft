@@ -26,6 +26,9 @@ pub struct OxidraftApp {
     pub(crate) show_lineweights: bool,
     pub(crate) command_text: String,
     pub(crate) path: Option<PathBuf>,
+    /// The DWG version the drawing was opened from, which saving keeps
+    /// (`None` for DXF and new drawings).
+    pub(crate) dwg_version: Option<oxidraft_io_dwg::Version>,
     /// Document revision at the last save/open, for the `*` unsaved marker.
     pub(crate) saved_revision: u64,
     pub(crate) zoom_extents_pending: bool,
@@ -35,6 +38,10 @@ pub struct OxidraftApp {
     /// The Quick Select dialog's choices while it's open.
     pub(crate) quick_select: Option<QuickSelect>,
     pub(crate) attribute_editor: Option<crate::attedit::AttributeEditor>,
+    /// The Plot dialog while it's open.
+    pub(crate) plot: Option<crate::plot::PlotDialog>,
+    /// The last plot's settings, which the next one starts from.
+    pub(crate) plot_settings: oxidraft_plot::PlotSettings,
     /// The DXF text last copied here, for PASTECLIP when the system clipboard can't be read.
     pub(crate) clipboard: Option<String>,
     /// Earlier views, for ZOOM Previous.
@@ -98,11 +105,17 @@ impl OxidraftApp {
             show_lineweights: false,
             command_text: String::new(),
             path: None,
+            dwg_version: None,
             saved_revision: 0,
             zoom_extents_pending: false,
             pending_views: Vec::new(),
             quick_select: None,
             attribute_editor: None,
+            plot: None,
+            plot_settings: oxidraft_plot::PlotSettings {
+                area: oxidraft_plot::PlotArea::Display(oxidraft_geom::Aabb::from_points(Point::ORIGIN, Point::ORIGIN)),
+                ..Default::default()
+            },
             clipboard: None,
             view_history: Vec::new(),
             realtime: None,
@@ -195,25 +208,42 @@ impl OxidraftApp {
         self.doc = Document::new();
         self.saved_revision = 0;
         self.path = None;
+        self.dwg_version = None;
         self.view = View::default();
     }
 
     pub(crate) fn open_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new().add_filter("DXF drawing", &["dxf"]).pick_file() {
+        let dialog = rfd::FileDialog::new()
+            .add_filter("Drawing (DWG, DXF)", &["dwg", "dxf"])
+            .add_filter("AutoCAD drawing", &["dwg"])
+            .add_filter("DXF drawing", &["dxf"]);
+        if let Some(path) = dialog.pick_file() {
             self.open_path(path);
         }
     }
 
+    /// Opens a DWG or DXF file (by its extension).
     pub fn open_path(&mut self, path: PathBuf) {
-        match oxidraft_io_dxf::load_file(&path) {
-            Ok(imported) => {
+        let dwg = oxidraft_io_dwg::is_dwg(&path);
+        let loaded = if dwg {
+            oxidraft_io_dwg::load_file(&path).map(|o| (o.imported, Some(o.version)))
+        } else {
+            oxidraft_io_dxf::load_file(&path).map(|i| (i, None)).map_err(|e| e.to_string())
+        };
+        match loaded {
+            Ok((imported, version)) => {
                 self.set_document(imported.document);
-                let mut msg = format!("Opened {} ({} objects)", path.display(), self.doc.len());
+                let mut msg = format!("Opened {} ({} objects", path.display(), self.doc.len());
+                if let Some(v) = version {
+                    msg.push_str(&format!(", {} DWG", v.name()));
+                }
+                msg.push(')');
                 if imported.skipped > 0 {
                     msg.push_str(&format!(", skipped {} unsupported objects", imported.skipped));
                 }
                 self.engine.log(msg);
                 self.path = Some(path);
+                self.dwg_version = version;
             }
             Err(e) => self.engine.log(format!("Could not open {}: {e}", path.display())),
         }
@@ -224,17 +254,31 @@ impl OxidraftApp {
         let path = match (&self.path, save_as) {
             (Some(p), false) => p.clone(),
             _ => {
-                let dialog = rfd::FileDialog::new().add_filter("DXF drawing", &["dxf"]).set_file_name(self.file_name());
+                // The current format comes first.
+                let (dxf, dwg) = (("DXF drawing", ["dxf"]), ("AutoCAD drawing", ["dwg"]));
+                let [first, second] = if self.dwg_version.is_some() { [dwg, dxf] } else { [dxf, dwg] };
+                let dialog = rfd::FileDialog::new()
+                    .add_filter(first.0, &first.1)
+                    .add_filter(second.0, &second.1)
+                    .set_file_name(self.file_name());
                 match dialog.save_file() {
                     Some(p) => p,
                     None => return,
                 }
             }
         };
-        match oxidraft_io_dxf::save_file(&self.doc, &path) {
-            Ok(()) => {
-                self.engine.log(format!("Saved {}", path.display()));
+        let saved = if oxidraft_io_dwg::is_dwg(&path) {
+            let version = self.dwg_version.unwrap_or_default();
+            oxidraft_io_dwg::save_file(&self.doc, &path, version).map(|()| Some(version))
+        } else {
+            oxidraft_io_dxf::save_file(&self.doc, &path).map(|()| None).map_err(|e| e.to_string())
+        };
+        match saved {
+            Ok(version) => {
+                let format = version.map_or(String::new(), |v| format!(" as {} DWG", v.name()));
+                self.engine.log(format!("Saved {}{format}", path.display()));
                 self.path = Some(path);
+                self.dwg_version = version;
                 self.saved_revision = self.doc.revision();
             }
             Err(e) => self.engine.log(format!("Could not save {}: {e}", path.display())),
@@ -262,6 +306,8 @@ impl OxidraftApp {
             "OPEN" => self.open_dialog(),
             "NEW" => self.new_drawing(),
             "LAYER" | "LA" => self.layer_manager_open = true,
+            "PLOT" | "PRINT" => self.open_plot(false),
+            "PREVIEW" | "PRE" => self.open_plot(true),
             "QSELECT" => self.open_quick_select(),
             "PROPERTIES" | "PR" | "PROPS" | "MO" | "CH" => self.properties_open = true,
             _ => return false,
@@ -298,6 +344,14 @@ impl OxidraftApp {
                     self.edit_attributes(id);
                 }
                 UiRequest::TextWindow => self.history_expanded = true,
+                UiRequest::PlotWindow(window) => {
+                    if let Some(d) = &mut self.plot {
+                        if let Some(w) = window {
+                            d.settings.area = oxidraft_plot::PlotArea::Window(w);
+                        }
+                        d.picking = false;
+                    }
+                }
             }
         }
         !requests.is_empty()
@@ -321,6 +375,14 @@ impl OxidraftApp {
         let none = Modifiers::NONE;
         if ctx.input_mut(|i| i.consume_key(cmd, Key::Num1)) {
             self.properties_open = !self.properties_open;
+        }
+        // The Plot dialog and its preview keep Esc and Enter to themselves.
+        if self.plot_keys(ctx) {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(cmd, Key::P)) {
+            self.open_plot(false);
+            return;
         }
         if self.editing_field(ctx) {
             return;
@@ -444,6 +506,7 @@ impl eframe::App for OxidraftApp {
         self.layer_manager(&ctx);
         self.quick_select_dialog(&ctx);
         self.attribute_editor(&ctx);
+        self.plot_dialog(&ctx);
         self.update_window(&ctx);
         self.command_line(&ctx);
         self.publish_copied(&ctx);

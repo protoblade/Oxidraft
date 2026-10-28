@@ -6,11 +6,13 @@ use crate::{
     annotate::MText, annotate::SingleText, arc::Arc, array::Array, array::ArrayKind, attribute::AttDisp,
     attribute::EattEdit, block::DefineBlock, block::InsertBlock, break_join::Break, break_join::Join, chamfer::Chamfer,
     circle::Circle, clipboard::CopyClip, clipboard::Paste, dims::DimAngular, dims::DimChain, dims::DimRadial,
-    erase::Erase, explode::Explode, fillet::Fillet, grip::GripStretch, hatch::Hatch, inquiry::Area, inquiry::Dist,
-    inquiry::Id, inquiry::Ltscale, layer::LayIso, layer::LayMcur, layer::LayerPick, lengthen::Lengthen, line::Line,
-    list::List, matchprop::MatchProp, mirror::Mirror, move_copy::MoveCopy, offset::Offset, parse_input, pedit::Pedit,
-    pline::Pline, point::Marks, point::PointCmd, point::PointStyle, rectang::Rectang, rotate::Rotate, scale::Scale,
-    select::SelectSimilar, stretch::Stretch, trim_extend::TrimExtend, zoom::Zoom,
+    donut::Donut, ellipse::EllipseCmd, erase::Erase, explode::Explode, fillet::Fillet, grip::GripStretch, hatch::Hatch,
+    inquiry::Area, inquiry::Dist, inquiry::Id, inquiry::Ltscale, layer::LayIso, layer::LayMcur, layer::LayerPick,
+    lengthen::Lengthen, line::Line, list::List, matchprop::MatchProp, mirror::Mirror, move_copy::MoveCopy,
+    offset::Offset, parse_input, pedit::Pedit, pline::Pline, plot::PlotWindow, point::Marks, point::PointCmd,
+    point::PointStyle, polygon::Polygon, rectang::Rectang, revcloud::RevCloud, rotate::Rotate, scale::Scale,
+    select::SelectSimilar, spline::SplineCmd, stretch::Stretch, trim_extend::TrimExtend, xline::ConstructionLine,
+    zoom::Zoom,
 };
 
 /// A command the user can type, with its aliases.
@@ -53,6 +55,48 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["REC", "RECTANGLE"],
         description: "Draw a rectangular polyline",
         make: Some(|| Box::new(Rectang::default())),
+    },
+    CommandInfo {
+        name: "POLYGON",
+        aliases: &["POL"],
+        description: "Draw a regular polygon as a closed polyline",
+        make: Some(|| Box::new(Polygon::default())),
+    },
+    CommandInfo {
+        name: "ELLIPSE",
+        aliases: &["EL"],
+        description: "Draw an ellipse or elliptical arc",
+        make: Some(|| Box::new(EllipseCmd::full())),
+    },
+    CommandInfo {
+        name: "SPLINE",
+        aliases: &["SPL"],
+        description: "Draw a smooth curve through or near points",
+        make: Some(|| Box::new(SplineCmd::default())),
+    },
+    CommandInfo {
+        name: "XLINE",
+        aliases: &["XL"],
+        description: "Draw a construction line, infinite both ways",
+        make: Some(|| Box::new(ConstructionLine::xline())),
+    },
+    CommandInfo {
+        name: "RAY",
+        aliases: &[],
+        description: "Draw a ray, infinite one way",
+        make: Some(|| Box::new(ConstructionLine::ray())),
+    },
+    CommandInfo {
+        name: "DONUT",
+        aliases: &["DO", "DOUGHNUT"],
+        description: "Draw filled rings and dots",
+        make: Some(|| Box::new(Donut::default())),
+    },
+    CommandInfo {
+        name: "REVCLOUD",
+        aliases: &[],
+        description: "Draw a revision cloud",
+        make: Some(|| Box::new(RevCloud::default())),
     },
     CommandInfo {
         name: "MOVE",
@@ -422,6 +466,8 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     // Handled by the app, which owns the windows and palettes.
     CommandInfo { name: "LAYER", aliases: &["LA"], description: "Open the Layer Properties Manager", make: None },
+    CommandInfo { name: "PLOT", aliases: &["PRINT"], description: "Plot the drawing to a PDF file", make: None },
+    CommandInfo { name: "PREVIEW", aliases: &["PRE"], description: "Show how the drawing will plot", make: None },
     CommandInfo {
         name: "PROPERTIES",
         aliases: &["PR", "PROPS", "MO", "CH"],
@@ -536,6 +582,16 @@ impl Engine {
     }
 
     /// PASTECLIP (or PASTEORIG, at the copied place) with a clipboard drawing.
+    /// The Plot dialog's Window< button: asks for the window's corners,
+    /// then hands it back as [`UiRequest::PlotWindow`].
+    pub fn pick_plot_window(&mut self, doc: &mut Document) {
+        if self.active.is_some() {
+            self.cancel(doc);
+        }
+        let info = find("PLOT").expect("PLOT is a command");
+        self.launch(info, Box::new(PlotWindow::default()), doc, Point::ORIGIN, 0.0);
+    }
+
     pub fn paste(&mut self, clip: Document, original: bool, doc: &mut Document) {
         if self.active.is_some() {
             self.cancel(doc);
@@ -1901,6 +1957,165 @@ mod tests {
     }
 
     #[test]
+    fn ellipse_by_axis_center_rotation_and_arc() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["el", "0,0", "10,0", "2"]);
+        let Geometry::Ellipse(el) = only(&d) else { panic!() };
+        assert!(el.center.approx_eq(Point::new(5.0, 0.0)) && (el.a() - 5.0).abs() < 1e-9);
+        assert!((el.ratio - 0.4).abs() < 1e-9 && el.is_full());
+        // From the center; the second axis is longer, so it's the major one.
+        let mut d = Document::new();
+        type_all(&mut e, &mut d, &["el", "c", "0,0", "2,0", "0,6"]);
+        let Geometry::Ellipse(el) = only(&d) else { panic!() };
+        assert!(el.major.approx_eq(Point::new(0.0, 6.0)) && (el.ratio - 1.0 / 3.0).abs() < 1e-9);
+        // A circle turned 60° round its axis looks half as tall.
+        let mut d = Document::new();
+        type_all(&mut e, &mut d, &["el", "0,0", "8,0", "r", "60"]);
+        let Geometry::Ellipse(el) = only(&d) else { panic!() };
+        assert!((el.ratio - 0.5).abs() < 1e-9);
+        // An elliptical arc: the upper half.
+        let mut d = Document::new();
+        type_all(&mut e, &mut d, &["el", "a", "-4,0", "4,0", "2", "0", "180"]);
+        let Geometry::Ellipse(el) = only(&d) else { panic!() };
+        assert!(!el.is_full() && el.point_at(el.start + el.sweep() / 2.0).approx_eq(Point::new(0.0, 2.0)));
+    }
+
+    #[test]
+    fn trimming_an_ellipse_and_a_construction_line() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["el", "c", "0,0", "10,0", "5", "xl", "0,0", "0,10", ""]);
+        assert!(d.extents().is_some_and(|b| b.max.y < 6.0), "construction lines don't count in the extents");
+        type_all(&mut e, &mut d, &["tr"]);
+        click(&mut e, &mut d, -10.0, 0.0);
+        click(&mut e, &mut d, 0.0, 20.0);
+        type_all(&mut e, &mut d, &[""]);
+        let mut ellipse = None;
+        let mut ray = None;
+        for x in d.entities() {
+            match &x.geometry {
+                Geometry::Ellipse(el) => ellipse = Some(*el),
+                Geometry::Ray { base, direction } => ray = Some((*base, *direction)),
+                g => panic!("unexpected {g:?}"),
+            }
+        }
+        // The left half is gone; the ends sit where the line crossed.
+        let el = ellipse.expect("an elliptical arc");
+        assert!(!el.is_full() && el.covers(0.0) && !el.covers(180.0));
+        assert!(el.start_point().distance(Point::new(0.0, -5.0)) < 1e-5);
+        assert!(el.end_point().distance(Point::new(0.0, 5.0)) < 1e-5);
+        // Trimming the line above the arc leaves a ray running down from it.
+        let (base, direction) = ray.expect("a ray");
+        assert!(base.distance(Point::new(0.0, 5.0)) < 1e-5 && direction.y < 0.0);
+    }
+
+    #[test]
+    fn spline_by_fit_points_and_control_vertices() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["spl", "0,0", "10,5", "20,0", ""]);
+        let Geometry::Spline(s) = only(&d) else { panic!() };
+        assert_eq!(s.fit().len(), 3);
+        assert!(s.start_point().approx_eq(Point::ORIGIN) && s.end_point().approx_eq(Point::new(20.0, 0.0)));
+        // The CV method, closed; the method is remembered.
+        let mut d = Document::new();
+        type_all(&mut e, &mut d, &["spl", "m", "cv", "0,0", "10,0", "10,10", "0,10", "c"]);
+        let Geometry::Spline(s) = only(&d) else { panic!() };
+        assert!(s.is_closed() && s.fit().is_empty() && s.grip_points().len() == 4);
+        type_all(&mut e, &mut d, &["spl", ""]);
+        assert!(e.history().iter().any(|l| l.contains("Method=CV")));
+    }
+
+    #[test]
+    fn xline_options_and_rays() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["xl", "h", "0,5", "0,8", ""]);
+        type_all(&mut e, &mut d, &["xl", "b", "0,0", "10,0", "0,10", ""]);
+        type_all(&mut e, &mut d, &["ray", "1,1", "2,1", "1,2", ""]);
+        type_all(&mut e, &mut d, &["xl", "o", "2"]);
+        click(&mut e, &mut d, 30.0, 5.0);
+        type_all(&mut e, &mut d, &["30,6", ""]);
+        let xlines: Vec<(Point, Point)> = d
+            .entities()
+            .filter_map(|x| match x.geometry {
+                Geometry::Xline { base, direction } => Some((base, direction)),
+                _ => None,
+            })
+            .collect();
+        let rays = d.entities().filter(|x| matches!(x.geometry, Geometry::Ray { .. })).count();
+        assert_eq!((xlines.len(), rays), (4, 2));
+        assert!((Point::ORIGIN.angle_to(xlines[2].1) - 45.0).abs() < 1e-9, "bisects the angle");
+        // Offset 2 from the line at y=5, on the side of y=6.
+        let (base, direction) = xlines[3];
+        assert!((base.y - 7.0).abs() < 1e-9 && direction.y.abs() < 1e-9);
+        assert!(d.extents().is_none());
+    }
+
+    #[test]
+    fn polygon_inscribed_circumscribed_and_by_edge() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["pol", "6", "0,0", "i", "10,0"]);
+        let pts = points(&only(&d));
+        assert!(pts.len() == 6 && pts[0].approx_eq(Point::new(10.0, 0.0)));
+        // Circumscribed with a typed radius: the bottom edge is level, 5 below the center.
+        let mut d = Document::new();
+        type_all(&mut e, &mut d, &["pol", "4", "0,0", "c", "5"]);
+        let pts = points(&only(&d));
+        assert!(pts.iter().any(|p| p.approx_eq(Point::new(-5.0, -5.0))));
+        assert!(pts.iter().any(|p| p.approx_eq(Point::new(5.0, -5.0))));
+        // By an edge, on its left; the number of sides is remembered.
+        let mut d = Document::new();
+        type_all(&mut e, &mut d, &["pol", "", "e", "0,0", "4,0"]);
+        let pts = points(&only(&d));
+        assert!(pts.len() == 4 && pts.iter().any(|p| p.approx_eq(Point::new(4.0, 4.0))));
+    }
+
+    #[test]
+    fn donuts_and_wide_polylines() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["do", "2", "4", "10,10", "20,10", ""]);
+        assert_eq!(d.len(), 2);
+        let donut = d.entities().next().unwrap().geometry.clone();
+        let Geometry::Polyline { vertices, closed: true } = &donut else { panic!() };
+        assert_eq!(oxidraft_model::constant_width(vertices), Some(1.0));
+        // Anywhere on the ring picks it, the hole doesn't.
+        assert!(donut.distance_to(Point::new(10.0, 11.9)) < 1e-9 && donut.distance_to(Point::new(10.0, 10.0)) > 0.9);
+
+        // A tapered first segment, then the ending width carries on.
+        let mut d = Document::new();
+        type_all(&mut e, &mut d, &["pl", "0,0", "w", "0", "2", "10,0", "10,10", ""]);
+        let Geometry::Polyline { vertices, .. } = only(&d) else { panic!() };
+        assert_eq!((vertices[0].start_width, vertices[0].end_width), (0.0, 2.0));
+        assert_eq!((vertices[1].start_width, vertices[1].end_width), (2.0, 2.0));
+        type_all(&mut e, &mut d, &["pe"]);
+        click(&mut e, &mut d, 5.0, 0.0);
+        type_all(&mut e, &mut d, &["w", "0.5", ""]);
+        let Geometry::Polyline { vertices, .. } = only(&d) else { panic!() };
+        assert_eq!(oxidraft_model::constant_width(&vertices), Some(0.5));
+        // Moving and scaling keep the width in proportion.
+        let Geometry::Polyline { vertices, .. } = only(&d).scaled(Point::ORIGIN, 2.0) else { panic!() };
+        assert_eq!(oxidraft_model::constant_width(&vertices), Some(1.0));
+    }
+
+    #[test]
+    fn revision_clouds_around_a_rectangle_and_from_an_object() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["revcloud", "a", "2", "0,0", "10,6"]);
+        let cloud = only(&d);
+        let Geometry::Polyline { vertices, closed: true } = &cloud else { panic!() };
+        assert_eq!(vertices.len(), 16, "32 units round at 2 per arc");
+        // Every arc bulges outward.
+        for seg in cloud.segments() {
+            let m = seg.point_at(0.5);
+            assert!(!(m.x > 0.0 && m.x < 10.0 && m.y > 0.0 && m.y < 6.0), "{m:?} is inside");
+        }
+        // A circle becomes a cloud in its place.
+        let mut d = Document::new();
+        type_all(&mut e, &mut d, &["c", "0,0", "5", "revcloud", "o"]);
+        click(&mut e, &mut d, 5.0, 0.0);
+        type_all(&mut e, &mut d, &[""]);
+        assert!(matches!(only(&d), Geometry::Polyline { closed: true, .. }));
+    }
+
+    #[test]
     fn trim_quick_mode_with_undo_and_shift_extend() {
         let (mut e, mut d) = (engine(), Document::new());
         type_all(&mut e, &mut d, &["l", "0,0", "10,0", "", "l", "5,-5", "5,5", "", "l", "0,3", "3,3", ""]);
@@ -2198,7 +2413,7 @@ mod tests {
         let names: Vec<_> = Engine::suggest("co").iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["COPY", "COPYCLIP", "COPYBASE"]);
         let names: Vec<_> = Engine::suggest("s").iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["STRETCH", "SCALE", "SELECTSIMILAR"]);
+        assert_eq!(names, vec!["STRETCH", "SPLINE", "SCALE", "SELECTSIMILAR"]);
     }
 
     #[test]

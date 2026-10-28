@@ -45,6 +45,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "dxfassoc"; Description: "Open .dxf drawings with Oxidraft"; GroupDescription: "File associations:"
+Name: "dwgassoc"; Description: "Open .dwg drawings with Oxidraft"; GroupDescription: "File associations:"; Flags: unchecked
 
 [Files]
 Source: "{#BinDir}\oxidraft.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -57,14 +58,20 @@ Name: "{autoprograms}\Oxidraft"; Filename: "{app}\oxidraft.exe"
 Name: "{autodesktop}\Oxidraft"; Filename: "{app}\oxidraft.exe"; Tasks: desktopicon
 
 [Registry]
-; Always offer Oxidraft in "Open with" for .dxf files.
+; Always offer Oxidraft in "Open with" for .dxf and .dwg files.
 Root: HKA; Subkey: "Software\Classes\Applications\oxidraft.exe\SupportedTypes"; ValueType: string; ValueName: ".dxf"; ValueData: ""; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Applications\oxidraft.exe\SupportedTypes"; ValueType: string; ValueName: ".dwg"; ValueData: ""; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Applications\oxidraft.exe\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\oxidraft.exe"" ""%1"""; Flags: uninsdeletekey
 ; With the task: make Oxidraft the program that opens .dxf files.
 Root: HKA; Subkey: "Software\Classes\.dxf\OpenWithProgids"; ValueType: string; ValueName: "Oxidraft.dxf"; ValueData: ""; Flags: uninsdeletevalue; Tasks: dxfassoc
 Root: HKA; Subkey: "Software\Classes\Oxidraft.dxf"; ValueType: string; ValueName: ""; ValueData: "DXF Drawing"; Flags: uninsdeletekey; Tasks: dxfassoc
 Root: HKA; Subkey: "Software\Classes\Oxidraft.dxf\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\oxidraft.exe,0"; Tasks: dxfassoc
 Root: HKA; Subkey: "Software\Classes\Oxidraft.dxf\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\oxidraft.exe"" ""%1"""; Tasks: dxfassoc
+; Off by default: people with AutoCAD keep it for .dwg.
+Root: HKA; Subkey: "Software\Classes\.dwg\OpenWithProgids"; ValueType: string; ValueName: "Oxidraft.dwg"; ValueData: ""; Flags: uninsdeletevalue; Tasks: dwgassoc
+Root: HKA; Subkey: "Software\Classes\Oxidraft.dwg"; ValueType: string; ValueName: ""; ValueData: "DWG Drawing"; Flags: uninsdeletekey; Tasks: dwgassoc
+Root: HKA; Subkey: "Software\Classes\Oxidraft.dwg\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\oxidraft.exe,0"; Tasks: dwgassoc
+Root: HKA; Subkey: "Software\Classes\Oxidraft.dwg\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\oxidraft.exe"" ""%1"""; Tasks: dwgassoc
 
 [Run]
 Filename: "{app}\oxidraft.exe"; Description: "{cm:LaunchProgram,Oxidraft}"; Flags: nowait postinstall skipifsilent

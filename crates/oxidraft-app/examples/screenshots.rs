@@ -13,7 +13,8 @@ use oxidraft_app::{
 };
 use oxidraft_geom::Point;
 use oxidraft_model::{
-    Attach, Attribute, Block, BlockEntity, Color, Document, Geometry, HatchPattern, Layer, Placement, Vertex,
+    Attach, Attribute, Block, BlockEntity, Color, Document, Ellipse, Geometry, HatchPattern, Layer, Placement, Spline,
+    Vertex,
 };
 
 fn sample() -> Document {
@@ -319,6 +320,50 @@ fn main() {
     click(&mut h, Point::new(51.5, 50.0));
     h.run_steps(2);
     save(&mut h, &dir, "19-attribute-editor");
+
+    // Ellipses, a spline, construction lines, donuts, a tapered polyline,
+    // a polygon and a revision cloud; the ellipse selected.
+    let mut h = harness();
+    let doc = h.state_mut().document_mut();
+    doc.add(Geometry::Ellipse(Ellipse::full(Point::new(30.0, 30.0), Point::new(12.0, 0.0), 0.5)));
+    doc.add(Geometry::Ellipse(Ellipse {
+        center: Point::new(30.0, 30.0),
+        major: Point::new(0.0, 22.0),
+        ratio: 0.6,
+        start: 300.0,
+        end: 60.0,
+    }));
+    let fit = [(62.0, 5.0), (70.0, 18.0), (82.0, 8.0), (97.0, 24.0)].map(|(x, y)| Point::new(x, y));
+    doc.add(Geometry::Spline(Spline::through(&fit, false).expect("a spline")));
+    doc.add(Geometry::Xline { base: Point::ORIGIN, direction: Point::new(3.0, 1.0) });
+    doc.add(Geometry::Ray { base: Point::new(100.0, 60.0), direction: Point::new(1.0, 0.4) });
+    doc.add(Geometry::Polyline {
+        vertices: vec![Vertex::at(Point::new(8.0, 72.0)).with_widths(0.0, 3.0), Vertex::at(Point::new(30.0, 72.0))],
+        closed: false,
+    });
+    h.run_steps(1);
+    for typed in [
+        "do", "2", "4", "50,10", "", "do", "0", "3", "56,10", "", "pol", "6", "50,48", "i", "4", "revcloud", "a", "2.5",
+    ] {
+        h.state_mut().type_command(typed);
+        h.run_steps(1);
+    }
+    click(&mut h, Point::new(67.0, 37.0));
+    click(&mut h, Point::new(93.0, 55.0));
+    click(&mut h, Point::new(42.0, 30.0));
+    hover(&mut h, Point::new(40.0, 70.0));
+    save(&mut h, &dir, "20-curves");
+
+    // PLOT: the dialog, with the plan fitted to A4 landscape, and its preview.
+    let mut h = harness();
+    h.state_mut().type_command("plot");
+    h.run_steps(6);
+    save(&mut h, &dir, "21-plot-dialog");
+    h.state_mut().type_command("");
+    let mut h = harness();
+    h.state_mut().type_command("preview");
+    h.run_steps(2);
+    save(&mut h, &dir, "22-plot-preview");
 
     // AutoComplete on the command line.
     let mut h = harness();

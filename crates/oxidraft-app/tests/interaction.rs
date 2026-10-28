@@ -437,3 +437,38 @@ fn copy_and_paste_through_the_clipboard() {
     let Geometry::Line { start, end } = pasted else { panic!("{pasted:?}") };
     assert!(start.distance(Point::new(20.0, 30.0)) < 0.5 && (end - start).length() > 99.9, "{start:?} {end:?}");
 }
+
+#[test]
+fn plot_a_window_to_pdf() {
+    let mut h = app_with_line();
+    h.state_mut().type_command("plot");
+    h.run_steps(3);
+    assert_eq!(h.state().plot_open(), (true, false));
+    // Picking a window: the dialog steps aside for two clicks, then comes back.
+    h.state_mut().plot_settings_mut().unwrap().area =
+        oxidraft_plot::PlotArea::Window(oxidraft_geom::Aabb::from_points(Point::ORIGIN, Point::new(1.0, 1.0)));
+    h.run_steps(2);
+    h.get_by_label("Window<").click();
+    h.run_steps(2);
+    assert_eq!(h.state().plot_open(), (false, false), "hidden while picking");
+    let (a, b) = (screen(&h, 10.0, 10.0), screen(&h, 60.0, 50.0));
+    click(&mut h, a);
+    click(&mut h, b);
+    h.run_steps(2);
+    assert_eq!(h.state().plot_open(), (true, false));
+    let oxidraft_plot::PlotArea::Window(w) = h.state_mut().plot_settings_mut().unwrap().area else { panic!() };
+    assert!((w.min.x - 10.0).abs() < 1.0 && (w.max.y - 50.0).abs() < 1.0, "{w:?}");
+    // The preview opens from the dialog and Esc goes back to it.
+    h.get_by_label("Preview...").click();
+    h.run_steps(2);
+    assert_eq!(h.state().plot_open(), (false, true));
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().plot_open(), (true, false));
+    let path = std::env::temp_dir().join(format!("oxidraft-plot-test-{}.pdf", std::process::id()));
+    h.state_mut().plot_to(&path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+    assert!(bytes.starts_with(b"%PDF-1.4"));
+    assert_eq!(h.state().plot_open(), (false, false));
+}

@@ -17,7 +17,9 @@ mod circle;
 mod clipboard;
 mod common;
 mod dims;
+mod donut;
 mod edit;
+mod ellipse;
 mod engine;
 mod erase;
 mod explode;
@@ -36,13 +38,18 @@ mod move_copy;
 mod offset;
 mod pedit;
 mod pline;
+mod plot;
 mod point;
+mod polygon;
 mod rectang;
+mod revcloud;
 mod rotate;
 mod scale;
 mod select;
+mod spline;
 mod stretch;
 mod trim_extend;
+mod xline;
 mod zoom;
 
 pub use clipboard::{clip_of, paste};
@@ -125,12 +132,15 @@ pub enum ViewRequest {
 }
 
 /// Something a command asks the app to show.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UiRequest {
     /// The Enhanced Attribute Editor for a block reference (EATTEDIT).
     EditAttributes(EntityId),
     /// The full command history, for long output like LIST's.
     TextWindow,
+    /// Back to the Plot dialog with the window picked for it (`None`: as
+    /// it was).
+    PlotWindow(Option<Aabb>),
 }
 
 /// Result of feeding one input to a command.
@@ -170,6 +180,22 @@ pub struct Vars {
     pub layiso_off: bool,
     /// The layers as they were before LAYISO, and the current layer, for LAYUNISO.
     pub layiso_saved: Option<(Vec<oxidraft_model::Layer>, String)>,
+    /// PLINEWID: the width of new polylines.
+    pub pline_width: f64,
+    /// SPLMETHOD: true draws splines by control vertices, false through fit points.
+    pub spline_cv: bool,
+    /// POLYSIDES, and whether POLYGON last drew inscribed in its circle.
+    pub polygon_sides: usize,
+    pub polygon_inscribed: bool,
+    /// DONUTID and DONUTOD: a donut's inside and outside diameters.
+    pub donut_inside: f64,
+    pub donut_outside: f64,
+    /// REVCLOUD's arc length (`None` until set: a fraction of the view),
+    /// and whether its arcs are drawn in the Calligraphy style.
+    pub revcloud_arc: Option<f64>,
+    pub revcloud_calligraphy: bool,
+    /// REVCLOUDCREATEMODE: Polygonal (true) or Rectangular clouds.
+    pub revcloud_polygonal: bool,
 }
 
 impl Default for Vars {
@@ -190,6 +216,15 @@ impl Default for Vars {
             view_center: Point::ORIGIN,
             layiso_off: false,
             layiso_saved: None,
+            pline_width: 0.0,
+            spline_cv: false,
+            polygon_sides: 4,
+            polygon_inscribed: true,
+            donut_inside: 0.5,
+            donut_outside: 1.0,
+            revcloud_arc: None,
+            revcloud_calligraphy: false,
+            revcloud_polygonal: false,
         }
     }
 }

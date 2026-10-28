@@ -8,6 +8,7 @@ mod clipboard;
 mod cmdline;
 mod icons;
 mod layers;
+mod plot;
 mod properties;
 mod qselect;
 mod shortcut_menu;

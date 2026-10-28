@@ -78,11 +78,52 @@ pub struct Snap {
     pub kind: SnapKind,
 }
 
+/// The point halfway along an open curve.
+fn midway(g: &Geometry) -> Option<Point> {
+    let segs = g.segments();
+    let mut left = segs.iter().map(Seg::length).sum::<f64>() / 2.0;
+    for seg in &segs {
+        let len = seg.length();
+        if left <= len {
+            return Some(seg.point_at(if len > 0.0 { left / len } else { 0.0 }));
+        }
+        left -= len;
+    }
+    None
+}
+
 /// Snap candidates an entity offers on its own.
 fn candidates(g: &Geometry, out: &mut Vec<Snap>) {
-    if let Geometry::Point { position } = g {
-        out.push(Snap { point: *position, kind: SnapKind::Node });
-        return;
+    let mut add = |point: Point, kind: SnapKind| out.push(Snap { point, kind });
+    match g {
+        Geometry::Point { position } => return add(*position, SnapKind::Node),
+        // Curves made of many short arcs snap like the curve, not its pieces.
+        Geometry::Ellipse(e) => {
+            add(e.center, SnapKind::Center);
+            for (k, v) in [e.major, e.minor(), -e.major, -e.minor()].into_iter().enumerate() {
+                if e.covers(90.0 * k as f64) {
+                    add(e.center + v, SnapKind::Quadrant);
+                }
+            }
+            if !e.is_full() {
+                add(e.start_point(), SnapKind::Endpoint);
+                add(e.end_point(), SnapKind::Endpoint);
+                midway(g).into_iter().for_each(|p| add(p, SnapKind::Midpoint));
+            }
+            return;
+        }
+        Geometry::Spline(s) => {
+            if !s.is_closed() {
+                add(s.start_point(), SnapKind::Endpoint);
+                add(s.end_point(), SnapKind::Endpoint);
+                midway(g).into_iter().for_each(|p| add(p, SnapKind::Midpoint));
+            }
+            return;
+        }
+        // A construction line's midpoint is the point it was drawn through.
+        Geometry::Xline { base, .. } => return add(*base, SnapKind::Midpoint),
+        Geometry::Ray { base, .. } => return add(*base, SnapKind::Endpoint),
+        _ => {}
     }
     if let Geometry::Circle { center, radius } = g {
         out.push(Snap { point: *center, kind: SnapKind::Center });

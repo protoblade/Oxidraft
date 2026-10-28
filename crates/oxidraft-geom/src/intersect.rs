@@ -21,6 +21,36 @@ pub fn segment_segment(a: Segment, b: Segment) -> Option<Point> {
     ((-tol..=1.0 + tol).contains(&t) && (-tol..=1.0 + tol).contains(&u)).then(|| a.start.lerp(a.end, t))
 }
 
+/// The part of `s` inside the box `b`, if any (Liang–Barsky clipping).
+pub fn clip_segment(s: Segment, b: &Aabb) -> Option<Segment> {
+    let d = s.end - s.start;
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    let sides = [
+        (-d.x, s.start.x - b.min.x),
+        (d.x, b.max.x - s.start.x),
+        (-d.y, s.start.y - b.min.y),
+        (d.y, b.max.y - s.start.y),
+    ];
+    for (p, q) in sides {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let r = q / p;
+        if p < 0.0 {
+            t0 = t0.max(r);
+        } else {
+            t1 = t1.min(r);
+        }
+        if t0 > t1 {
+            return None;
+        }
+    }
+    Some(Segment::new(s.start + d * t0, s.start + d * t1))
+}
+
 /// Points where a segment crosses a circle's outline (0, 1 or 2).
 pub fn segment_circle(seg: Segment, center: Point, radius: f64) -> Vec<Point> {
     let d = seg.end - seg.start;

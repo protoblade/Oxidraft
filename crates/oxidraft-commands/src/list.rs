@@ -68,7 +68,10 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
         }
         Geometry::Polyline { vertices, closed } => {
             out.push(value("", if *closed { "Closed" } else { "Open" }));
-            out.push(value("Constant width", n(0.0)));
+            let constant = oxidraft_model::constant_width(vertices);
+            if let Some(w) = constant {
+                out.push(value("Constant width", n(w)));
+            }
             if let Some(area) = g.area() {
                 out.push(value("area", n(area)));
                 out.push(value("perimeter", n(g.length())));
@@ -78,12 +81,58 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
             let segs = g.segments();
             for (i, v) in vertices.iter().enumerate() {
                 out.push(at("at point", v.point));
+                if constant.is_none() {
+                    out.push(value("starting width", n(v.start_width)));
+                    out.push(value("ending width", n(v.end_width)));
+                }
                 if let Some(Seg::Arc(a)) = segs.get(i).filter(|_| v.bulge != 0.0) {
                     out.push(value("bulge", n(v.bulge)));
                     out.push(at("center", a.center));
                     out.push(value("radius", n(a.radius)));
                 }
             }
+        }
+        Geometry::Ellipse(e) => {
+            out.push(at("Center:", e.center));
+            out.push(at("Major Axis:", e.major));
+            out.push(at("Minor Axis:", e.minor()));
+            out.push(value("Radius Ratio:", n(e.ratio).trim()));
+            if e.is_full() {
+                out.push(value("Area:", n(e.area()).trim()));
+                out.push(value("Circumference:", n(g.length()).trim()));
+            } else {
+                out.push(value("Start Angle:", format_angle(e.center.angle_to(e.start_point()))));
+                out.push(value("End Angle:", format_angle(e.center.angle_to(e.end_point()))));
+                out.push(value("Length:", n(g.length()).trim()));
+            }
+        }
+        Geometry::Spline(s) => {
+            out.push(value("Length:", n(g.length()).trim()));
+            out.push(value("Order:", s.degree() + 1));
+            let rational = if s.is_rational() { "Rational" } else { "Non-Rational" };
+            let periodic = if s.is_periodic() { "Periodic" } else { "Non-Periodic" };
+            let closed = if s.is_closed() { "Closed" } else { "Open" };
+            out.push(value("Properties:", format!("Planar, {rational}, {periodic}, {closed}")));
+            let (u0, u1) = s.domain();
+            out.push(value("Parametric Range:", format!("Start {}  End {}", n(u0).trim(), n(u1).trim())));
+            out.push(value("Number of control points:", s.control().len()));
+            for p in s.control() {
+                out.push(at("", *p));
+            }
+            if !s.fit().is_empty() {
+                out.push(value("Number of fit points:", s.fit().len()));
+                for p in s.fit() {
+                    out.push(at("", *p));
+                }
+            }
+        }
+        Geometry::Xline { base, direction } => {
+            out.push(at("basepoint,", *base));
+            out.push(at("second point,", *base + *direction * (1.0 / direction.length().max(f64::MIN_POSITIVE))));
+        }
+        Geometry::Ray { base, direction } => {
+            out.push(at("start point,", *base));
+            out.push(at("second point,", *base + *direction * (1.0 / direction.length().max(f64::MIN_POSITIVE))));
         }
         Geometry::Insert { block, placement, attributes } => {
             out.push(value("Block Name:", format!("\"{block}\"")));

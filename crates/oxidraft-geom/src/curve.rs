@@ -8,6 +8,14 @@ use crate::{Aabb, EPSILON, Point, Segment, intersect::segment_touches_aabb};
 
 /// Parameter slack when deciding whether an intersection lies on a segment.
 const PARAM_TOL: f64 = 1e-9;
+/// The same slack as a distance along the segment, so a crossing exactly
+/// where two short pieces of a curve meet isn't lost to rounding.
+const LENGTH_TOL: f64 = 1e-7;
+
+/// How far past its ends a parameter on `s` still counts as on it.
+fn param_slack(s: &Seg) -> f64 {
+    (LENGTH_TOL / s.length().max(EPSILON)).clamp(PARAM_TOL, 1e-3)
+}
 
 /// A circular arc sweeping `sweep` degrees from angle `start`
 /// (positive = counterclockwise, negative = clockwise).
@@ -269,11 +277,11 @@ impl Seg {
 
     /// Where both segments meet, as `(param on self, param on other)`.
     pub fn intersections(&self, other: &Seg) -> Vec<(f64, f64)> {
-        let on = |t: f64| (-PARAM_TOL..=1.0 + PARAM_TOL).contains(&t);
+        let (mine, theirs) = (param_slack(self), param_slack(other));
         carrier_points(self, other)
             .into_iter()
             .map(|p| (self.carrier_param(p), other.carrier_param(p)))
-            .filter(|&(t, u)| on(t) && on(u))
+            .filter(|&(t, u)| (-mine..=1.0 + mine).contains(&t) && (-theirs..=1.0 + theirs).contains(&u))
             .map(|(t, u)| (t.clamp(0.0, 1.0), u.clamp(0.0, 1.0)))
             .collect()
     }
@@ -281,11 +289,29 @@ impl Seg {
     /// Where `other` crosses this segment's carrier (EXTEND's boundary hits),
     /// as parameters on self's carrier; see [`Seg::carrier_param`].
     pub fn extended_intersections(&self, other: &Seg) -> Vec<f64> {
+        let slack = param_slack(other);
         carrier_points(self, other)
             .into_iter()
-            .filter(|&p| (-PARAM_TOL..=1.0 + PARAM_TOL).contains(&other.carrier_param(p)))
+            .filter(|&p| (-slack..=1.0 + slack).contains(&other.carrier_param(p)))
             .map(|p| self.carrier_param(p))
             .collect()
+    }
+}
+
+/// Circular arcs following the curve `f` from parameter `t0` to `t1`, each
+/// with the parameter where it starts. Each arc goes through three points of
+/// the curve; a piece whose arc strays more than `tol` from the curve
+/// halfway between them is split in two, at most `depth` times.
+pub fn fit_arcs(f: &dyn Fn(f64) -> Point, t0: f64, t1: f64, tol: f64, depth: u32, out: &mut Vec<(f64, Seg)>) {
+    let at = |k: f64| f(t0 + (t1 - t0) * k);
+    let (a, m, b) = (at(0.0), at(0.5), at(1.0));
+    let seg = ArcSeg::through(a, m, b).map_or(Seg::Line(Segment::new(a, b)), Seg::Arc);
+    if depth == 0 || (seg.distance_to(at(0.25)) <= tol && seg.distance_to(at(0.75)) <= tol) {
+        out.push((t0, seg));
+    } else {
+        let mid = (t0 + t1) / 2.0;
+        fit_arcs(f, t0, mid, tol, depth - 1, out);
+        fit_arcs(f, mid, t1, tol, depth - 1, out);
     }
 }
 
@@ -306,24 +332,27 @@ pub fn carrier_points(a: &Seg, b: &Seg) -> Vec<Point> {
     }
 }
 
+/// Where the line through `s` meets the circle: from the foot of the
+/// perpendicular from the center, which stays accurate however long `s` is
+/// (construction lines stand in as very long segments).
 fn line_circle(s: Segment, center: Point, radius: f64) -> Vec<Point> {
     let d = s.end - s.start;
-    let a = d.dot(d);
-    if a <= EPSILON * EPSILON {
+    let len = d.length();
+    if len <= EPSILON {
         return Vec::new();
     }
-    let f = s.start - center;
-    let b = 2.0 * f.dot(d);
-    let c = f.dot(f) - radius * radius;
-    let disc = b * b - 4.0 * a * c;
-    if disc < -EPSILON * a {
+    let u = d * (1.0 / len);
+    let foot = s.start + u * (center - s.start).dot(u);
+    let off = center - foot;
+    let h2 = radius * radius - off.dot(off);
+    if h2 < -EPSILON * radius.max(1.0) {
         return Vec::new();
     }
-    let sq = disc.max(0.0).sqrt();
-    if sq <= EPSILON {
-        return vec![s.start + d * (-b / (2.0 * a))];
+    let h = h2.max(0.0).sqrt();
+    if h <= EPSILON {
+        return vec![foot];
     }
-    vec![s.start + d * ((-b - sq) / (2.0 * a)), s.start + d * ((-b + sq) / (2.0 * a))]
+    vec![foot - u * h, foot + u * h]
 }
 
 #[cfg(test)]

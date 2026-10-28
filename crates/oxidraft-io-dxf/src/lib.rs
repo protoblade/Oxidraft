@@ -11,10 +11,10 @@ use dxf::tables::Layer as DxfLayer;
 use dxf::{Color as DxfColor, Drawing, Point as DxfPoint};
 use oxidraft_geom::Point;
 use oxidraft_model::{
-    Attach, Attribute, AttributeDisplay, Block, BlockEntity, Color, Document, Geometry, HatchPattern, Layer, Linetype,
-    Lineweight, Placement, Vertex,
+    Attach, Attribute, AttributeDisplay, Block, BlockEntity, Color, Document, Ellipse, Geometry, HatchPattern, Layer,
+    Linetype, Lineweight, Placement, Spline, Vertex,
     annotation::{angle_around, decode_control_codes, two_line_angle},
-    hatch, linetype,
+    constant_width, hatch, linetype,
 };
 
 mod hatch_dxf;
@@ -35,6 +35,14 @@ fn to_dxf(p: Point) -> DxfPoint {
 
 fn from_dxf(p: &DxfPoint) -> Point {
     Point::new(p.x, p.y)
+}
+
+fn to_dxf_vector(v: Point) -> dxf::Vector {
+    dxf::Vector::new(v.x, v.y, 0.0)
+}
+
+fn from_dxf_vector(v: &dxf::Vector) -> Point {
+    Point::new(v.x, v.y)
 }
 
 fn to_dxf_color(c: Color) -> DxfColor {
@@ -254,16 +262,61 @@ impl Exporter {
                 ..Default::default()
             })],
             Geometry::Polyline { vertices, closed } => {
+                // One width for the whole polyline is written once, as AutoCAD does.
+                let constant = constant_width(vertices).unwrap_or(0.0);
                 let mut pl = LwPolyline {
                     vertices: vertices
                         .iter()
-                        .map(|v| LwPolylineVertex { x: v.point.x, y: v.point.y, bulge: v.bulge, ..Default::default() })
+                        .map(|v| LwPolylineVertex {
+                            x: v.point.x,
+                            y: v.point.y,
+                            bulge: v.bulge,
+                            starting_width: if constant > 0.0 { 0.0 } else { v.start_width },
+                            ending_width: if constant > 0.0 { 0.0 } else { v.end_width },
+                            ..Default::default()
+                        })
                         .collect(),
+                    constant_width: constant,
                     ..Default::default()
                 };
                 pl.set_is_closed(*closed);
                 vec![EntityType::LwPolyline(pl)]
             }
+            Geometry::Ellipse(e) => {
+                let (start, end) =
+                    if e.is_full() { (0.0, std::f64::consts::TAU) } else { (e.start.to_radians(), e.end.to_radians()) };
+                vec![EntityType::Ellipse(dxf::entities::Ellipse {
+                    center: to_dxf(e.center),
+                    major_axis: to_dxf_vector(e.major),
+                    minor_axis_ratio: e.ratio,
+                    start_parameter: start,
+                    end_parameter: end,
+                    ..Default::default()
+                })]
+            }
+            Geometry::Spline(s) => {
+                let mut sp = dxf::entities::Spline {
+                    degree_of_curve: s.degree() as i32,
+                    knot_values: s.knots().to_vec(),
+                    weight_values: if s.is_rational() { s.weights() } else { Vec::new() },
+                    control_points: s.control().iter().map(|p| to_dxf(*p)).collect(),
+                    fit_points: s.fit().iter().map(|p| to_dxf(*p)).collect(),
+                    ..Default::default()
+                };
+                sp.set_is_closed(s.is_closed());
+                sp.set_is_periodic(s.is_periodic());
+                sp.set_is_rational(s.is_rational());
+                sp.set_is_planar(true);
+                vec![EntityType::Spline(sp)]
+            }
+            Geometry::Xline { base, direction } => vec![EntityType::XLine(dxf::entities::XLine {
+                first_point: to_dxf(*base),
+                unit_direction_vector: to_dxf_vector(*direction * (1.0 / direction.length().max(f64::MIN_POSITIVE))),
+            })],
+            Geometry::Ray { base, direction } => vec![EntityType::Ray(dxf::entities::Ray {
+                start_point: to_dxf(*base),
+                unit_direction_vector: to_dxf_vector(*direction * (1.0 / direction.length().max(f64::MIN_POSITIVE))),
+            })],
             // A mirrored reference is a negative X scale in DXF.
             Geometry::Insert { block, placement, .. } => vec![EntityType::Insert(dxf::entities::Insert {
                 name: block.clone(),
@@ -538,15 +591,82 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
             start_angle: a.start_angle,
             end_angle: a.end_angle,
         },
+        // Vertices without widths of their own take the polyline's.
         EntityType::LwPolyline(pl) => Geometry::Polyline {
-            vertices: pl.vertices.iter().map(|v| Vertex::new(Point::new(v.x, v.y), v.bulge)).collect(),
+            vertices: pl
+                .vertices
+                .iter()
+                .map(|v| {
+                    let (s, e) = if v.starting_width == 0.0 && v.ending_width == 0.0 {
+                        (pl.constant_width, pl.constant_width)
+                    } else {
+                        (v.starting_width, v.ending_width)
+                    };
+                    Vertex::new(Point::new(v.x, v.y), v.bulge).with_widths(s, e)
+                })
+                .collect(),
             closed: pl.is_closed(),
         },
         // Old-style (R12) 2D polylines.
         EntityType::Polyline(pl) => Geometry::Polyline {
-            vertices: pl.vertices().map(|v| Vertex::new(from_dxf(&v.location), v.bulge)).collect(),
+            vertices: pl
+                .vertices()
+                .map(|v| {
+                    let (s, e) = if v.starting_width == 0.0 && v.ending_width == 0.0 {
+                        (pl.default_starting_width, pl.default_ending_width)
+                    } else {
+                        (v.starting_width, v.ending_width)
+                    };
+                    Vertex::new(from_dxf(&v.location), v.bulge).with_widths(s, e)
+                })
+                .collect(),
             closed: pl.is_closed(),
         },
+        EntityType::Ellipse(el) => {
+            let full = (el.end_parameter - el.start_parameter).abs() >= std::f64::consts::TAU - 1e-9
+                || el.end_parameter == el.start_parameter;
+            let (mut start, mut end) =
+                if full { (0.0, 360.0) } else { (el.start_parameter.to_degrees(), el.end_parameter.to_degrees()) };
+            // Seen from below (extrusion -Z), the parameter runs clockwise.
+            if el.normal.z < 0.0 && !full {
+                (start, end) = (-end, -start);
+            }
+            let e = Ellipse {
+                center: from_dxf(&el.center),
+                major: from_dxf_vector(&el.major_axis),
+                ratio: el.minor_axis_ratio,
+                start: if full { 0.0 } else { start.rem_euclid(360.0) },
+                end: if full { 360.0 } else { end.rem_euclid(360.0) },
+            };
+            if e.a() <= 0.0 || e.ratio <= 0.0 {
+                return None;
+            }
+            // A ratio over 1 isn't valid DXF; read it as the other axis being the major one.
+            Geometry::Ellipse(if e.ratio > 1.0 { e.with_axes(e.a(), e.b()) } else { e })
+        }
+        // Splines without control points are rebuilt from their fit points.
+        EntityType::Spline(sp) => {
+            let control: Vec<Point> = sp.control_points.iter().map(from_dxf).collect();
+            let fit: Vec<Point> = sp.fit_points.iter().map(from_dxf).collect();
+            let weights = if sp.is_rational() && sp.weight_values.len() == control.len() {
+                sp.weight_values.clone()
+            } else {
+                Vec::new()
+            };
+            let degree = usize::try_from(sp.degree_of_curve).unwrap_or(0);
+            let spline = Spline::new(degree, control, sp.knot_values.clone(), weights, false)
+                .map(|s| s.with_fit(fit.clone()))
+                .or_else(|| Spline::through(&fit, sp.is_closed()))?;
+            let ends_meet =
+                spline.start_point().distance(spline.end_point()) <= 1e-9_f64.max(1e-9 * spline.end_point().length());
+            Geometry::Spline(spline.with_closed(sp.is_closed() && ends_meet))
+        }
+        EntityType::XLine(x) => {
+            Geometry::Xline { base: from_dxf(&x.first_point), direction: from_dxf_vector(&x.unit_direction_vector) }
+        }
+        EntityType::Ray(r) => {
+            Geometry::Ray { base: from_dxf(&r.start_point), direction: from_dxf_vector(&r.unit_direction_vector) }
+        }
         EntityType::Text(t) => {
             let (attach, second) = text_justification(t.horizontal_text_justification, t.vertical_text_justification);
             Geometry::Text {
@@ -1034,6 +1154,63 @@ pub fn load_file(path: impl AsRef<Path>) -> Result<Imported, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn roundtrip_ellipses_splines_construction_lines_and_widths() {
+        use oxidraft_model::{Ellipse, Spline};
+        let mut doc = Document::new();
+        let arc =
+            Ellipse { center: Point::new(1.0, 2.0), major: Point::new(3.0, 4.0), ratio: 0.5, start: 30.0, end: 300.0 };
+        let fit = [(0.0, 0.0), (10.0, 5.0), (20.0, 0.0), (30.0, 8.0)].map(|(x, y)| Point::new(x, y));
+        let shapes = vec![
+            Geometry::Ellipse(Ellipse::full(Point::ORIGIN, Point::new(5.0, 0.0), 0.25)),
+            Geometry::Ellipse(arc),
+            Geometry::Spline(Spline::through(&fit, false).unwrap()),
+            Geometry::Spline(Spline::from_control(&fit, true).unwrap()),
+            Geometry::Xline { base: Point::new(1.0, 1.0), direction: Point::new(0.6, 0.8) },
+            Geometry::Ray { base: Point::new(2.0, 1.0), direction: Point::new(0.0, -1.0) },
+            Geometry::Polyline {
+                vertices: vec![
+                    Vertex::new(Point::ORIGIN, 0.5).with_widths(1.5, 1.5),
+                    Vertex::at(Point::new(4.0, 0.0)).with_widths(1.5, 1.5),
+                ],
+                closed: false,
+            },
+            Geometry::Polyline {
+                vertices: vec![Vertex::at(Point::ORIGIN).with_widths(0.0, 2.0), Vertex::at(Point::new(4.0, 0.0))],
+                closed: false,
+            },
+        ];
+        for g in &shapes {
+            doc.add(g.clone());
+        }
+        let mut buf = Vec::new();
+        write(&doc, &mut buf).unwrap();
+        let imported = read(&mut buf.as_slice()).unwrap();
+        assert_eq!(imported.skipped, 0);
+        let back: Vec<Geometry> = imported.document.entities().map(|e| e.geometry.clone()).collect();
+        assert_eq!(back.len(), shapes.len());
+        for (b, g) in back.iter().zip(&shapes) {
+            match (b, g) {
+                (Geometry::Ellipse(x), Geometry::Ellipse(y)) => {
+                    assert!(
+                        x.center.approx_eq(y.center) && x.major.approx_eq(y.major) && (x.ratio - y.ratio).abs() < 1e-12
+                    );
+                    assert!((x.start - y.start).abs() < 1e-9 && (x.sweep() - y.sweep()).abs() < 1e-9, "{x:?} vs {y:?}");
+                }
+                // DXF keeps 12 decimals.
+                (Geometry::Spline(x), Geometry::Spline(y)) => {
+                    assert_eq!(
+                        (x.degree(), x.knots(), x.is_closed(), x.is_periodic()),
+                        (y.degree(), y.knots(), y.is_closed(), y.is_periodic())
+                    );
+                    assert!(x.control().iter().zip(y.control()).all(|(p, q)| p.distance(*q) < 1e-9));
+                    assert_eq!(x.fit(), y.fit());
+                }
+                _ => assert_eq!(b, g),
+            }
+        }
+    }
 
     #[test]
     fn roundtrip_points_next_to_hatches_and_the_point_style() {

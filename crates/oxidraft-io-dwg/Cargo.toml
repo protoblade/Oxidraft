@@ -1,0 +1,20 @@
+[package]
+name = "oxidraft-io-dwg"
+description = "DWG import/export for Oxidraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxidraft-io-dxf.workspace = true
+oxidraft-model.workspace = true
+# Reads and writes the binary DWG file (MPL-2.0, used unmodified).
+acadrust = "0.6.8"
+
+[dev-dependencies]
+oxidraft-geom.workspace = true
+
+[lints]
+workspace = true

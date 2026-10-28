@@ -40,8 +40,17 @@ pub enum Icon {
     LayerLock,
     LayerUnlock,
     Point,
+    Polygon,
+    Ellipse,
+    Spline,
+    Xline,
+    Ray,
+    RevCloud,
+    Donut,
     EditPolyline,
     Measure,
+    Plot,
+    PlotPreview,
     InsertBlock,
     CreateBlock,
     MatchProperties,
@@ -339,6 +348,81 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
             pen.line(&[(0.3, 0.3), (0.7, 0.7)], c);
             pen.line(&[(0.3, 0.7), (0.7, 0.3)], c);
             pen.dot((0.5, 0.5), 0.07, blue);
+        }
+        Icon::Plot => {
+            // A printer with a sheet coming out.
+            pen.closed(&[(0.3, 0.12), (0.7, 0.12), (0.7, 0.38), (0.3, 0.38)], c);
+            pen.closed(&[(0.12, 0.38), (0.88, 0.38), (0.88, 0.7), (0.12, 0.7)], c);
+            pen.filled(&[(0.3, 0.62), (0.7, 0.62), (0.7, 0.9), (0.3, 0.9)], blue);
+            pen.dot((0.78, 0.48), 0.035, green);
+        }
+        Icon::PlotPreview => {
+            pen.closed(&[(0.14, 0.1), (0.62, 0.1), (0.62, 0.78), (0.14, 0.78)], c);
+            pen.line(&[(0.22, 0.25), (0.54, 0.25)], c);
+            pen.line(&[(0.22, 0.38), (0.48, 0.38)], c);
+            pen.circle((0.62, 0.62), 0.16, blue);
+            pen.line(&[(0.73, 0.73), (0.9, 0.9)], blue);
+        }
+        Icon::Polygon => {
+            let pts: Vec<(f32, f32)> = (0..6)
+                .map(|k| (0.5 + 0.36 * (PI / 3.0 * k as f32).cos(), 0.5 + 0.36 * (PI / 3.0 * k as f32).sin()))
+                .collect();
+            pen.closed(&pts, c);
+            pen.grip((0.5, 0.5), blue);
+            pen.grip(pts[0], blue);
+        }
+        Icon::Ellipse => {
+            let pts: Vec<(f32, f32)> = (0..=32)
+                .map(|k| {
+                    let a = PI * 2.0 * k as f32 / 32.0;
+                    (0.5 + 0.38 * a.cos(), 0.5 + 0.22 * a.sin())
+                })
+                .collect();
+            pen.line(&pts, c);
+            pen.grip((0.5, 0.5), blue);
+            pen.grip((0.88, 0.5), blue);
+            pen.grip((0.5, 0.28), blue);
+        }
+        Icon::Spline => {
+            let pts: Vec<(f32, f32)> = (0..=24)
+                .map(|k| {
+                    let t = k as f32 / 24.0;
+                    (0.1 + 0.8 * t, 0.5 - 0.28 * (t * PI * 2.0).sin())
+                })
+                .collect();
+            pen.line(&pts, c);
+            for p in [(0.1, 0.5), (0.3, 0.22), (0.7, 0.78), (0.9, 0.5)] {
+                pen.grip(p, blue);
+            }
+        }
+        Icon::Xline => {
+            pen.line(&[(0.02, 0.86), (0.98, 0.14)], c);
+            pen.line(&[(0.02, 0.6), (0.98, 0.6)], c);
+            pen.grip((0.5, 0.5), blue);
+        }
+        Icon::Ray => {
+            pen.line(&[(0.18, 0.82), (0.98, 0.1)], c);
+            pen.line(&[(0.18, 0.82), (0.98, 0.62)], c);
+            pen.grip((0.18, 0.82), blue);
+        }
+        Icon::RevCloud => {
+            // Scallops round a rectangle.
+            let (x0, y0, x1, y1) = (0.16, 0.26, 0.84, 0.74);
+            let r = 0.085;
+            for k in 0..4 {
+                let x = x0 + (x1 - x0) * (k as f32 + 0.5) / 4.0;
+                pen.arc((x, y0), r, PI, PI * 2.0, c, false);
+                pen.arc((x, y1), r, 0.0, PI, c, false);
+            }
+            for k in 0..3 {
+                let y = y0 + (y1 - y0) * (k as f32 + 0.5) / 3.0;
+                pen.arc((x0, y), r, PI * 0.5, PI * 1.5, c, false);
+                pen.arc((x1, y), r, -PI * 0.5, PI * 0.5, c, false);
+            }
+        }
+        Icon::Donut => {
+            painter.circle_stroke(pen.p(0.5, 0.5), pen.s(0.25), Stroke::new(pen.s(0.16), c));
+            pen.grip((0.5, 0.5), blue);
         }
         Icon::EditPolyline => {
             pen.line(&[(0.1, 0.8), (0.35, 0.35), (0.6, 0.65), (0.9, 0.2)], c);

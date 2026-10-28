@@ -4,8 +4,10 @@
 //! conversion lives in the app, not here.
 
 pub mod curve;
+pub mod ellipse;
 pub mod intersect;
 pub mod offset;
+pub mod spline;
 
 use std::ops::{Add, Mul, Neg, Sub};
 

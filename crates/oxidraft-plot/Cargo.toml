@@ -1,0 +1,23 @@
+[package]
+name = "oxidraft-plot"
+description = "Plotting for Oxidraft: page setup, the plotted sheet, and PDF output"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxidraft-geom.workspace = true
+oxidraft-model.workspace = true
+# The typeface the drawing area shows text in, embedded so plots match it.
+epaint_default_fonts = "0.37"
+flate2 = "1"
+ttf-parser = "0.25"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+oxidraft-io-dxf.workspace = true
+oxidraft-io-dwg.workspace = true

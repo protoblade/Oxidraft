@@ -64,6 +64,9 @@ pub(crate) fn extend(g: &Geometry, boundaries: &[Seg], pick: f64) -> Result<Geom
     if g.is_closed() {
         return Err("Closed objects cannot be extended.".into());
     }
+    if matches!(g, Geometry::Ellipse(_) | Geometry::Spline(_)) || g.is_infinite() {
+        return Err(format!("{} objects can't be extended.", g.name()));
+    }
     let mut segs = g.segments();
     let n = segs.len();
     let at_end = pick >= n as f64 / 2.0;
@@ -150,15 +153,39 @@ pub(crate) fn offsets(g: &Geometry, distance: f64) -> [Vec<Geometry>; 2] {
             let r = radius - d;
             if r > EPSILON { vec![Geometry::Circle { center: *center, radius: r }] } else { Vec::new() }
         }
+        // A constant width carries over to the copies.
         Geometry::Polyline { vertices, closed } => {
             let verts: Vec<(Point, f64)> = vertices.iter().map(|v| (v.point, v.bulge)).collect();
+            let width = oxidraft_model::constant_width(vertices).unwrap_or(0.0);
             offset_polyline(&verts, *closed, d)
+                .into_iter()
+                .map(|(vs, closed)| {
+                    let vertices = vs.into_iter().map(|(p, b)| Vertex::new(p, b).with_widths(width, width)).collect();
+                    Geometry::Polyline { vertices, closed }
+                })
+                .collect()
+        }
+        // Left of a counterclockwise ellipse is its inside; the copies are
+        // polylines of arcs, as close to the true offset curve as the
+        // ellipse's own arcs are to it.
+        Geometry::Ellipse(_) | Geometry::Spline(_) => {
+            let segs = g.segments();
+            let verts: Vec<(Point, f64)> = segs
+                .iter()
+                .map(|s| (s.start(), s.bulge()))
+                .chain((!g.is_closed()).then(|| segs.last().map(|s| (s.end(), 0.0))).flatten())
+                .collect();
+            offset_polyline(&verts, g.is_closed(), d)
                 .into_iter()
                 .map(|(vs, closed)| Geometry::Polyline {
                     vertices: vs.into_iter().map(|(p, b)| Vertex::new(p, b)).collect(),
                     closed,
                 })
                 .collect()
+        }
+        Geometry::Xline { direction, .. } | Geometry::Ray { direction, .. } => {
+            let len = direction.length().max(f64::MIN_POSITIVE);
+            vec![g.translated(Point::new(-direction.y, direction.x) * (d / len))]
         }
         _ => Vec::new(),
     })

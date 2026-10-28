@@ -502,11 +502,12 @@ impl Document {
     }
 
     /// Bounding box of all entities, or `None` for an empty drawing. Like
-    /// AutoCAD's ZOOM Extents, objects on frozen layers don't count.
+    /// AutoCAD's ZOOM Extents, objects on frozen layers don't count, and
+    /// neither do construction lines and rays, which go on forever.
     pub fn extents(&self) -> Option<Aabb> {
         self.entities
             .values()
-            .filter(|e| !self.layer(&e.layer).is_some_and(|l| l.frozen))
+            .filter(|e| !self.layer(&e.layer).is_some_and(|l| l.frozen) && !e.geometry.is_infinite())
             .map(|e| self.entity_bounds(e))
             .reduce(Aabb::union)
     }

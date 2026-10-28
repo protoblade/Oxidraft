@@ -205,9 +205,14 @@ impl OxidraftApp {
                 ]
             }
             Geometry::Polyline { vertices, closed } => {
+                let width = match oxidraft_model::constant_width(vertices) {
+                    Some(w) => Value::Number(w),
+                    None => Value::Text("*VARIES*".into()),
+                };
                 let mut rows = vec![
                     ("Closed", Value::Text(if *closed { "Yes" } else { "No" }.into())),
                     ("Vertices", Value::Text(vertices.len().to_string())),
+                    ("Global width", width),
                     ("Length", Value::Text(fmt(e.geometry.length()))),
                 ];
                 if let Some(area) = e.geometry.area() {
@@ -215,6 +220,41 @@ impl OxidraftApp {
                 }
                 rows
             }
+            Geometry::Ellipse(el) => {
+                let mut rows = vec![
+                    ("Center X", Value::Number(el.center.x)),
+                    ("Center Y", Value::Number(el.center.y)),
+                    ("Major radius", Value::Number(el.a())),
+                    ("Minor radius", Value::Number(el.b())),
+                    ("Radius ratio", Value::Text(fmt(el.ratio))),
+                ];
+                if el.is_full() {
+                    rows.push(("Area", Value::Text(fmt(el.area()))));
+                } else {
+                    rows.push(("Start angle", Value::Text(format!("{:.0}°", el.center.angle_to(el.start_point())))));
+                    rows.push(("End angle", Value::Text(format!("{:.0}°", el.center.angle_to(el.end_point())))));
+                }
+                rows.push(("Length", Value::Text(fmt(e.geometry.length()))));
+                rows
+            }
+            Geometry::Spline(sp) => {
+                let mut rows = vec![
+                    ("Closed", Value::Text(if sp.is_closed() { "Yes" } else { "No" }.into())),
+                    ("Degree", Value::Text(sp.degree().to_string())),
+                    ("Control vertices", Value::Text(sp.control().len().to_string())),
+                    ("Fit points", Value::Text(sp.fit().len().to_string())),
+                    ("Length", Value::Text(fmt(e.geometry.length()))),
+                ];
+                if let Some(area) = e.geometry.area() {
+                    rows.push(("Area", Value::Text(fmt(area))));
+                }
+                rows
+            }
+            Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => vec![
+                ("Basepoint X", Value::Number(base.x)),
+                ("Basepoint Y", Value::Number(base.y)),
+                ("Angle", Value::Angle(Point::ORIGIN.angle_to(*direction))),
+            ],
             Geometry::Insert { block, placement, attributes } => {
                 let mut rows = vec![
                     ("Name", Value::Text(block.clone())),
@@ -380,6 +420,18 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
         (Geometry::Dimension { rotation, .. }, "Rotation") => *rotation = v.rem_euclid(360.0),
         (Geometry::Leader { scale, .. } | Geometry::Hatch { scale, .. }, "Scale") if v > 0.0 => *scale = v,
         (Geometry::Hatch { angle, .. }, "Angle") => *angle = v.rem_euclid(360.0),
+        (Geometry::Polyline { vertices, .. }, "Global width") if v >= 0.0 => {
+            vertices.iter_mut().for_each(|x| *x = x.with_widths(v, v));
+        }
+        (Geometry::Ellipse(e), "Center X") => e.center.x = v,
+        (Geometry::Ellipse(e), "Center Y") => e.center.y = v,
+        (Geometry::Ellipse(e), "Major radius") if v > 0.0 => *e = e.with_axes(v, e.b()),
+        (Geometry::Ellipse(e), "Minor radius") if v > 0.0 => *e = e.with_axes(e.a(), v),
+        (Geometry::Xline { base, .. } | Geometry::Ray { base, .. }, "Basepoint X") => base.x = v,
+        (Geometry::Xline { base, .. } | Geometry::Ray { base, .. }, "Basepoint Y") => base.y = v,
+        (Geometry::Xline { direction, .. } | Geometry::Ray { direction, .. }, "Angle") => {
+            *direction = Point::ORIGIN.polar(direction.length().max(1.0), v);
+        }
         _ => return None,
     }
     Some(g)

@@ -17,10 +17,21 @@ pub(crate) const JOIN_TOL: f64 = 1e-6;
 /// closed polyline, in the direction of its vertices.
 pub(crate) fn break_geometry(g: &Geometry, p1: Point, p2: Point) -> Result<Vec<Geometry>, String> {
     let (s1, s2) = (g.param_of(p1), g.param_of(p2));
+    let closed = g.is_closed();
     match g {
-        Geometry::Circle { .. } if (s1 - s2).abs() < 1e-9 => Err("Arc cannot be full 360 degrees.".into()),
-        Geometry::Circle { .. } | Geometry::Polyline { closed: true, .. } => Ok(g.sub(s2, s1).into_iter().collect()),
-        Geometry::Line { .. } | Geometry::Arc { .. } | Geometry::Polyline { .. } => {
+        Geometry::Circle { .. } | Geometry::Ellipse(_) if closed && (s1 - s2).abs() < 1e-9 => {
+            Err("Arc cannot be full 360 degrees.".into())
+        }
+        Geometry::Circle { .. } | Geometry::Polyline { .. } | Geometry::Ellipse(_) | Geometry::Spline(_) if closed => {
+            Ok(g.sub(s2, s1).into_iter().collect())
+        }
+        Geometry::Line { .. }
+        | Geometry::Arc { .. }
+        | Geometry::Polyline { .. }
+        | Geometry::Ellipse(_)
+        | Geometry::Spline(_)
+        | Geometry::Xline { .. }
+        | Geometry::Ray { .. } => {
             let (lo, hi) = (s1.min(s2), s1.max(s2));
             Ok([g.sub(0.0, lo), g.sub(hi, g.param_count())].into_iter().flatten().collect())
         }

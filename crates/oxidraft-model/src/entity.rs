@@ -1,6 +1,8 @@
 use oxidraft_geom::{
     Aabb, EPSILON, Point, Segment,
     curve::{ArcSeg, Seg},
+    ellipse::Ellipse,
+    spline::Spline,
 };
 
 use crate::{
@@ -27,21 +29,44 @@ pub enum Color {
 
 /// A polyline vertex. `bulge` describes the segment that starts here:
 /// 0 is straight, otherwise the tangent of a quarter of the arc's sweep
-/// (negative = clockwise), as in DXF.
+/// (negative = clockwise), as in DXF. So do the widths: the segment is
+/// `start_width` wide here and tapers to `end_width` at the next vertex.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vertex {
     pub point: Point,
     pub bulge: f64,
+    pub start_width: f64,
+    pub end_width: f64,
 }
 
 impl Vertex {
     pub const fn new(point: Point, bulge: f64) -> Self {
-        Self { point, bulge }
+        Self { point, bulge, start_width: 0.0, end_width: 0.0 }
     }
 
     pub const fn at(point: Point) -> Self {
-        Self { point, bulge: 0.0 }
+        Self::new(point, 0.0)
     }
+
+    pub const fn with_widths(self, start_width: f64, end_width: f64) -> Self {
+        Self { start_width, end_width, ..self }
+    }
+}
+
+/// How far XLINE and RAY curves reach in [`Geometry::segments`]: far
+/// enough to cross anything in a drawing.
+pub const FAR: f64 = 1.0e8;
+
+/// The widths of a polyline whose every segment is `w` wide.
+pub fn constant_width(vertices: &[Vertex]) -> Option<f64> {
+    let w = vertices.first()?.start_width;
+    vertices.iter().all(|v| v.start_width == w && v.end_width == w).then_some(w)
+}
+
+/// `direction` scaled to length 1 (or +X if it has none).
+fn unit(direction: Point) -> Point {
+    let len = direction.length();
+    if len > EPSILON { direction * (1.0 / len) } else { Point::new(1.0, 0.0) }
 }
 
 /// The shape of an entity.
@@ -66,7 +91,8 @@ pub enum Geometry {
         start_angle: f64,
         end_angle: f64,
     },
-    /// A 2D polyline of straight and arc segments (DXF LWPOLYLINE).
+    /// A 2D polyline of straight and arc segments (DXF LWPOLYLINE), wide
+    /// or tapered where its vertices give widths.
     Polyline {
         vertices: Vec<Vertex>,
         closed: bool,
@@ -136,6 +162,20 @@ pub enum Geometry {
         pattern: HatchPattern,
         scale: f64,
         angle: f64,
+    },
+    /// An ellipse or elliptical arc (DXF ELLIPSE).
+    Ellipse(Ellipse),
+    /// A NURBS curve (DXF SPLINE).
+    Spline(Spline),
+    /// A construction line (DXF XLINE): infinite both ways through `base`.
+    Xline {
+        base: Point,
+        direction: Point,
+    },
+    /// A ray (DXF RAY): from `base` to infinity along `direction`.
+    Ray {
+        base: Point,
+        direction: Point,
     },
 }
 
@@ -251,6 +291,10 @@ impl Geometry {
             Geometry::AngularDimension { .. } => "Angular Dimension",
             Geometry::Leader { .. } => "MultiLeader",
             Geometry::Hatch { .. } => "Hatch",
+            Geometry::Ellipse(_) => "Ellipse",
+            Geometry::Spline(_) => "Spline",
+            Geometry::Xline { .. } => "Xline",
+            Geometry::Ray { .. } => "Ray",
         }
     }
 
@@ -317,6 +361,13 @@ impl Geometry {
                     })
                     .collect()
             }
+            Geometry::Ellipse(e) => e.segs(),
+            Geometry::Spline(s) => s.segs().to_vec(),
+            Geometry::Xline { base, direction } => {
+                let d = unit(*direction) * FAR;
+                vec![Seg::Line(Segment::new(*base - d, *base + d))]
+            }
+            Geometry::Ray { base, direction } => vec![Seg::Line(Segment::new(*base, *base + unit(*direction) * FAR))],
             // Expanded by the document (blocks) or by `primitives` (dimensions,
             // leaders); points, text and hatches aren't curves.
             Geometry::Point { .. }
@@ -334,8 +385,15 @@ impl Geometry {
         match self {
             Geometry::Circle { .. } => true,
             Geometry::Polyline { closed, .. } => *closed,
+            Geometry::Ellipse(e) => e.is_full(),
+            Geometry::Spline(s) => s.is_closed(),
             _ => false,
         }
+    }
+
+    /// True for construction lines and rays, which go on forever.
+    pub fn is_infinite(&self) -> bool {
+        matches!(self, Geometry::Xline { .. } | Geometry::Ray { .. })
     }
 
     pub fn bounds(&self) -> Aabb {
@@ -370,6 +428,9 @@ impl Geometry {
         if !self.is_closed() {
             return None;
         }
+        if let Geometry::Ellipse(e) = self {
+            return Some(e.area());
+        }
         // Shoelace over the chords, plus the circular segment each arc adds or removes.
         let signed: f64 = self
             .segments()
@@ -393,6 +454,17 @@ impl Geometry {
     pub fn distance_to(&self, p: Point) -> f64 {
         if matches!(self, Geometry::Text { .. }) && self.contains(p) {
             return 0.0;
+        }
+        // Anywhere on a wide polyline's band counts as on it.
+        if let Geometry::Polyline { vertices, .. } = self
+            && vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0)
+        {
+            return self
+                .segments()
+                .iter()
+                .zip(vertices)
+                .map(|(s, v)| (s.distance_to(p) - v.start_width.max(v.end_width) / 2.0).max(0.0))
+                .fold(f64::INFINITY, f64::min);
         }
         self.outline().iter().map(|s| s.distance_to(p)).fold(f64::INFINITY, f64::min)
     }
@@ -445,6 +517,14 @@ impl Geometry {
     /// The part of the curve from parameter `s0` to `s1`. On closed curves
     /// `s1 < s0` wraps through the start. `None` if the piece is empty.
     pub fn sub(&self, s0: f64, s1: f64) -> Option<Geometry> {
+        match self {
+            Geometry::Ellipse(e) => return ellipse_sub(e, s0, s1),
+            Geometry::Spline(s) => return spline_sub(s, s0, s1),
+            Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => {
+                return infinite_sub(self, *base, *direction, s0, s1);
+            }
+            _ => {}
+        }
         let segs = self.segments();
         let n = segs.len() as f64;
         let mut pieces = Vec::new();
@@ -474,9 +554,26 @@ impl Geometry {
                 let sweep = 360.0 * (s1 - s0).rem_euclid(1.0);
                 Geometry::arc(&ArcSeg { center: *center, radius: *radius, start, sweep })
             }
-            Geometry::Polyline { .. } => Geometry::polyline_from_segs(&pieces, false),
+            // A constant width stays; tapers are lost.
+            Geometry::Polyline { vertices, .. } => {
+                let piece = Geometry::polyline_from_segs(&pieces, false);
+                match constant_width(vertices) {
+                    Some(w) if w > 0.0 => piece.with_width(w),
+                    _ => piece,
+                }
+            }
             _ => return None,
         })
+    }
+
+    /// A polyline with every segment `w` wide; anything else unchanged.
+    pub fn with_width(self, w: f64) -> Geometry {
+        match self {
+            Geometry::Polyline { vertices, closed } => {
+                Geometry::Polyline { vertices: vertices.into_iter().map(|v| v.with_widths(w, w)).collect(), closed }
+            }
+            g => g,
+        }
     }
 
     // ---- transforms --------------------------------------------------------
@@ -517,10 +614,23 @@ impl Geometry {
             Geometry::Polyline { vertices, closed } => Geometry::Polyline {
                 vertices: vertices
                     .iter()
-                    .map(|v| Vertex::new(f(v.point), if flips { -v.bulge } else { v.bulge }))
+                    .map(|v| Vertex {
+                        point: f(v.point),
+                        bulge: if flips { -v.bulge } else { v.bulge },
+                        start_width: v.start_width * length_factor,
+                        end_width: v.end_width * length_factor,
+                    })
                     .collect(),
                 closed: *closed,
             },
+            Geometry::Ellipse(e) => Geometry::Ellipse(e.mapped(f, flips)),
+            Geometry::Spline(s) => Geometry::Spline(s.mapped(f)),
+            Geometry::Xline { base, direction } => {
+                Geometry::Xline { base: f(*base), direction: f(*base + *direction) - f(*base) }
+            }
+            Geometry::Ray { base, direction } => {
+                Geometry::Ray { base: f(*base), direction: f(*base + *direction) - f(*base) }
+            }
             Geometry::Text { position, height, rotation, width, attach, content } => Geometry::Text {
                 position: f(*position),
                 height: height * length_factor,
@@ -619,9 +729,17 @@ impl Geometry {
                 ArcSeg::through(shift(s), mid, shift(e)).map_or_else(|| self.clone(), |m| Geometry::arc(&m))
             }
             Geometry::Polyline { vertices, closed } => Geometry::Polyline {
-                vertices: vertices.iter().map(|v| Vertex::new(shift(v.point), v.bulge)).collect(),
+                vertices: vertices.iter().map(|v| Vertex { point: shift(v.point), ..*v }).collect(),
                 closed: *closed,
             },
+            // Ellipses keep their shape, like circles; splines move the
+            // points their grips edit.
+            Geometry::Ellipse(e) => self.translated(shift(e.center) - e.center),
+            Geometry::Spline(s) => {
+                let moved: Vec<Point> = s.grip_points().into_iter().map(shift).collect();
+                s.with_grip_points(&moved).map_or_else(|| self.clone(), Geometry::Spline)
+            }
+            Geometry::Xline { base, .. } | Geometry::Ray { base, .. } => self.translated(shift(*base) - *base),
             Geometry::Insert { placement, .. } => self.translated(shift(placement.position) - placement.position),
             Geometry::Text { position, .. } => self.translated(shift(*position) - *position),
             Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale } => Geometry::Dimension {
@@ -689,6 +807,17 @@ impl Geometry {
             Geometry::AngularDimension { vertex, p1, p2, arc, .. } => vec![*vertex, *p1, *p2, *arc],
             Geometry::Leader { points, .. } => points.clone(),
             Geometry::Hatch { .. } => vec![self.bounds().center()],
+            // Center, the ends of both axes, and an arc's ends.
+            Geometry::Ellipse(e) => {
+                let (m, n) = (e.major, e.minor());
+                let mut g = vec![e.center, e.center + m, e.center + n, e.center - m, e.center - n];
+                if !e.is_full() {
+                    g.extend([e.start_point(), e.end_point()]);
+                }
+                g
+            }
+            Geometry::Spline(s) => s.grip_points(),
+            Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => vec![*base, *base + *direction],
         }
     }
 
@@ -761,8 +890,82 @@ impl Geometry {
                 Geometry::Leader { points, content: content.clone(), scale: *scale }
             }
             (Geometry::Hatch { .. }, _) => self.translated(to - self.bounds().center()),
+            (Geometry::Ellipse(e), 0) => self.translated(to - e.center),
+            (Geometry::Ellipse(e), 1 | 3) => Geometry::Ellipse(e.with_axes(e.center.distance(to), e.b())),
+            (Geometry::Ellipse(e), 2 | 4) => Geometry::Ellipse(e.with_axes(e.a(), e.center.distance(to))),
+            (Geometry::Ellipse(e), i) => {
+                let t = e.param_at_angle(e.center.angle_to(to));
+                Geometry::Ellipse(if i == 5 { e.arc(t, e.end) } else { e.arc(e.start, t) })
+            }
+            (Geometry::Spline(s), i) => s.with_grip_moved(i, to).map_or_else(|| self.clone(), Geometry::Spline),
+            (Geometry::Xline { base, .. } | Geometry::Ray { base, .. }, 0) => self.translated(to - *base),
+            (Geometry::Xline { base, .. }, _) if !to.approx_eq(*base) => {
+                Geometry::Xline { base: *base, direction: to - *base }
+            }
+            (Geometry::Ray { base, .. }, _) if !to.approx_eq(*base) => {
+                Geometry::Ray { base: *base, direction: to - *base }
+            }
+            (Geometry::Xline { .. } | Geometry::Ray { .. }, _) => self.clone(),
         }
     }
+}
+
+/// The part of an ellipse between two places along its approximation.
+fn ellipse_sub(e: &Ellipse, s0: f64, s1: f64) -> Option<Geometry> {
+    if s1 <= s0 && !e.is_full() {
+        return None;
+    }
+    let (t0, t1) = (e.param_at(s0), e.param_at(s1));
+    let sweep = if s1 > s0 && (s1 - s0) >= e.segs().len() as f64 { 360.0 } else { (t1 - t0).rem_euclid(360.0) };
+    (sweep > 1e-9).then(|| Geometry::Ellipse(if sweep >= 360.0 { *e } else { e.arc(t0, t1) }))
+}
+
+/// The part of a spline between two places along its approximation; on a
+/// closed one, `s1 < s0` goes round through the start.
+fn spline_sub(s: &Spline, s0: f64, s1: f64) -> Option<Geometry> {
+    let n = s.segs().len() as f64;
+    let (start, end) = s.domain();
+    let at = |x: f64| {
+        if x <= 0.0 {
+            start
+        } else if x >= n {
+            end
+        } else {
+            s.param_at(x)
+        }
+    };
+    let (u0, u1) = (at(s0), at(s1));
+    let piece = if s1 > s0 {
+        s.sub(u0, u1)
+    } else if s.is_closed() {
+        match (s.sub(u0, end), s.sub(start, u1)) {
+            (Some(a), Some(b)) => a.joined(&b),
+            (a, b) => a.or(b),
+        }
+    } else {
+        None
+    };
+    piece.map(Geometry::Spline)
+}
+
+/// The part of a construction line or ray between two parameters of its
+/// long stand-in segment: what's left reaching the far end stays infinite
+/// (a ray), the rest becomes a line.
+fn infinite_sub(g: &Geometry, base: Point, direction: Point, s0: f64, s1: f64) -> Option<Geometry> {
+    const END: f64 = 1e-12;
+    let seg = g.segments()[0];
+    let (a, b) = (seg.point_at(s0.clamp(0.0, 1.0)), seg.point_at(s1.clamp(0.0, 1.0)));
+    if s1 <= s0 || a.approx_eq(b) {
+        return None;
+    }
+    let from_start = s0 <= END && matches!(g, Geometry::Xline { .. });
+    let to_end = s1 >= 1.0 - END;
+    Some(match (from_start, to_end) {
+        (true, true) => Geometry::Xline { base, direction },
+        (true, false) => Geometry::Ray { base: b, direction: -direction },
+        (false, true) => Geometry::Ray { base: a, direction },
+        (false, false) => Geometry::Line { start: a, end: b },
+    })
 }
 
 /// Where a transform sends a direction: the angle of `f(at + dir(angle)) - f(at)`.

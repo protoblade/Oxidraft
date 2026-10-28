@@ -36,13 +36,25 @@ const DRAW_LARGE: &[Tool] = &[
 ];
 const DRAW_SMALL: &[Tool] = &[
     tool(Icon::Rectangle, "", Some("RECTANG"), "Rectangle: creates a rectangular polyline (REC)"),
+    tool(Icon::Polygon, "", Some("POLYGON"), "Polygon: creates a regular polygon (POL)"),
+    tool(Icon::Ellipse, "", Some("ELLIPSE"), "Ellipse: creates an ellipse or elliptical arc (EL)"),
     tool(Icon::Hatch, "", Some("HATCH"), "Hatch: fills an enclosed area with a pattern (H)"),
+    tool(
+        Icon::Spline,
+        "",
+        Some("SPLINE"),
+        "Spline: creates a smooth curve through fit points or by control vertices (SPL)",
+    ),
     tool(
         Icon::Point,
         "",
         Some("POINT"),
         "Point: places a point object (PO); DIVIDE and MEASURE place them along objects",
     ),
+    tool(Icon::Xline, "", Some("XLINE"), "Construction Line: creates a line infinite both ways (XL)"),
+    tool(Icon::Ray, "", Some("RAY"), "Ray: creates a line infinite one way"),
+    tool(Icon::RevCloud, "", Some("REVCLOUD"), "Revision Cloud: draws a cloud of arcs around an area or object"),
+    tool(Icon::Donut, "", Some("DONUT"), "Donut: creates filled rings and dots (DO)"),
 ];
 const MODIFY_GRID: &[[Tool; 3]] = &[
     [
@@ -144,6 +156,10 @@ impl OxidraftApp {
                 }
             }
             ui.separator();
+            if ui.button("Plot...").clicked() {
+                self.run("PLOT");
+            }
+            ui.separator();
             if ui.button("Check for Updates...").clicked() {
                 self.check_for_updates(ui.ctx());
             }
@@ -173,6 +189,8 @@ impl OxidraftApp {
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                 if self.ribbon_tab == 0 {
                     self.home_tab(ui);
+                } else if RIBBON_TABS[self.ribbon_tab] == "Output" {
+                    self.output_tab(ui);
                 } else {
                     ui.add_space(16.0);
                     ui.vertical(|ui| {
@@ -187,16 +205,29 @@ impl OxidraftApp {
         });
     }
 
+    fn output_tab(&mut self, ui: &mut Ui) {
+        ribbon_panel(ui, "Plot", |ui| {
+            self.large_tool(ui, &tool(Icon::Plot, "Plot", Some("PLOT"), "Plots the drawing to a PDF file (Cmd+P)"));
+            self.large_tool(
+                ui,
+                &tool(Icon::PlotPreview, "Preview", Some("PREVIEW"), "Shows the drawing as it will plot"),
+            );
+        });
+    }
+
     fn home_tab(&mut self, ui: &mut Ui) {
         ribbon_panel(ui, "Draw", |ui| {
             for t in DRAW_LARGE {
                 self.large_tool(ui, t);
             }
-            ui.vertical(|ui| {
-                for t in DRAW_SMALL {
-                    self.small_tool(ui, t);
-                }
-            });
+            // Three small tools to a column, as tall as the large ones.
+            for column in DRAW_SMALL.chunks(3) {
+                ui.vertical(|ui| {
+                    for t in column {
+                        self.small_tool(ui, t);
+                    }
+                });
+            }
         });
         ribbon_panel(ui, "Modify", |ui| {
             ui.vertical(|ui| {

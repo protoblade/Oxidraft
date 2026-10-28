@@ -106,6 +106,11 @@ pub(crate) fn object_area(g: &Geometry) -> Option<(f64, f64, &'static str)> {
             let chorded = [Vertex::new(a.start_point(), a.bulge()), Vertex::at(a.end_point())];
             Some((loop_area(&chorded), g.length(), "Length"))
         }
+        Geometry::Ellipse(_) | Geometry::Spline(_) => {
+            let chorded: Vec<Vertex> = g.segments().iter().map(|s| Vertex::new(s.start(), s.bulge())).collect();
+            let word = if g.is_closed() { "Perimeter" } else { "Length" };
+            Some((g.area().unwrap_or_else(|| loop_area(&chorded)), g.length(), word))
+        }
         // Islands inside a hatch don't count: alternate adding and removing
         // loops by how deeply they're nested.
         Geometry::Hatch { loops, .. } => {

@@ -1,7 +1,7 @@
 //! Writes a small sample drawing: `cargo run -p oxidraft-io-dxf --example demo -- demo.dxf`
 
 use oxidraft_geom::Point;
-use oxidraft_model::{Attach, Color, Document, Geometry, HatchPattern, Layer, Lineweight, Vertex};
+use oxidraft_model::{Attach, Color, Document, Ellipse, Geometry, HatchPattern, Layer, Lineweight, Spline, Vertex};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args().nth(1).unwrap_or_else(|| "demo.dxf".into());
@@ -121,6 +121,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for x in [20.0, 40.0, 80.0] {
         doc.add(Geometry::Point { position: Point::new(x, 0.0) });
     }
+
+    // A pond, a path and a hedge outside the walls; a construction line
+    // through the corner; a cloud round the slab.
+    doc.add(Geometry::Ellipse(Ellipse::full(Point::new(130.0, 30.0), Point::new(14.0, 4.0), 0.55)));
+    doc.add(Geometry::Ellipse(Ellipse {
+        center: Point::new(130.0, 30.0),
+        major: Point::new(18.0, 0.0),
+        ratio: 0.6,
+        start: 200.0,
+        end: 340.0,
+    }));
+    let path_points = [(110.0, -10.0), (125.0, 5.0), (140.0, -5.0), (155.0, 10.0)].map(|(x, y)| Point::new(x, y));
+    if let Some(s) = Spline::through(&path_points, false) {
+        doc.add(Geometry::Spline(s));
+    }
+    let hedge = [(108.0, 50.0), (150.0, 48.0), (152.0, 70.0), (110.0, 72.0)].map(|(x, y)| Point::new(x, y));
+    if let Some(s) = Spline::from_control(&hedge, true) {
+        doc.add(Geometry::Spline(s));
+    }
+    doc.add(Geometry::Xline { base: Point::new(0.0, 0.0), direction: Point::new(1.0, 1.0) });
+    doc.add(Geometry::Ray { base: Point::new(100.0, 60.0), direction: Point::new(1.0, 0.2) });
+    doc.add(Geometry::Polyline {
+        vertices: vec![
+            Vertex::new(Point::new(125.0, 80.0), 1.0).with_widths(1.0, 1.0),
+            Vertex::new(Point::new(129.0, 80.0), 1.0).with_widths(1.0, 1.0),
+        ],
+        closed: true,
+    });
+    doc.add(Geometry::Polyline {
+        vertices: vec![Vertex::at(Point::new(110.0, 85.0)).with_widths(0.0, 3.0), Vertex::at(Point::new(150.0, 85.0))],
+        closed: false,
+    });
 
     oxidraft_io_dxf::save_file(&doc, &path)?;
     println!("Wrote {path} ({} objects)", doc.len());

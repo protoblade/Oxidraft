@@ -213,6 +213,8 @@ impl Command for Marks {
                             | Geometry::Arc { .. }
                             | Geometry::Circle { .. }
                             | Geometry::Polyline { .. }
+                            | Geometry::Ellipse(_)
+                            | Geometry::Spline(_)
                     )
                 {
                     return Err(format!("Cannot {} that object.", self.verb()));
