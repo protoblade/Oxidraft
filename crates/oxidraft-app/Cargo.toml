@@ -20,6 +20,7 @@ oxidraft-model.workspace = true
 oxidraft-commands.workspace = true
 oxidraft-io-dxf.workspace = true
 eframe.workspace = true
+arboard = "3"
 rfd.workspace = true
 ureq = { version = "3", features = ["json"] }
 serde = { version = "1", features = ["derive"] }

@@ -2,8 +2,20 @@ use std::collections::BTreeMap;
 
 use oxidraft_geom::{Aabb, Point};
 
-use crate::entity::{Color, Entity, EntityId, Geometry};
+use crate::entity::{Attribute, Color, Entity, EntityId, Geometry};
 use crate::linetype::{self, CONTINUOUS, Linetype, Lineweight};
+
+/// ATTDISP: which block attributes are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AttributeDisplay {
+    /// Visible ones only.
+    #[default]
+    Normal,
+    /// All of them, invisible ones too.
+    On,
+    /// None.
+    Off,
+}
 
 /// A named layer. Layer "0" always exists, as in DXF.
 #[derive(Debug, Clone, PartialEq)]
@@ -168,6 +180,12 @@ pub struct Document {
     linetypes: BTreeMap<String, Linetype>,
     /// LTSCALE: global scale of linetype patterns.
     ltscale: f64,
+    /// PDMODE and PDSIZE: how points are drawn.
+    pdmode: i32,
+    pdsize: f64,
+    attdisp: AttributeDisplay,
+    /// INSBASE: the point that lands where the drawing is inserted or pasted.
+    insbase: Point,
 }
 
 impl Default for Document {
@@ -189,6 +207,10 @@ impl Document {
             revision: 0,
             linetypes: BTreeMap::new(),
             ltscale: 1.0,
+            pdmode: 0,
+            pdsize: 0.0,
+            attdisp: AttributeDisplay::Normal,
+            insbase: Point::ORIGIN,
         }
     }
 
@@ -317,6 +339,59 @@ impl Document {
         }
     }
 
+    /// PDMODE: the point style. 0 is a dot, 1 nothing, 2 a plus, 3 an X,
+    /// 4 a tick; add 32 for a circle around it and 64 for a square.
+    pub fn pdmode(&self) -> i32 {
+        self.pdmode
+    }
+
+    /// PDSIZE: point size in drawing units, or a percentage of the view
+    /// height when negative; 0 is 5% of the view height.
+    pub fn pdsize(&self) -> f64 {
+        self.pdsize
+    }
+
+    pub fn set_point_style(&mut self, pdmode: i32, pdsize: f64) {
+        if (pdmode, pdsize) != (self.pdmode, self.pdsize) {
+            (self.pdmode, self.pdsize) = (pdmode, pdsize);
+            self.revision += 1;
+        }
+    }
+
+    /// INSBASE.
+    pub fn insbase(&self) -> Point {
+        self.insbase
+    }
+
+    pub fn set_insbase(&mut self, p: Point) {
+        if p != self.insbase {
+            self.insbase = p;
+            self.revision += 1;
+        }
+    }
+
+    /// ATTDISP.
+    pub fn attdisp(&self) -> AttributeDisplay {
+        self.attdisp
+    }
+
+    pub fn set_attdisp(&mut self, mode: AttributeDisplay) {
+        if mode != self.attdisp {
+            self.attdisp = mode;
+            self.revision += 1;
+        }
+    }
+
+    /// True if ATTDISP draws this attribute.
+    pub fn shows_attribute(&self, a: &Attribute) -> bool {
+        let wanted = match self.attdisp {
+            AttributeDisplay::Normal => !a.invisible,
+            AttributeDisplay::On => true,
+            AttributeDisplay::Off => false,
+        };
+        wanted && !a.value.is_empty() && self.is_shown(&a.layer)
+    }
+
     /// Resolved ACI color of an entity (layer color when `ByLayer`).
     pub fn display_color(&self, e: &Entity) -> u8 {
         self.color_on(&e.layer, e.color, 7)
@@ -395,7 +470,7 @@ impl Document {
                 }
             }
         }
-        for a in attributes.iter().filter(|a| !a.invisible && !a.value.is_empty() && self.is_shown(&a.layer)) {
+        for a in attributes.iter().filter(|a| self.shows_attribute(a)) {
             out.push(Styled {
                 geometry: a.text(),
                 color: self.color_on(&a.layer, a.color, own.color),

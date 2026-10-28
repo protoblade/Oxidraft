@@ -33,6 +33,14 @@ pub enum Icon {
     Table,
     LayerProperties,
     MakeCurrent,
+    LayerIsolate,
+    LayerUnisolate,
+    LayerOff,
+    LayerFreeze,
+    LayerLock,
+    LayerUnlock,
+    Point,
+    EditPolyline,
     Measure,
     InsertBlock,
     CreateBlock,
@@ -295,6 +303,48 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
                 pen.closed(&[(0.25, y), (0.75, y), (0.55, y + 0.2), (0.05, y + 0.2)], col);
             }
             pen.line(&[(0.58, 0.32), (0.72, 0.46), (0.95, 0.12)], green);
+        }
+        // One layer standing out from dimmed ones; all of them back.
+        Icon::LayerIsolate | Icon::LayerUnisolate => {
+            let isolated = icon == Icon::LayerIsolate;
+            for (i, col) in [(0, c), (1, yellow), (2, blue)] {
+                let y = 0.18 + 0.24 * i as f32;
+                let col = if isolated && i != 1 { col.gamma_multiply(0.3) } else { col };
+                pen.closed(&[(0.3, y), (0.9, y), (0.7, y + 0.2), (0.1, y + 0.2)], col);
+            }
+        }
+        // A layer with its state symbol: bulb, snowflake, lock.
+        Icon::LayerOff | Icon::LayerFreeze | Icon::LayerLock | Icon::LayerUnlock => {
+            pen.closed(&[(0.2, 0.62), (0.75, 0.62), (0.55, 0.85), (0.0, 0.85)], c);
+            match icon {
+                Icon::LayerOff => {
+                    pen.circle((0.68, 0.28), 0.17, c);
+                    pen.line(&[(0.62, 0.45), (0.74, 0.45)], c);
+                }
+                Icon::LayerFreeze => {
+                    for (dx, dy) in [(0.0, 0.2), (0.17, 0.1), (0.17, -0.1)] {
+                        pen.line(&[(0.68 - dx, 0.3 - dy), (0.68 + dx, 0.3 + dy)], blue);
+                    }
+                }
+                _ => {
+                    pen.closed(&[(0.52, 0.3), (0.86, 0.3), (0.86, 0.55), (0.52, 0.55)], yellow);
+                    let (x1, lift) = if icon == Icon::LayerLock { (0.79, 0.0) } else { (0.97, 0.06) };
+                    pen.line(&[(0.59, 0.3), (0.59, 0.12 - lift), (x1 - 0.07, 0.12 - lift), (x1, 0.18 - lift)], yellow);
+                }
+            }
+        }
+        // A point in style 35: a dot in a circle with an X.
+        Icon::Point => {
+            pen.circle((0.5, 0.5), 0.3, c);
+            pen.line(&[(0.3, 0.3), (0.7, 0.7)], c);
+            pen.line(&[(0.3, 0.7), (0.7, 0.3)], c);
+            pen.dot((0.5, 0.5), 0.07, blue);
+        }
+        Icon::EditPolyline => {
+            pen.line(&[(0.1, 0.8), (0.35, 0.35), (0.6, 0.65), (0.9, 0.2)], c);
+            for p in [(0.1, 0.8), (0.35, 0.35), (0.6, 0.65), (0.9, 0.2)] {
+                pen.grip(p, blue);
+            }
         }
         Icon::Pan => {
             for to in [(0.5, 0.08), (0.92, 0.5), (0.5, 0.92), (0.08, 0.5)] {

@@ -311,6 +311,10 @@ pub(crate) fn hatch_data(g: &Geometry) -> Vec<(i32, String)> {
     out
 }
 
+/// The z of the POINT that stands in for a hatch until [`insert_hatches`]
+/// swaps it; no 2D drawing puts a real point there.
+pub(crate) const PLACEHOLDER_Z: f64 = -7.0e7;
+
 /// Swaps each placeholder POINT for a HATCH. The crate writes the POINT's
 /// handle, owner and common entity data; its X coordinate is the index into
 /// `hatches` of the AcDbHatch data that replaces its own.
@@ -335,11 +339,9 @@ pub(crate) fn insert_hatches(dxf: &[u8], hatches: &[Vec<(i32, String)>]) -> Vec<
         let entity = &pairs[i..end];
         let subclass =
             entity.iter().position(|p| p[0].trim() == "100" && p.get(1).is_some_and(|v| v.trim() == "AcDbPoint"));
-        let index = entity
-            .iter()
-            .find(|p| p[0].trim() == "10")
-            .and_then(|p| p.get(1)?.trim().parse::<f64>().ok())
-            .map(|x| x as usize);
+        let value =
+            |code: &str| entity.iter().find(|p| p[0].trim() == code).and_then(|p| p.get(1)?.trim().parse::<f64>().ok());
+        let index = value("10").filter(|_| value("30") == Some(PLACEHOLDER_Z)).map(|x| x as usize);
         let (Some(subclass), Some(data)) = (subclass, index.and_then(|n| hatches.get(n))) else {
             entity.iter().for_each(|p| p.iter().for_each(|l| out.push_str(l)));
             i = end;

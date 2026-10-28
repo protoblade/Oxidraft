@@ -10,6 +10,8 @@ pub enum SnapKind {
     Endpoint,
     Midpoint,
     Center,
+    /// A point object.
+    Node,
     Quadrant,
     Intersection,
     /// A block reference's insertion point.
@@ -23,10 +25,11 @@ pub enum SnapKind {
 }
 
 impl SnapKind {
-    pub const ALL: [SnapKind; 9] = [
+    pub const ALL: [SnapKind; 10] = [
         SnapKind::Endpoint,
         SnapKind::Midpoint,
         SnapKind::Center,
+        SnapKind::Node,
         SnapKind::Quadrant,
         SnapKind::Intersection,
         SnapKind::Insertion,
@@ -36,10 +39,11 @@ impl SnapKind {
     ];
 
     /// The running snaps that are on in a new session.
-    pub const DEFAULT_RUNNING: [SnapKind; 6] = [
+    pub const DEFAULT_RUNNING: [SnapKind; 7] = [
         SnapKind::Endpoint,
         SnapKind::Midpoint,
         SnapKind::Center,
+        SnapKind::Node,
         SnapKind::Quadrant,
         SnapKind::Intersection,
         SnapKind::Insertion,
@@ -51,6 +55,7 @@ impl SnapKind {
             SnapKind::Endpoint => "Endpoint",
             SnapKind::Midpoint => "Midpoint",
             SnapKind::Center => "Center",
+            SnapKind::Node => "Node",
             SnapKind::Quadrant => "Quadrant",
             SnapKind::Intersection => "Intersection",
             SnapKind::Insertion => "Insertion",
@@ -75,6 +80,10 @@ pub struct Snap {
 
 /// Snap candidates an entity offers on its own.
 fn candidates(g: &Geometry, out: &mut Vec<Snap>) {
+    if let Geometry::Point { position } = g {
+        out.push(Snap { point: *position, kind: SnapKind::Node });
+        return;
+    }
     if let Geometry::Circle { center, radius } = g {
         out.push(Snap { point: *center, kind: SnapKind::Center });
         out.extend(quadrants(*center, *radius).map(|point| Snap { point, kind: SnapKind::Quadrant }));
@@ -271,7 +280,16 @@ pub fn window_select(doc: &Document, first: Point, second: Point) -> Vec<EntityI
 /// The entity whose curve is closest to `p`, if within `tolerance`.
 /// Objects on locked, off or frozen layers can't be picked.
 pub fn pick(doc: &Document, p: Point, tolerance: f64) -> Option<EntityId> {
-    let editable = || doc.entities().filter(|e| doc.is_editable(&e.layer));
+    pick_on(doc, p, tolerance, |layer| doc.is_editable(layer))
+}
+
+/// Like [`pick`], but objects on locked layers count too (LAYULK).
+pub fn pick_locked(doc: &Document, p: Point, tolerance: f64) -> Option<EntityId> {
+    pick_on(doc, p, tolerance, |layer| doc.is_shown(layer))
+}
+
+fn pick_on(doc: &Document, p: Point, tolerance: f64, layer_ok: impl Fn(&str) -> bool) -> Option<EntityId> {
+    let editable = || doc.entities().filter(|e| layer_ok(&e.layer));
     editable()
         .map(|e| (doc.entity_distance(e, p), e.id))
         .filter(|(d, _)| *d <= tolerance)
@@ -290,7 +308,7 @@ pub fn pick(doc: &Document, p: Point, tolerance: f64) -> Option<EntityId> {
 mod tests {
     use super::*;
 
-    const RUNNING: [SnapKind; 6] = SnapKind::DEFAULT_RUNNING;
+    const RUNNING: [SnapKind; 7] = SnapKind::DEFAULT_RUNNING;
 
     #[test]
     fn snaps_to_nearest_endpoint_or_midpoint() {

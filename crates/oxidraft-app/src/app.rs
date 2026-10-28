@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use eframe::egui::{self, Key, Modifiers, Rect};
-use oxidraft_commands::{Engine, QuickSelect, ViewRequest};
+use oxidraft_commands::{Engine, QuickSelect, UiRequest, ViewRequest};
 use oxidraft_geom::Point;
 use oxidraft_model::Document;
 
@@ -34,6 +34,9 @@ pub struct OxidraftApp {
     pub(crate) pending_views: Vec<ViewRequest>,
     /// The Quick Select dialog's choices while it's open.
     pub(crate) quick_select: Option<QuickSelect>,
+    pub(crate) attribute_editor: Option<crate::attedit::AttributeEditor>,
+    /// The DXF text last copied here, for PASTECLIP when the system clipboard can't be read.
+    pub(crate) clipboard: Option<String>,
     /// Earlier views, for ZOOM Previous.
     pub(crate) view_history: Vec<View>,
     /// Real-time PAN or ZOOM: the left mouse button moves the view.
@@ -99,6 +102,8 @@ impl OxidraftApp {
             zoom_extents_pending: false,
             pending_views: Vec::new(),
             quick_select: None,
+            attribute_editor: None,
+            clipboard: None,
             view_history: Vec::new(),
             realtime: None,
             last_gesture: f64::NEG_INFINITY,
@@ -250,6 +255,8 @@ impl OxidraftApp {
     fn run_app_command(&mut self, name: &str) -> bool {
         match name.trim().to_ascii_uppercase().as_str() {
             "ZE" => self.pending_views.push(ViewRequest::Extents),
+            "PASTECLIP" => self.paste_command(false),
+            "PASTEORIG" => self.paste_command(true),
             "SAVE" | "QSAVE" => self.save(false),
             "SAVEAS" => self.save(true),
             "OPEN" => self.open_dialog(),
@@ -280,6 +287,20 @@ impl OxidraftApp {
         let cursor = self.cursor.unwrap_or(Point::ORIGIN);
         let tolerance = self.pick_tolerance();
         self.engine.submit(&text, &mut self.doc, cursor, tolerance);
+    }
+
+    /// Opens what commands asked for. Returns true if there was anything.
+    fn handle_ui_requests(&mut self) -> bool {
+        let requests = self.engine.take_ui_requests();
+        for r in &requests {
+            match *r {
+                UiRequest::EditAttributes(id) => {
+                    self.edit_attributes(id);
+                }
+                UiRequest::TextWindow => self.history_expanded = true,
+            }
+        }
+        !requests.is_empty()
     }
 
     /// Where dialogs may go: above the command line, which floats over
@@ -408,6 +429,7 @@ impl eframe::App for OxidraftApp {
         let ctx = ui.ctx().clone();
         self.prev_text_fields = std::mem::take(&mut self.text_fields);
         self.handle_shortcuts(&ctx);
+        self.handle_clipboard_keys(&ctx);
         self.update_title(&ctx);
 
         self.top_bar(ui);
@@ -418,10 +440,17 @@ impl eframe::App for OxidraftApp {
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::MODEL_BG)).show(ui, |ui| {
             self.canvas(ui);
         });
+        self.handle_ui_requests();
         self.layer_manager(&ctx);
         self.quick_select_dialog(&ctx);
+        self.attribute_editor(&ctx);
         self.update_window(&ctx);
         self.command_line(&ctx);
+        self.publish_copied(&ctx);
+        // Requests from what was typed this frame show on the next.
+        if self.handle_ui_requests() {
+            ctx.request_repaint();
+        }
     }
 }
 

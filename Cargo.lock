@@ -2685,6 +2685,7 @@ dependencies = [
 name = "oxidraft-app"
 version = "0.6.1"
 dependencies = [
+ "arboard",
  "eframe",
  "egui_kittest",
  "flate2",

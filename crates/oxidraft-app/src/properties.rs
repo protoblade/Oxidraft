@@ -168,6 +168,9 @@ impl OxidraftApp {
 
     fn geometry_rows(&mut self, ui: &mut Ui, e: &Entity) {
         let rows: Vec<(&str, Value)> = match &e.geometry {
+            Geometry::Point { position } => {
+                vec![("Position X", Value::Number(position.x)), ("Position Y", Value::Number(position.y))]
+            }
             Geometry::Line { start, end } => {
                 let d = *end - *start;
                 vec![
@@ -347,6 +350,8 @@ impl OxidraftApp {
 fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
     let mut g = g.clone();
     match (&mut g, label) {
+        (Geometry::Point { position }, "Position X") => position.x = v,
+        (Geometry::Point { position }, "Position Y") => position.y = v,
         (Geometry::Line { start, .. }, "Start X") => start.x = v,
         (Geometry::Line { start, .. }, "Start Y") => start.y = v,
         (Geometry::Line { end, .. }, "End X") => end.x = v,

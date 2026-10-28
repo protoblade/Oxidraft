@@ -2,14 +2,15 @@ use oxidraft_geom::{Aabb, Point};
 use oxidraft_model::{Document, EntityId, Geometry, snap};
 
 use crate::{
-    Command, Ctx, Input, Prompt, Selection, Step, Vars, ViewRequest, annotate::Dimension, annotate::MLeader,
-    annotate::MText, annotate::SingleText, arc::Arc, array::Array, array::ArrayKind, block::DefineBlock,
-    block::InsertBlock, break_join::Break, break_join::Join, chamfer::Chamfer, circle::Circle, dims::DimAngular,
-    dims::DimChain, dims::DimRadial, erase::Erase, explode::Explode, fillet::Fillet, grip::GripStretch, hatch::Hatch,
-    inquiry::Area, inquiry::Dist, inquiry::Id, inquiry::Ltscale, layer::LayMcur, lengthen::Lengthen, line::Line,
-    matchprop::MatchProp, mirror::Mirror, move_copy::MoveCopy, offset::Offset, parse_input, pline::Pline,
-    rectang::Rectang, rotate::Rotate, scale::Scale, select::SelectSimilar, stretch::Stretch, trim_extend::TrimExtend,
-    zoom::Zoom,
+    Command, Ctx, Input, Prompt, Selection, Step, UiRequest, Vars, ViewRequest, annotate::Dimension, annotate::MLeader,
+    annotate::MText, annotate::SingleText, arc::Arc, array::Array, array::ArrayKind, attribute::AttDisp,
+    attribute::EattEdit, block::DefineBlock, block::InsertBlock, break_join::Break, break_join::Join, chamfer::Chamfer,
+    circle::Circle, clipboard::CopyClip, clipboard::Paste, dims::DimAngular, dims::DimChain, dims::DimRadial,
+    erase::Erase, explode::Explode, fillet::Fillet, grip::GripStretch, hatch::Hatch, inquiry::Area, inquiry::Dist,
+    inquiry::Id, inquiry::Ltscale, layer::LayIso, layer::LayMcur, layer::LayerPick, lengthen::Lengthen, line::Line,
+    list::List, matchprop::MatchProp, mirror::Mirror, move_copy::MoveCopy, offset::Offset, parse_input, pedit::Pedit,
+    pline::Pline, point::Marks, point::PointCmd, point::PointStyle, rectang::Rectang, rotate::Rotate, scale::Scale,
+    select::SelectSimilar, stretch::Stretch, trim_extend::TrimExtend, zoom::Zoom,
 };
 
 /// A command the user can type, with its aliases.
@@ -296,6 +297,124 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: None,
     },
     CommandInfo {
+        name: "COPYCLIP",
+        aliases: &[],
+        description: "Copy objects to the clipboard (Cmd+C)",
+        make: Some(|| Box::new(CopyClip::copy())),
+    },
+    CommandInfo {
+        name: "CUTCLIP",
+        aliases: &[],
+        description: "Cut objects to the clipboard (Cmd+X)",
+        make: Some(|| Box::new(CopyClip::cut())),
+    },
+    CommandInfo {
+        name: "COPYBASE",
+        aliases: &[],
+        description: "Copy objects to the clipboard with a base point (Cmd+Shift+C)",
+        make: Some(|| Box::new(CopyClip::with_base())),
+    },
+    // Handled by the app, which reads the clipboard.
+    CommandInfo {
+        name: "PASTECLIP",
+        aliases: &[],
+        description: "Paste objects from the clipboard (Cmd+V)",
+        make: None,
+    },
+    CommandInfo {
+        name: "PASTEORIG",
+        aliases: &[],
+        description: "Paste objects at the coordinates they were copied from",
+        make: None,
+    },
+    CommandInfo {
+        name: "PEDIT",
+        aliases: &["PE"],
+        description: "Edit polylines: close, open, join, decurve, reverse",
+        make: Some(|| Box::new(Pedit::default())),
+    },
+    CommandInfo {
+        name: "POINT",
+        aliases: &["PO"],
+        description: "Place a point object",
+        make: Some(|| Box::new(PointCmd)),
+    },
+    CommandInfo {
+        name: "DIVIDE",
+        aliases: &["DIV"],
+        description: "Place points or blocks that divide an object into equal parts",
+        make: Some(|| Box::new(Marks::divide())),
+    },
+    CommandInfo {
+        name: "MEASURE",
+        aliases: &["ME"],
+        description: "Place points or blocks at set distances along an object",
+        make: Some(|| Box::new(Marks::measure())),
+    },
+    CommandInfo {
+        name: "PDMODE",
+        aliases: &[],
+        description: "Set how points are drawn",
+        make: Some(|| Box::new(PointStyle::mode())),
+    },
+    CommandInfo {
+        name: "PDSIZE",
+        aliases: &[],
+        description: "Set the size points are drawn at",
+        make: Some(|| Box::new(PointStyle::size())),
+    },
+    CommandInfo {
+        name: "LIST",
+        aliases: &["LI", "LS"],
+        description: "List the properties of selected objects",
+        make: Some(|| Box::new(List)),
+    },
+    CommandInfo {
+        name: "EATTEDIT",
+        aliases: &[],
+        description: "Edit the attribute values of a block",
+        make: Some(|| Box::new(EattEdit)),
+    },
+    CommandInfo {
+        name: "ATTDISP",
+        aliases: &[],
+        description: "Show attributes as set, all of them, or none",
+        make: Some(|| Box::new(AttDisp::default())),
+    },
+    CommandInfo {
+        name: "LAYISO",
+        aliases: &[],
+        description: "Isolate the layers of selected objects",
+        make: Some(|| Box::new(LayIso::default())),
+    },
+    CommandInfo { name: "LAYUNISO", aliases: &[], description: "Restore the layers LAYISO changed", make: None },
+    CommandInfo {
+        name: "LAYOFF",
+        aliases: &[],
+        description: "Turn off the layer of a selected object",
+        make: Some(|| Box::new(LayerPick::off())),
+    },
+    CommandInfo {
+        name: "LAYFRZ",
+        aliases: &[],
+        description: "Freeze the layer of a selected object",
+        make: Some(|| Box::new(LayerPick::freeze())),
+    },
+    CommandInfo {
+        name: "LAYLCK",
+        aliases: &[],
+        description: "Lock the layer of a selected object",
+        make: Some(|| Box::new(LayerPick::lock())),
+    },
+    CommandInfo {
+        name: "LAYULK",
+        aliases: &[],
+        description: "Unlock the layer of a selected object",
+        make: Some(|| Box::new(LayerPick::unlock())),
+    },
+    CommandInfo { name: "LAYON", aliases: &[], description: "Turn on all layers", make: None },
+    CommandInfo { name: "LAYTHW", aliases: &[], description: "Thaw all layers", make: None },
+    CommandInfo {
         name: "LAYMCUR",
         aliases: &[],
         description: "Make the layer of a selected object current",
@@ -367,6 +486,9 @@ pub struct Engine {
     pub vars: Vars,
     /// View changes asked for since the app last took them.
     view_requests: Vec<ViewRequest>,
+    ui_requests: Vec<UiRequest>,
+    /// What was last copied, until the app puts it on the clipboard.
+    copied: Option<Document>,
 }
 
 impl Default for Engine {
@@ -395,6 +517,8 @@ impl Engine {
             dynamic_input: true,
             vars: Vars::default(),
             view_requests: Vec::new(),
+            ui_requests: Vec::new(),
+            copied: None,
         }
     }
 
@@ -403,6 +527,35 @@ impl Engine {
     /// View changes commands asked for since the last call, oldest first.
     pub fn take_view_requests(&mut self) -> Vec<ViewRequest> {
         std::mem::take(&mut self.view_requests)
+    }
+
+    /// What COPYCLIP, CUTCLIP or COPYBASE just copied: a drawing for the
+    /// app to put on the clipboard.
+    pub fn take_copied(&mut self) -> Option<Document> {
+        self.copied.take()
+    }
+
+    /// PASTECLIP (or PASTEORIG, at the copied place) with a clipboard drawing.
+    pub fn paste(&mut self, clip: Document, original: bool, doc: &mut Document) {
+        if self.active.is_some() {
+            self.cancel(doc);
+        }
+        let name = if original { "PASTEORIG" } else { "PASTECLIP" };
+        self.log(format!("Command: {name}"));
+        if original {
+            doc.begin(name);
+            crate::clipboard::paste(doc, &clip, Point::ORIGIN);
+            doc.commit();
+            return;
+        }
+        let info = find(name).expect("PASTECLIP is a command");
+        self.started.push(info.name);
+        self.launch(info, Box::new(Paste::new(clip)), doc, Point::ORIGIN, 0.0);
+    }
+
+    /// Dialogs and windows commands asked the app to show.
+    pub fn take_ui_requests(&mut self) -> Vec<UiRequest> {
+        std::mem::take(&mut self.ui_requests)
     }
 
     pub fn history(&self) -> &[String] {
@@ -804,13 +957,26 @@ impl Engine {
             self.run_immediate(info.name, doc);
             return;
         };
+        self.launch(info, make(), doc, cursor, pick_tolerance);
+    }
+
+    /// Runs a command that has been made.
+    fn launch(
+        &mut self,
+        info: &'static CommandInfo,
+        mut cmd: Box<dyn Command>,
+        doc: &mut Document,
+        cursor: Point,
+        pick_tolerance: f64,
+    ) {
         doc.begin(info.name);
-        let mut cmd = make();
         let wants_selection = cmd.wants_selection();
         if let Some(intro) = cmd.start(&self.vars) {
             self.log(intro);
         }
-        cmd.prepare(doc);
+        if let Some(line) = cmd.prepare(doc) {
+            self.log(line);
+        }
         if !wants_selection {
             cmd.preselected(&self.selection);
         }
@@ -836,6 +1002,15 @@ impl Engine {
                 "Press Esc or Enter to exit, or right-click to exit.".into()
             }
             "REDO" => doc.redo().unwrap_or_else(|| "Nothing to redo.".into()),
+            "LAYON" | "LAYTHW" | "LAYUNISO" => {
+                doc.begin(name);
+                let msg = match name {
+                    "LAYUNISO" => crate::layer::unisolate(doc, &mut self.vars),
+                    _ => crate::layer::all_layers(doc, name == "LAYTHW"),
+                };
+                doc.commit();
+                msg
+            }
             "HELP" => COMMANDS
                 .iter()
                 .map(|c| {
@@ -858,11 +1033,24 @@ impl Engine {
         if let Input::Point(p) = input {
             self.last_point = Some(p);
         }
-        let mut ctx =
-            Ctx { doc, vars: &mut self.vars, cursor, pick_tolerance, messages: Vec::new(), view: None, select: None };
+        let mut ctx = Ctx {
+            doc,
+            vars: &mut self.vars,
+            cursor,
+            pick_tolerance,
+            messages: Vec::new(),
+            view: None,
+            select: None,
+            ui: None,
+            copied: None,
+        };
         let result = active.cmd.input(input, &mut ctx);
         let messages = std::mem::take(&mut ctx.messages);
         self.view_requests.extend(ctx.view);
+        self.ui_requests.extend(ctx.ui);
+        if let Some(clip) = ctx.copied.take() {
+            self.copied = Some(clip);
+        }
         let select = ctx.select.take();
         if let Some(b) = active.cmd.base_point() {
             self.last_point = Some(b);
@@ -957,6 +1145,251 @@ mod tests {
         click(&mut e, &mut d, 5.0, 0.0);
         type_all(&mut e, &mut d, &[""]);
         assert_eq!(e.selection(), &[red]);
+    }
+
+    fn point_objects(d: &Document) -> Vec<Point> {
+        d.entities()
+            .filter_map(|x| match x.geometry {
+                Geometry::Point { position } => Some(position),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn has_point(d: &Document, x: f64, y: f64) -> bool {
+        point_objects(d).iter().any(|p| p.distance(Point::new(x, y)) < 1e-9)
+    }
+
+    #[test]
+    fn points_divide_and_measure() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["po", "3,4"]);
+        assert!(e.history().iter().any(|l| l == "Current point modes:  PDMODE=0  PDSIZE=0.0000"));
+        assert!(has_point(&d, 3.0, 4.0));
+        type_all(&mut e, &mut d, &["pdmode", "5"]);
+        assert!(e.is_active(), "5 isn't a point style");
+        type_all(&mut e, &mut d, &["35", "pdsize", "-2"]);
+        assert_eq!((d.pdmode(), d.pdsize()), (35, -2.0));
+
+        // DIVIDE a line into 5: 4 points; a circle into 4: one at 0° too.
+        type_all(&mut e, &mut d, &["l", "0,10", "10,10", "", "div"]);
+        click(&mut e, &mut d, 2.0, 10.0);
+        type_all(&mut e, &mut d, &["5"]);
+        assert!([2.0, 4.0, 6.0, 8.0].iter().all(|&x| has_point(&d, x, 10.0)));
+        assert_eq!(point_objects(&d).len(), 5);
+        type_all(&mut e, &mut d, &["c", "50,50", "10", "div"]);
+        click(&mut e, &mut d, 40.0, 50.0);
+        type_all(&mut e, &mut d, &["4"]);
+        assert!(has_point(&d, 60.0, 50.0) && has_point(&d, 50.0, 60.0) && has_point(&d, 50.0, 40.0));
+
+        // MEASURE from the end nearest the pick.
+        type_all(&mut e, &mut d, &["l", "0,20", "10,20", "", "me"]);
+        click(&mut e, &mut d, 9.0, 20.0);
+        type_all(&mut e, &mut d, &["3"]);
+        assert!([7.0, 4.0, 1.0].iter().all(|&x| has_point(&d, x, 20.0)));
+        assert!(!has_point(&d, 3.0, 20.0));
+    }
+
+    fn polyline(d: &Document) -> (Vec<Point>, bool) {
+        let mut lines = d.entities().filter_map(|x| match &x.geometry {
+            Geometry::Polyline { vertices, closed } => Some((vertices.iter().map(|v| v.point).collect(), *closed)),
+            _ => None,
+        });
+        lines.next().expect("a polyline")
+    }
+
+    #[test]
+    fn pedit_turns_lines_into_a_closed_polyline_and_reverses_it() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["l", "0,0", "10,0", "", "l", "10,0", "10,10", "", "l", "10,10", "0,10", ""]);
+        type_all(&mut e, &mut d, &["pe"]);
+        click(&mut e, &mut d, 5.0, 0.0);
+        type_all(&mut e, &mut d, &["", "j"]);
+        click(&mut e, &mut d, 10.0, 5.0);
+        click(&mut e, &mut d, 5.0, 10.0);
+        type_all(&mut e, &mut d, &["", "c", ""]);
+        assert!(!e.is_active());
+        assert!(e.history().iter().any(|l| l == "2 segments added to polyline"));
+        assert_eq!(d.entities().count(), 1);
+        let square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)].map(|(x, y)| Point::new(x, y));
+        assert_eq!(polyline(&d), (square.to_vec(), true));
+
+        type_all(&mut e, &mut d, &["pe"]);
+        click(&mut e, &mut d, 5.0, 0.0);
+        type_all(&mut e, &mut d, &["r", "o", ""]);
+        let (pts, closed) = polyline(&d);
+        assert!(!closed);
+        // Same start, the other way round.
+        assert_eq!(pts, [square[0], square[3], square[2], square[1]]);
+        d.undo();
+        assert_eq!(polyline(&d), (square.to_vec(), true), "one undo step per PEDIT");
+    }
+
+    #[test]
+    fn pedit_multiple_joins_across_small_gaps() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["pl", "0,0", "10,0", "", "pl", "10.05,0", "20,0", "", "pe", "m"]);
+        click(&mut e, &mut d, 5.0, 0.0);
+        click(&mut e, &mut d, 15.0, 0.0);
+        type_all(&mut e, &mut d, &["", "j", "0.1", ""]);
+        assert_eq!(d.entities().count(), 1);
+        let (pts, closed) = polyline(&d);
+        assert_eq!(pts.len(), 4, "the gap is bridged: {pts:?}");
+        assert!(!closed);
+    }
+
+    /// A survey point block with a visible number and an invisible elevation.
+    fn survey_point(d: &mut Document) -> EntityId {
+        use oxidraft_model::{Attach, Attribute, Block, BlockEntity, Color, Placement};
+        let circle = Geometry::Circle { center: Point::ORIGIN, radius: 0.5 };
+        d.define_block(Block {
+            name: "KW".into(),
+            base: Point::ORIGIN,
+            entities: vec![BlockEntity::new("0", Color::ByBlock, circle)],
+        });
+        let attr = |tag: &str, value: &str, invisible| Attribute {
+            tag: tag.into(),
+            value: value.into(),
+            layer: "0".into(),
+            color: Color::ByBlock,
+            position: Point::new(21.0, 0.0),
+            height: 1.0,
+            rotation: 0.0,
+            attach: Attach::BottomLeft,
+            invisible,
+        };
+        d.add(Geometry::Insert {
+            block: "KW".into(),
+            placement: Placement::at(Point::new(20.0, 0.0)),
+            attributes: vec![attr("KWNOM", "9", false), attr("ELEV", "101.5", true)],
+        })
+    }
+
+    #[test]
+    fn list_eattedit_and_attdisp() {
+        let (mut e, mut d) = (engine(), Document::new());
+        let block = survey_point(&mut d);
+        type_all(&mut e, &mut d, &["l", "0,0", "3,4", ""]);
+        click(&mut e, &mut d, 1.5, 2.0);
+        click(&mut e, &mut d, 20.0, 0.5);
+        type_all(&mut e, &mut d, &["list"]);
+        let history = e.history().join("\n");
+        assert!(history.contains("LINE  Layer: \"0\""), "{history}");
+        assert!(history.contains("Length =  5.0000"), "{history}");
+        assert!(history.contains("Block Name:  \"KW\""), "{history}");
+        assert!(history.contains("Tag:  ELEV") && history.contains("Invisible"), "{history}");
+        assert_eq!(e.take_ui_requests(), vec![UiRequest::TextWindow]);
+
+        // EATTEDIT asks the app for its editor; a line isn't a block.
+        type_all(&mut e, &mut d, &["eattedit"]);
+        click(&mut e, &mut d, 1.5, 2.0);
+        assert!(e.is_active(), "still asking for a block");
+        click(&mut e, &mut d, 20.0, 0.5);
+        assert!(!e.is_active());
+        assert_eq!(e.take_ui_requests(), vec![UiRequest::EditAttributes(block)]);
+
+        let shown = |d: &Document| d.expanded_styled(d.entity(block).unwrap()).len();
+        assert_eq!(shown(&d), 2, "circle and the visible number");
+        type_all(&mut e, &mut d, &["attdisp", "on"]);
+        assert_eq!(shown(&d), 3);
+        type_all(&mut e, &mut d, &["attdisp", "off"]);
+        assert_eq!(shown(&d), 1);
+    }
+
+    #[test]
+    fn layer_isolate_off_freeze_lock_and_back() {
+        use oxidraft_model::{Color, Layer};
+        let (mut e, mut d) = (engine(), Document::new());
+        for (name, color) in [("WALLS", 1), ("DOORS", 2), ("TEXT", 3)] {
+            d.add_layer(Layer::new(name, color));
+        }
+        let line = |y: f64| Geometry::Line { start: Point::new(0.0, y), end: Point::new(10.0, y) };
+        d.add_on_layer(line(0.0), "WALLS", Color::ByLayer);
+        d.add_on_layer(line(5.0), "DOORS", Color::ByLayer);
+        d.add_on_layer(line(10.0), "TEXT", Color::ByLayer);
+        let layer = |d: &Document, n: &str| d.layer(n).unwrap().clone();
+
+        // LAYISO locks the others by default and makes the isolated layer current.
+        click(&mut e, &mut d, 5.0, 0.0);
+        type_all(&mut e, &mut d, &["layiso"]);
+        assert!(e.history().iter().any(|l| l == "Layer \"WALLS\" has been isolated."));
+        assert!(layer(&d, "DOORS").locked && layer(&d, "TEXT").locked && !layer(&d, "WALLS").locked);
+        assert_eq!(d.current_layer(), "WALLS");
+        type_all(&mut e, &mut d, &["layuniso"]);
+        assert!(!layer(&d, "DOORS").locked && !layer(&d, "TEXT").locked);
+        assert_eq!(d.current_layer(), "0");
+
+        // LAYOFF repeats until Enter; Undo turns the last one back on.
+        type_all(&mut e, &mut d, &["layoff"]);
+        click(&mut e, &mut d, 5.0, 5.0);
+        click(&mut e, &mut d, 5.0, 10.0);
+        type_all(&mut e, &mut d, &["u", ""]);
+        assert!(!layer(&d, "DOORS").on && layer(&d, "TEXT").on);
+        type_all(&mut e, &mut d, &["layon"]);
+        assert!(layer(&d, "DOORS").on);
+
+        // The current layer can't be frozen.
+        d.set_current_layer("WALLS");
+        type_all(&mut e, &mut d, &["layfrz"]);
+        click(&mut e, &mut d, 5.0, 0.0);
+        assert!(!layer(&d, "WALLS").frozen);
+        click(&mut e, &mut d, 5.0, 10.0);
+        type_all(&mut e, &mut d, &[""]);
+        assert!(layer(&d, "TEXT").frozen);
+        type_all(&mut e, &mut d, &["laythw"]);
+        assert!(!layer(&d, "TEXT").frozen);
+
+        // LAYLCK, then LAYULK picks an object on the locked layer.
+        type_all(&mut e, &mut d, &["laylck"]);
+        click(&mut e, &mut d, 5.0, 5.0);
+        assert!(layer(&d, "DOORS").locked && !e.is_active());
+        type_all(&mut e, &mut d, &["layulk"]);
+        click(&mut e, &mut d, 5.0, 5.0);
+        assert!(!layer(&d, "DOORS").locked);
+    }
+
+    #[test]
+    fn copy_cut_and_paste_with_layers() {
+        use oxidraft_model::{Color, Layer};
+        let (mut e, mut d) = (engine(), Document::new());
+        d.add_layer(Layer::new("WALLS", 1));
+        d.add_on_layer(
+            Geometry::Line { start: Point::new(10.0, 10.0), end: Point::new(20.0, 10.0) },
+            "WALLS",
+            Color::ByLayer,
+        );
+        let line = |d: &Document| match d.entities().last().map(|x| (x.geometry.clone(), x.layer.clone())) {
+            Some((Geometry::Line { start, end }, layer)) => (start, end, layer),
+            other => panic!("{other:?}"),
+        };
+
+        // COPYCLIP: the base point is the lower-left corner.
+        click(&mut e, &mut d, 15.0, 10.0);
+        type_all(&mut e, &mut d, &["copyclip"]);
+        let clip = e.take_copied().expect("copied");
+        assert_eq!(clip.insbase(), Point::new(10.0, 10.0));
+        assert_eq!(d.entities().count(), 1);
+
+        // Pasting into another drawing brings the layer along.
+        let mut other = Document::new();
+        e.paste(clip.clone(), false, &mut other);
+        assert_eq!(e.current_prompt().unwrap().text, "Specify insertion point");
+        type_all(&mut e, &mut other, &["100,100"]);
+        assert_eq!(line(&other), (Point::new(100.0, 100.0), Point::new(110.0, 100.0), "WALLS".to_string()));
+        assert_eq!(other.layer("WALLS").unwrap().color, 1);
+        e.paste(clip, true, &mut other);
+        assert_eq!(line(&other).0, Point::new(10.0, 10.0), "PASTEORIG keeps the coordinates");
+
+        // CUTCLIP removes the objects; COPYBASE takes its base point first.
+        click(&mut e, &mut d, 15.0, 10.0);
+        type_all(&mut e, &mut d, &["cutclip"]);
+        assert_eq!(d.entities().count(), 0);
+        assert!(e.take_copied().is_some());
+        d.undo();
+        click(&mut e, &mut d, 15.0, 10.0);
+        type_all(&mut e, &mut d, &["copybase", "20,10"]);
+        assert!(!e.is_active());
+        assert_eq!(e.take_copied().unwrap().insbase(), Point::new(20.0, 10.0));
     }
 
     #[test]
@@ -1760,9 +2193,10 @@ mod tests {
     #[test]
     fn autocomplete_prefers_exact_alias() {
         let names: Vec<_> = Engine::suggest("c").iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["CIRCLE", "COPY", "CHAMFER", "PROPERTIES"], "PROPERTIES via its CH alias");
+        let expected = vec!["CIRCLE", "COPY", "CHAMFER", "COPYCLIP", "CUTCLIP", "COPYBASE", "PROPERTIES"];
+        assert_eq!(names, expected, "PROPERTIES via its CH alias");
         let names: Vec<_> = Engine::suggest("co").iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["COPY"]);
+        assert_eq!(names, vec!["COPY", "COPYCLIP", "COPYBASE"]);
         let names: Vec<_> = Engine::suggest("s").iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["STRETCH", "SCALE", "SELECTSIMILAR"]);
     }

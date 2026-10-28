@@ -37,6 +37,12 @@ const DRAW_LARGE: &[Tool] = &[
 const DRAW_SMALL: &[Tool] = &[
     tool(Icon::Rectangle, "", Some("RECTANG"), "Rectangle: creates a rectangular polyline (REC)"),
     tool(Icon::Hatch, "", Some("HATCH"), "Hatch: fills an enclosed area with a pattern (H)"),
+    tool(
+        Icon::Point,
+        "",
+        Some("POINT"),
+        "Point: places a point object (PO); DIVIDE and MEASURE place them along objects",
+    ),
 ];
 const MODIFY_GRID: &[[Tool; 3]] = &[
     [
@@ -64,6 +70,15 @@ const MODIFY_SMALL: &[Tool] = &[
     tool(Icon::Erase, "", Some("ERASE"), "Erase: removes objects from the drawing (E)"),
     tool(Icon::Explode, "", Some("EXPLODE"), "Explode: breaks polylines into lines and arcs (X)"),
     tool(Icon::Offset, "", Some("OFFSET"), "Offset: creates parallel copies (O)"),
+    tool(Icon::EditPolyline, "", Some("PEDIT"), "Edit Polyline: closes, opens, joins or reverses polylines (PE)"),
+];
+const LAYER_TOOLS: &[Tool] = &[
+    tool(Icon::LayerIsolate, "", Some("LAYISO"), "Isolate: locks every layer but those of the selected objects"),
+    tool(Icon::LayerUnisolate, "", Some("LAYUNISO"), "Unisolate: puts back the layers Isolate changed"),
+    tool(Icon::LayerOff, "", Some("LAYOFF"), "Off: turns off the layer of the object you pick"),
+    tool(Icon::LayerFreeze, "", Some("LAYFRZ"), "Freeze: freezes the layer of the object you pick"),
+    tool(Icon::LayerLock, "", Some("LAYLCK"), "Lock: locks the layer of the object you pick"),
+    tool(Icon::LayerUnlock, "", Some("LAYULK"), "Unlock: unlocks the layer of the object you pick"),
 ];
 const ANNOTATION_LARGE: &[Tool] = &[
     tool(Icon::Text, "Text", Some("MTEXT"), "Creates multiline text (T); single-line text is DT"),
@@ -193,11 +208,14 @@ impl OxidraftApp {
                     });
                 }
             });
-            ui.vertical(|ui| {
-                for t in MODIFY_SMALL {
-                    self.small_tool(ui, t);
-                }
-            });
+            // Three small tools to a column, as tall as the large ones.
+            for column in MODIFY_SMALL.chunks(3) {
+                ui.vertical(|ui| {
+                    for t in column {
+                        self.small_tool(ui, t);
+                    }
+                });
+            }
         });
         ribbon_panel(ui, "Annotation", |ui| {
             for t in ANNOTATION_LARGE {
@@ -218,15 +236,19 @@ impl OxidraftApp {
                 ui.add_space(6.0);
                 self.layer_combo(ui);
                 ui.add_space(4.0);
-                self.small_tool(
-                    ui,
-                    &tool(
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let make_current = tool(
                         Icon::MakeCurrent,
                         "Make Current",
                         Some("LAYMCUR"),
                         "Makes a selected object's layer current",
-                    ),
-                );
+                    );
+                    self.small_tool(ui, &make_current);
+                    for t in LAYER_TOOLS {
+                        self.small_tool(ui, t);
+                    }
+                });
             });
         });
         ribbon_panel(ui, "Block", |ui| {

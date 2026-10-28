@@ -332,10 +332,12 @@ impl OxidraftApp {
             }
         }
         // Double-clicking an object opens its properties, as in AutoCAD (its
-        // two clicks have already selected it).
+        // two clicks have already selected it); a block with attributes
+        // opens the attribute editor instead.
         if response.double_clicked_by(PointerButton::Primary)
             && !self.engine.is_active()
-            && snap::pick(&self.doc, c.raw, tolerance).is_some()
+            && let Some(id) = snap::pick(&self.doc, c.raw, tolerance)
+            && !self.edit_attributes(id)
         {
             self.properties_open = true;
         }
@@ -499,6 +501,7 @@ impl OxidraftApp {
                 painter.circle_stroke(self.view.to_screen(rect, *center), r, stroke);
                 return;
             }
+            Geometry::Point { position } => return self.draw_point(painter, rect, *position, stroke),
             Geometry::Text { .. } => return self.draw_text(painter, rect, g, stroke),
             Geometry::Hatch { .. } => return self.draw_hatch(painter, rect, g, stroke),
             _ => {}
@@ -506,6 +509,42 @@ impl OxidraftApp {
         let points = self.screen_path(rect, g);
         if points.len() >= 2 {
             painter.add(Shape::line(points, stroke));
+        }
+    }
+
+    /// A point in the PDMODE style and PDSIZE size: by default a dot, and
+    /// figures 5% of the view's height.
+    fn draw_point(&self, painter: &Painter, rect: Rect, position: Point, stroke: Stroke) {
+        let at = self.view.to_screen(rect, position);
+        let (mode, size) = (self.doc.pdmode(), self.doc.pdsize());
+        let full = match size {
+            s if s > 0.0 => (s * self.view.scale) as f32,
+            s if s < 0.0 => rect.height() * (-s) as f32 / 100.0,
+            _ => rect.height() * 0.05,
+        };
+        let h = full / 2.0;
+        match mode & 31 {
+            0 => {
+                painter.circle_filled(at, (stroke.width / 2.0).max(1.0), stroke.color);
+            }
+            2 => {
+                painter.line_segment([at - vec2(h, 0.0), at + vec2(h, 0.0)], stroke);
+                painter.line_segment([at - vec2(0.0, h), at + vec2(0.0, h)], stroke);
+            }
+            3 => {
+                painter.line_segment([at - vec2(h, h), at + vec2(h, h)], stroke);
+                painter.line_segment([at + vec2(-h, h), at + vec2(h, -h)], stroke);
+            }
+            4 => {
+                painter.line_segment([at, at - vec2(0.0, h)], stroke);
+            }
+            _ => {}
+        }
+        if mode & 32 != 0 {
+            painter.circle_stroke(at, h, stroke);
+        }
+        if mode & 64 != 0 {
+            painter.rect_stroke(Rect::from_center_size(at, vec2(full, full)), 0.0, stroke, StrokeKind::Middle);
         }
     }
 
@@ -741,6 +780,13 @@ fn draw_snap_marker(painter: &Painter, at: Pos2, kind: SnapKind) {
         }
         SnapKind::Center => {
             painter.circle_stroke(at, s, stroke);
+        }
+        // A circle with an X through it.
+        SnapKind::Node => {
+            painter.circle_stroke(at, s, stroke);
+            let d = s * 0.7;
+            painter.line_segment([at + vec2(-d, -d), at + vec2(d, d)], stroke);
+            painter.line_segment([at + vec2(-d, d), at + vec2(d, -d)], stroke);
         }
         SnapKind::Quadrant => {
             let pts = vec![at + vec2(0.0, -s), at + vec2(s, 0.0), at + vec2(0.0, s), at + vec2(-s, 0.0)];

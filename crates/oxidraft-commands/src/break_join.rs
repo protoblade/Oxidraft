@@ -1,7 +1,7 @@
 //! BREAK, BREAKATPOINT and JOIN: cut objects apart and put them back together.
 
 use oxidraft_geom::{
-    EPSILON, Point,
+    EPSILON, Point, Segment,
     curve::{ArcSeg, Seg},
 };
 use oxidraft_model::{EntityId, Geometry, snap};
@@ -9,7 +9,7 @@ use oxidraft_model::{EntityId, Geometry, snap};
 use crate::{Command, Ctx, Input, Prompt, Step};
 
 /// Distance under which two endpoints count as the same point for JOIN.
-const JOIN_TOL: f64 = 1e-6;
+pub(crate) const JOIN_TOL: f64 = 1e-6;
 
 /// The pieces left after removing the part of `g` between `p1` and `p2`
 /// (both projected onto it). Equal points split the object there. On a
@@ -141,12 +141,56 @@ impl Command for Break {
 }
 
 /// One curve of a chain being joined: segments in chain order.
-fn ends(segs: &[Seg]) -> (Point, Point) {
+pub(crate) fn ends(segs: &[Seg]) -> (Point, Point) {
     (segs[0].start(), segs[segs.len() - 1].end())
 }
 
-fn reversed(segs: &[Seg]) -> Vec<Seg> {
+pub(crate) fn reversed(segs: &[Seg]) -> Vec<Seg> {
     segs.iter().rev().map(Seg::reversed).collect()
+}
+
+/// An object that can join a chain, as its segments.
+pub(crate) type Piece = (EntityId, Vec<Seg>);
+
+/// Grows `chain` with the unused `pieces` whose ends meet its ends within
+/// `fuzz`, bridging any gap with a straight segment (AutoCAD's "Add" join
+/// type). Stops once the chain closes. Returns the pieces added.
+pub(crate) fn grow_chain(chain: &mut Vec<Seg>, pieces: &[Piece], used: &mut [bool], fuzz: f64) -> Vec<EntityId> {
+    let fuzz = fuzz.max(JOIN_TOL);
+    let bridge = |a: Point, b: Point| (a.distance(b) > JOIN_TOL).then(|| Seg::Line(Segment::new(a, b)));
+    let mut added = Vec::new();
+    'grow: loop {
+        let (cs, ce) = ends(chain);
+        if !added.is_empty() && cs.distance(ce) <= fuzz {
+            break;
+        }
+        for (j, (id, segs)) in pieces.iter().enumerate() {
+            if used[j] {
+                continue;
+            }
+            let (ps, pe) = ends(segs);
+            if ce.distance(ps) <= fuzz {
+                chain.extend(bridge(ce, ps));
+                chain.extend(segs.iter().copied());
+            } else if ce.distance(pe) <= fuzz {
+                chain.extend(bridge(ce, pe));
+                chain.extend(reversed(segs));
+            } else if cs.distance(pe) <= fuzz {
+                let front: Vec<Seg> = segs.iter().copied().chain(bridge(pe, cs)).collect();
+                chain.splice(0..0, front);
+            } else if cs.distance(ps) <= fuzz {
+                let front: Vec<Seg> = reversed(segs).into_iter().chain(bridge(ps, cs)).collect();
+                chain.splice(0..0, front);
+            } else {
+                continue;
+            }
+            used[j] = true;
+            added.push(*id);
+            continue 'grow;
+        }
+        break;
+    }
+    added
 }
 
 /// The single object a chain of end-to-end segments becomes: one line if
@@ -196,7 +240,7 @@ impl Command for Join {
         let Input::Selection(selection) = input else {
             return Err("Select objects, then press Enter.".into());
         };
-        let pieces: Vec<(EntityId, Vec<Seg>)> = selection
+        let pieces: Vec<Piece> = selection
             .ids
             .iter()
             .filter_map(|&id| {
@@ -216,34 +260,7 @@ impl Command for Join {
             used[i] = true;
             let mut chain = pieces[i].1.clone();
             let mut members = vec![pieces[i].0];
-            'grow: loop {
-                let (cs, ce) = ends(&chain);
-                if members.len() > 1 && cs.distance(ce) <= JOIN_TOL {
-                    break;
-                }
-                for j in 0..pieces.len() {
-                    if used[j] {
-                        continue;
-                    }
-                    let segs = &pieces[j].1;
-                    let (ps, pe) = ends(segs);
-                    if ce.distance(ps) <= JOIN_TOL {
-                        chain.extend(segs.iter().copied());
-                    } else if ce.distance(pe) <= JOIN_TOL {
-                        chain.extend(reversed(segs));
-                    } else if cs.distance(pe) <= JOIN_TOL {
-                        chain.splice(0..0, segs.iter().copied());
-                    } else if cs.distance(ps) <= JOIN_TOL {
-                        chain.splice(0..0, reversed(segs));
-                    } else {
-                        continue;
-                    }
-                    used[j] = true;
-                    members.push(pieces[j].0);
-                    continue 'grow;
-                }
-                break;
-            }
+            members.extend(grow_chain(&mut chain, &pieces, &mut used, JOIN_TOL));
             if members.len() < 2 {
                 continue;
             }

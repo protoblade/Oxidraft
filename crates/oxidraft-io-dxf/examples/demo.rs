@@ -116,6 +116,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         text: None,
         scale: 1.0,
     });
+    // Survey points along the bottom wall, drawn as circled crosses.
+    doc.set_point_style(35, 1.5);
+    for x in [20.0, 40.0, 80.0] {
+        doc.add(Geometry::Point { position: Point::new(x, 0.0) });
+    }
 
     oxidraft_io_dxf::save_file(&doc, &path)?;
     println!("Wrote {path} ({} objects)", doc.len());

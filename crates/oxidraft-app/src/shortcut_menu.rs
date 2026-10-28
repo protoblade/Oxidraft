@@ -54,9 +54,27 @@ impl OxidraftApp {
         });
     }
 
+    /// Cut, copy and paste; cutting and copying need a selection.
+    fn clipboard_items(&mut self, ui: &mut Ui, selected: bool) {
+        ui.menu_button("Clipboard", |ui| {
+            for (label, command, shortcut, needs_selection) in [
+                ("Cut", "CUTCLIP", "Cmd+X", true),
+                ("Copy", "COPYCLIP", "Cmd+C", true),
+                ("Copy with Base Point", "COPYBASE", "Shift+Cmd+C", true),
+                ("Paste", "PASTECLIP", "Cmd+V", false),
+                ("Paste to Original Coordinates", "PASTEORIG", "", false),
+            ] {
+                if item_enabled(ui, selected || !needs_selection, label, shortcut) {
+                    self.run(command);
+                }
+            }
+        });
+    }
+
     /// Nothing selected, no command running.
     fn default_menu(&mut self, ui: &mut Ui) {
         self.repeat_items(ui);
+        self.clipboard_items(ui, false);
         ui.separator();
         let undo = self.doc.undo_name().map(str::to_string);
         if item_enabled(ui, undo.is_some(), format!("Undo {}", undo.unwrap_or_default()), "Cmd+Z") {
@@ -86,6 +104,7 @@ impl OxidraftApp {
     /// Objects selected, no command running.
     fn edit_menu(&mut self, ui: &mut Ui) {
         self.repeat_items(ui);
+        self.clipboard_items(ui, true);
         ui.separator();
         for (label, command, alias) in [
             ("Erase", "ERASE", "Del"),

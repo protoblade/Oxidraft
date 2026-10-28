@@ -9,10 +9,12 @@
 mod annotate;
 mod arc;
 mod array;
+mod attribute;
 mod block;
 mod break_join;
 mod chamfer;
 mod circle;
+mod clipboard;
 mod common;
 mod dims;
 mod edit;
@@ -27,11 +29,14 @@ mod inquiry;
 mod layer;
 mod lengthen;
 mod line;
+mod list;
 mod matchprop;
 mod mirror;
 mod move_copy;
 mod offset;
+mod pedit;
 mod pline;
+mod point;
 mod rectang;
 mod rotate;
 mod scale;
@@ -40,6 +45,7 @@ mod stretch;
 mod trim_extend;
 mod zoom;
 
+pub use clipboard::{clip_of, paste};
 pub use engine::{COMMANDS, CommandInfo, Engine, Tracked};
 pub use input::{Input, parse_input};
 pub use select::{QuickOperator, QuickProperty, QuickSelect, SimilarMode, color_label, object_type, select_similar};
@@ -118,6 +124,15 @@ pub enum ViewRequest {
     RealtimePan,
 }
 
+/// Something a command asks the app to show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiRequest {
+    /// The Enhanced Attribute Editor for a block reference (EATTEDIT).
+    EditAttributes(EntityId),
+    /// The full command history, for long output like LIST's.
+    TextWindow,
+}
+
 /// Result of feeding one input to a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
@@ -151,6 +166,10 @@ pub struct Vars {
     /// date by the app.
     pub view_size: f64,
     pub view_center: Point,
+    /// LAYISOMODE: true turns the other layers off; false locks and fades them.
+    pub layiso_off: bool,
+    /// The layers as they were before LAYISO, and the current layer, for LAYUNISO.
+    pub layiso_saved: Option<(Vec<oxidraft_model::Layer>, String)>,
 }
 
 impl Default for Vars {
@@ -169,6 +188,8 @@ impl Default for Vars {
             select_similar: SimilarMode::default(),
             view_size: 100.0,
             view_center: Point::ORIGIN,
+            layiso_off: false,
+            layiso_saved: None,
         }
     }
 }
@@ -187,6 +208,10 @@ pub struct Ctx<'a> {
     pub view: Option<ViewRequest>,
     /// Objects to leave selected when the command ends (SELECTSIMILAR).
     pub select: Option<Vec<EntityId>>,
+    /// A dialog or window for the app to open.
+    pub ui: Option<UiRequest>,
+    /// What COPYCLIP and friends copied, for the clipboard.
+    pub copied: Option<Document>,
 }
 
 pub trait Command {
@@ -197,8 +222,10 @@ pub trait Command {
     }
 
     /// Called once after [`Command::start`], for commands whose prompts
-    /// show something stored in the drawing.
-    fn prepare(&mut self, _doc: &Document) {}
+    /// show something stored in the drawing. Returns a line to print.
+    fn prepare(&mut self, _doc: &Document) -> Option<String> {
+        None
+    }
 
     /// For commands that don't ask to select objects: the objects selected
     /// before the command started (ZOOM's Object option uses them).

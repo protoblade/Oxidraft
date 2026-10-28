@@ -11,7 +11,7 @@ pub mod linetype;
 pub mod snap;
 
 pub use annotation::Attach;
-pub use document::{Block, BlockEntity, Document, Layer, Styled, check_name};
+pub use document::{AttributeDisplay, Block, BlockEntity, Document, Layer, Styled, check_name};
 pub use entity::{Attribute, Color, Entity, EntityId, Geometry, Placement, Vertex};
 pub use hatch::HatchPattern;
 pub use linetype::{Linetype, Lineweight};

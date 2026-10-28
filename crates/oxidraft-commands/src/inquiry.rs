@@ -207,8 +207,9 @@ pub struct Ltscale {
 }
 
 impl Command for Ltscale {
-    fn prepare(&mut self, doc: &Document) {
+    fn prepare(&mut self, doc: &Document) -> Option<String> {
         self.current = doc.ltscale();
+        None
     }
 
     fn prompt(&self) -> Prompt {

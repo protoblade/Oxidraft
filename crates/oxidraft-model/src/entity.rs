@@ -47,6 +47,10 @@ impl Vertex {
 /// The shape of an entity.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Geometry {
+    /// A point (DXF POINT), drawn in the style PDMODE and PDSIZE set.
+    Point {
+        position: Point,
+    },
     Line {
         start: Point,
         end: Point,
@@ -233,6 +237,7 @@ impl Geometry {
     /// The object type as AutoCAD names it in prompts and messages.
     pub fn name(&self) -> &'static str {
         match self {
+            Geometry::Point { .. } => "Point",
             Geometry::Line { .. } => "Line",
             Geometry::Circle { .. } => "Circle",
             Geometry::Arc { .. } => "Arc",
@@ -277,6 +282,7 @@ impl Geometry {
                 (0..4).map(|i| Seg::Line(Segment::new(b[i], b[(i + 1) % 4]))).collect()
             }
             Geometry::Hatch { loops, .. } => loops.iter().flat_map(|l| hatch::loop_segments(l)).collect(),
+            Geometry::Point { position } => vec![Seg::Line(Segment::new(*position, *position))],
             _ => self.segments(),
         }
     }
@@ -312,8 +318,9 @@ impl Geometry {
                     .collect()
             }
             // Expanded by the document (blocks) or by `primitives` (dimensions,
-            // leaders); text and hatches aren't curves.
-            Geometry::Insert { .. }
+            // leaders); points, text and hatches aren't curves.
+            Geometry::Point { .. }
+            | Geometry::Insert { .. }
             | Geometry::Text { .. }
             | Geometry::Dimension { .. }
             | Geometry::RadialDimension { .. }
@@ -496,6 +503,7 @@ impl Geometry {
     /// scales lengths, and whether it flips orientation (mirroring).
     pub(crate) fn map_points(&self, f: &dyn Fn(Point) -> Point, length_factor: f64, flips: bool) -> Geometry {
         match self {
+            Geometry::Point { position } => Geometry::Point { position: f(*position) },
             Geometry::Line { start, end } => Geometry::Line { start: f(*start), end: f(*end) },
             Geometry::Circle { center, radius } => {
                 Geometry::Circle { center: f(*center), radius: radius * length_factor }
@@ -600,6 +608,7 @@ impl Geometry {
         let inside = |p: Point| windows.iter().any(|w| w.contains(p));
         let shift = |p: Point| if inside(p) { p + d } else { p };
         match self {
+            Geometry::Point { position } => Geometry::Point { position: shift(*position) },
             Geometry::Line { start, end } => Geometry::Line { start: shift(*start), end: shift(*end) },
             Geometry::Circle { center, radius } => Geometry::Circle { center: shift(*center), radius: *radius },
             Geometry::Arc { .. } => {
@@ -661,6 +670,7 @@ impl Geometry {
     /// arc = start, midpoint, end, center; polyline = its vertices.
     pub fn grips(&self) -> Vec<Point> {
         match self {
+            Geometry::Point { position } => vec![*position],
             Geometry::Line { start, end } => vec![*start, start.midpoint(*end), *end],
             Geometry::Circle { center, radius } => {
                 let mut g = vec![*center];
@@ -685,6 +695,7 @@ impl Geometry {
     /// The shape after dragging grip `index` to `to` (grip STRETCH).
     pub fn with_grip_moved(&self, index: usize, to: Point) -> Geometry {
         match (self, index) {
+            (Geometry::Point { .. }, _) => Geometry::Point { position: to },
             (Geometry::Line { end, .. }, 0) => Geometry::Line { start: to, end: *end },
             (Geometry::Line { start, end }, 1) => self.translated(to - start.midpoint(*end)),
             (Geometry::Line { start, .. }, _) => Geometry::Line { start: *start, end: to },

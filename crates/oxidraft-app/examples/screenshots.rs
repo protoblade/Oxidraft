@@ -12,7 +12,9 @@ use oxidraft_app::{
     update::{Release, UpdateState},
 };
 use oxidraft_geom::Point;
-use oxidraft_model::{Attach, Color, Document, Geometry, HatchPattern, Layer, Vertex};
+use oxidraft_model::{
+    Attach, Attribute, Block, BlockEntity, Color, Document, Geometry, HatchPattern, Layer, Placement, Vertex,
+};
 
 fn sample() -> Document {
     let mut doc = Document::new();
@@ -270,6 +272,53 @@ fn main() {
     click(&mut h, Point::new(60.0, 60.0));
     hover(&mut h, Point::new(54.0, 40.0));
     save(&mut h, &dir, "17-dimension-preview");
+
+    // DIVIDE a wall into 6 with PDMODE 35 points, then LIST it.
+    let mut h = harness();
+    for typed in ["pdmode", "35", "div"] {
+        h.state_mut().type_command(typed);
+        h.run_steps(1);
+    }
+    click(&mut h, Point::new(30.0, 0.0));
+    h.state_mut().type_command("6");
+    h.run_steps(1);
+    click(&mut h, Point::new(30.0, 0.0));
+    h.state_mut().type_command("list");
+    h.run_steps(2);
+    hover(&mut h, Point::new(70.0, 45.0));
+    save(&mut h, &dir, "18-divide-and-list");
+
+    // The attribute editor on a survey point block.
+    let mut h = harness();
+    let doc = h.state_mut().document_mut();
+    let circle = Geometry::Circle { center: Point::ORIGIN, radius: 1.5 };
+    doc.define_block(Block {
+        name: "KW".into(),
+        base: Point::ORIGIN,
+        entities: vec![BlockEntity::new("0", Color::ByBlock, circle)],
+    });
+    let attribute = |tag: &str, value: &str, dy: f64| Attribute {
+        tag: tag.into(),
+        value: value.into(),
+        layer: "0".into(),
+        color: Color::ByBlock,
+        position: Point::new(52.0, 50.0 + dy),
+        height: 2.0,
+        rotation: 0.0,
+        attach: Attach::BottomLeft,
+        invisible: false,
+    };
+    doc.add(Geometry::Insert {
+        block: "KW".into(),
+        placement: Placement::at(Point::new(50.0, 50.0)),
+        attributes: vec![attribute("KWNOM", "9", 0.0), attribute("ELEV", "101.52", -3.0)],
+    });
+    h.run_steps(1);
+    h.state_mut().type_command("eattedit");
+    h.run_steps(1);
+    click(&mut h, Point::new(51.5, 50.0));
+    h.run_steps(2);
+    save(&mut h, &dir, "19-attribute-editor");
 
     // AutoComplete on the command line.
     let mut h = harness();

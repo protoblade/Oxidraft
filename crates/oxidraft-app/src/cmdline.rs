@@ -130,18 +130,29 @@ impl OxidraftApp {
 
     fn history_lines(&self, ui: &mut egui::Ui, width: f32) {
         let history = self.engine.history();
-        let count = if self.history_expanded { 14 } else { 3 };
-        let lines = &history[history.len().saturating_sub(count)..];
-        if lines.is_empty() {
+        if history.is_empty() {
             return;
         }
+        let line = |ui: &mut egui::Ui, text: &str, alpha: f32| {
+            ui.label(RichText::new(text).font(FontId::monospace(12.0)).color(theme::TEXT.gamma_multiply(alpha)));
+        };
         Frame::NONE.fill(HISTORY_BG).inner_margin(Margin::symmetric(10, 4)).show(ui, |ui| {
             ui.set_width(width - 20.0);
-            for (i, line) in lines.iter().enumerate() {
+            if self.history_expanded {
+                // F2: the history scrolls, newest at the bottom.
+                egui::ScrollArea::vertical().max_height(14.0 * 15.0).stick_to_bottom(true).show(ui, |ui| {
+                    ui.set_width(width - 20.0);
+                    for text in &history[history.len().saturating_sub(2000)..] {
+                        line(ui, text, 1.0);
+                    }
+                });
+                return;
+            }
+            let lines = &history[history.len().saturating_sub(3)..];
+            for (i, text) in lines.iter().enumerate() {
                 // Older lines fade out, like AutoCAD's floating command line.
                 let age = (lines.len() - 1 - i) as f32;
-                let alpha = if self.history_expanded { 1.0 } else { 1.0 - age * 0.25 };
-                ui.label(RichText::new(line).font(FontId::monospace(12.0)).color(theme::TEXT.gamma_multiply(alpha)));
+                line(ui, text, 1.0 - age * 0.25);
             }
         });
     }
@@ -150,6 +161,7 @@ impl OxidraftApp {
         let prompt = self.engine.current_prompt();
         let name = self.engine.active_name();
         let mut clicked_keyword = None;
+        let mut entered = false;
         Frame::NONE
             .fill(BAR_BG)
             .stroke(Stroke::new(1.0, theme::TOOLTIP_EDGE))
@@ -200,6 +212,8 @@ impl OxidraftApp {
                         .frame(Frame::NONE)
                         .desired_width(f32::INFINITY);
                     let response = ui.add(edit);
+                    // Only Enter typed here: not in a dialog's field or an open dropdown.
+                    entered = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                     if response.changed() {
                         self.suggestion = 0;
                         self.recall = None;
@@ -212,7 +226,6 @@ impl OxidraftApp {
                 });
             });
 
-        let enter = ui.input(|i| i.key_pressed(Key::Enter));
         // Space acts as Enter, as in AutoCAD, except while typing text that contains spaces.
         let space = !self.engine.accepts_spaces() && self.command_text.ends_with(' ');
         if space {
@@ -220,7 +233,7 @@ impl OxidraftApp {
         }
         if let Some(k) = clicked_keyword {
             self.type_command(k);
-        } else if enter || space {
+        } else if entered || space {
             self.submit();
         }
     }

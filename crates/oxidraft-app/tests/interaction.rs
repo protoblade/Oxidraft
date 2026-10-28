@@ -1,6 +1,6 @@
 //! Drives the real app through egui pointer events, the way a user would.
 
-use eframe::egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
+use eframe::egui::{Event, Key, Modifiers, PointerButton, Pos2, accesskit::Role, vec2};
 use egui_kittest::{
     Harness,
     kittest::{NodeT, Queryable},
@@ -10,7 +10,12 @@ use oxidraft_geom::Point;
 use oxidraft_model::{Document, Geometry};
 
 fn app_with_line() -> Harness<'static, OxidraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).build_eframe(|cc| {
+    app_with_line_at(1.0 / 4.0)
+}
+
+/// The test app, with `step_dt` seconds between frames.
+fn app_with_line_at(step_dt: f32) -> Harness<'static, OxidraftApp> {
+    let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(step_dt).build_eframe(|cc| {
         let mut app = OxidraftApp::new(cc);
         let mut doc = Document::new();
         doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(100.0, 0.0) });
@@ -348,4 +353,87 @@ fn the_layer_manager_stays_above_the_command_line() {
     drag(&mut h, title, Pos2::new(title.x, 790.0));
     h.run_steps(3);
     check(&h, "moved");
+}
+
+#[test]
+fn double_clicking_a_block_edits_its_attributes() {
+    use oxidraft_model::{Attach, Attribute, Block, BlockEntity, Color, Placement};
+    // 60 frames a second, so two clicks fall within egui's double-click time.
+    let mut h = app_with_line_at(1.0 / 60.0);
+    let doc = h.state_mut().document_mut();
+    let circle = Geometry::Circle { center: Point::new(0.0, 0.0), radius: 3.0 };
+    doc.define_block(Block {
+        name: "KW".into(),
+        base: Point::new(0.0, 0.0),
+        entities: vec![BlockEntity::new("0", Color::ByBlock, circle)],
+    });
+    let number = Attribute {
+        tag: "KWNOM".into(),
+        value: "9".into(),
+        layer: "0".into(),
+        color: Color::ByBlock,
+        position: Point::new(54.0, 30.0),
+        height: 2.0,
+        rotation: 0.0,
+        attach: Attach::BottomLeft,
+        invisible: false,
+    };
+    let block = doc.add(Geometry::Insert {
+        block: "KW".into(),
+        placement: Placement::at(Point::new(50.0, 30.0)),
+        attributes: vec![number],
+    });
+    h.run_steps(2);
+    let edge = screen(&h, 53.0, 30.0);
+    click(&mut h, edge);
+    click(&mut h, edge);
+    h.run_steps(2);
+    let lines_before = h.state_mut().engine_mut().history().len();
+
+    let field = h.get_by_role_and_label(Role::TextInput, "KWNOM");
+    field.focus();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_role_and_label(Role::TextInput, "KWNOM").type_text("12");
+    h.run_steps(1);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    let value = match &h.state_mut().document_mut().entity(block).unwrap().geometry {
+        Geometry::Insert { attributes, .. } => attributes[0].value.clone(),
+        g => panic!("{g:?}"),
+    };
+    assert_eq!(value, "12");
+    assert!(h.query_by_role_and_label(Role::TextInput, "KWNOM").is_none(), "Enter closed the editor");
+    let engine = h.state_mut().engine_mut();
+    assert!(!engine.is_active() && engine.history().len() == lines_before, "Enter didn't reach the command line");
+}
+
+#[test]
+fn copy_and_paste_through_the_clipboard() {
+    use eframe::egui::OutputCommand;
+    let mut h = app_with_line();
+    let on_line = screen(&h, 50.0, 0.0);
+    click(&mut h, on_line);
+    h.event(Event::Copy);
+    h.run_steps(1);
+    let copied = h.output().platform_output.commands.iter().find_map(|c| match c {
+        OutputCommand::CopyText(text) => Some(text.clone()),
+        _ => None,
+    });
+    let text = copied.expect("Cmd+C put the line on the clipboard");
+    assert!(text.contains("ENTITIES") && text.contains("LINE"));
+
+    // Cmd+V: the line follows the cursor until a click places it.
+    h.event(Event::Paste(text));
+    h.run_steps(2);
+    let prompt = h.state_mut().engine_mut().current_prompt().map(|p| p.text);
+    assert_eq!(prompt.as_deref(), Some("Specify insertion point"));
+    let target = screen(&h, 20.0, 30.0);
+    click(&mut h, target);
+    h.run_steps(1);
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.entities().count(), 3, "the copy, besides the two lines");
+    let pasted = doc.entities().last().unwrap().geometry.clone();
+    let Geometry::Line { start, end } = pasted else { panic!("{pasted:?}") };
+    assert!(start.distance(Point::new(20.0, 30.0)) < 0.5 && (end - start).length() > 99.9, "{start:?} {end:?}");
 }

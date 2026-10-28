@@ -5,14 +5,14 @@ use std::path::Path;
 
 use dxf::LwPolylineVertex;
 use dxf::entities::{Entity as DxfEntity, EntityType, LwPolyline};
-use dxf::enums::AcadVersion;
+use dxf::enums::{AcadVersion, AttributeVisibility};
 use dxf::enums::{AttachmentPoint, DimensionType, HorizontalTextJustification, VerticalTextJustification};
 use dxf::tables::Layer as DxfLayer;
 use dxf::{Color as DxfColor, Drawing, Point as DxfPoint};
 use oxidraft_geom::Point;
 use oxidraft_model::{
-    Attach, Attribute, Block, BlockEntity, Color, Document, Geometry, HatchPattern, Layer, Linetype, Lineweight,
-    Placement, Vertex,
+    Attach, Attribute, AttributeDisplay, Block, BlockEntity, Color, Document, Geometry, HatchPattern, Layer, Linetype,
+    Lineweight, Placement, Vertex,
     annotation::{angle_around, decode_control_codes, two_line_angle},
     hatch, linetype,
 };
@@ -237,6 +237,9 @@ impl Exporter {
     /// DXF entities for one object.
     fn entities(&mut self, g: &Geometry, layer: &str) -> Vec<EntityType> {
         match g {
+            Geometry::Point { position } => {
+                vec![EntityType::ModelPoint(dxf::entities::ModelPoint::new(to_dxf(*position)))]
+            }
             Geometry::Line { start, end } => {
                 vec![EntityType::Line(dxf::entities::Line::new(to_dxf(*start), to_dxf(*end)))]
             }
@@ -386,7 +389,7 @@ impl Exporter {
                 self.hatches.push(hatch_dxf::hatch_data(g));
                 let index = (self.hatches.len() - 1) as f64;
                 vec![EntityType::ModelPoint(dxf::entities::ModelPoint {
-                    location: DxfPoint::new(index, 0.0, 0.0),
+                    location: DxfPoint::new(index, 0.0, hatch_dxf::PLACEHOLDER_Z),
                     ..Default::default()
                 })]
             }
@@ -444,6 +447,14 @@ fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
     // R2000 is the oldest version with lightweight polylines.
     drawing.header.version = AcadVersion::R2000;
     drawing.header.line_type_scale = doc.ltscale();
+    drawing.header.insertion_base = to_dxf(doc.insbase());
+    drawing.header.point_display_mode = doc.pdmode();
+    drawing.header.point_display_size = doc.pdsize();
+    drawing.header.attribute_visibility = match doc.attdisp() {
+        AttributeDisplay::Off => AttributeVisibility::None,
+        AttributeDisplay::Normal => AttributeVisibility::Normal,
+        AttributeDisplay::On => AttributeVisibility::All,
+    };
     // Define every linetype in use (Drawing::new() has ByLayer, ByBlock, Continuous).
     let used = doc
         .layers()
@@ -518,6 +529,7 @@ fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
 /// Converts one DXF entity, or `None` for types Oxidraft doesn't support yet.
 fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
     Some(match specific {
+        EntityType::ModelPoint(p) => Geometry::Point { position: from_dxf(&p.location) },
         EntityType::Line(l) => Geometry::Line { start: from_dxf(&l.p1), end: from_dxf(&l.p2) },
         EntityType::Circle(c) => Geometry::Circle { center: from_dxf(&c.center), radius: c.radius },
         EntityType::Arc(a) => Geometry::Arc {
@@ -694,6 +706,13 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
     if drawing.header.line_type_scale > 0.0 {
         doc.set_ltscale(drawing.header.line_type_scale);
     }
+    doc.set_insbase(from_dxf(&drawing.header.insertion_base));
+    doc.set_point_style(drawing.header.point_display_mode, drawing.header.point_display_size);
+    doc.set_attdisp(match drawing.header.attribute_visibility {
+        AttributeVisibility::None => AttributeDisplay::Off,
+        AttributeVisibility::Normal => AttributeDisplay::Normal,
+        AttributeVisibility::All => AttributeDisplay::On,
+    });
     for l in drawing.layers() {
         let color = l.color.index().filter(|&i| i > 0).unwrap_or(7);
         let mut layer = Layer::new(l.name.clone(), color);
@@ -1015,6 +1034,37 @@ pub fn load_file(path: impl AsRef<Path>) -> Result<Imported, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn roundtrip_points_next_to_hatches_and_the_point_style() {
+        let mut doc = Document::new();
+        doc.set_point_style(35, -2.5);
+        doc.set_attdisp(AttributeDisplay::On);
+        doc.set_insbase(Point::new(7.0, 8.0));
+        doc.add(Geometry::Point { position: Point::new(3.0, 4.0) });
+        let square = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(x, y)| Vertex::at(Point::new(x, y)));
+        let hatch =
+            Geometry::Hatch { loops: vec![square.to_vec()], pattern: HatchPattern::Solid, scale: 1.0, angle: 0.0 };
+        doc.add(hatch.clone());
+        // A real point where the first hatch placeholder would be.
+        doc.add(Geometry::Point { position: Point::new(0.0, 0.0) });
+
+        let mut buf = Vec::new();
+        write(&doc, &mut buf).unwrap();
+        let back = read(&mut buf.as_slice()).unwrap().document;
+        // Hatches are read in a second pass, so they come back last.
+        let shapes: Vec<Geometry> = back.entities().map(|e| e.geometry.clone()).collect();
+        assert_eq!(
+            shapes,
+            vec![
+                Geometry::Point { position: Point::new(3.0, 4.0) },
+                Geometry::Point { position: Point::new(0.0, 0.0) },
+                hatch
+            ]
+        );
+        assert_eq!((back.pdmode(), back.pdsize(), back.attdisp()), (35, -2.5, AttributeDisplay::On));
+        assert_eq!(back.insbase(), Point::new(7.0, 8.0));
+    }
 
     #[test]
     fn roundtrip_linetypes_lineweights_and_layer_states() {
