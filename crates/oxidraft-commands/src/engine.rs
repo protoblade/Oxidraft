@@ -11,8 +11,8 @@ use crate::{
     lengthen::Lengthen, line::Line, list::List, matchprop::MatchProp, mirror::Mirror, move_copy::MoveCopy,
     offset::Offset, parse_input, pedit::Pedit, pline::Pline, plot::PlotWindow, point::Marks, point::PointCmd,
     point::PointStyle, polygon::Polygon, rectang::Rectang, revcloud::RevCloud, rotate::Rotate, scale::Scale,
-    select::SelectSimilar, spline::SplineCmd, stretch::Stretch, trim_extend::TrimExtend, xline::ConstructionLine,
-    zoom::Zoom,
+    select::SelectSimilar, spline::SplineCmd, stretch::Stretch, trim_extend::TrimExtend, underlay::AttachImage,
+    underlay::ImageClip, xline::ConstructionLine, xref::AttachXref, zoom::Zoom,
 };
 
 /// A command the user can type, with its aliases.
@@ -467,6 +467,31 @@ pub const COMMANDS: &[CommandInfo] = &[
     // Handled by the app, which owns the windows and palettes.
     CommandInfo { name: "LAYER", aliases: &["LA"], description: "Open the Layer Properties Manager", make: None },
     CommandInfo { name: "PLOT", aliases: &["PRINT"], description: "Plot the drawing to a PDF file", make: None },
+    CommandInfo {
+        name: "EXTERNALREFERENCES",
+        aliases: &["ER", "XREF", "XR"],
+        description: "Open the External References palette",
+        make: None,
+    },
+    CommandInfo {
+        name: "XATTACH",
+        aliases: &["XA"],
+        description: "Attach a drawing as an external reference",
+        make: None,
+    },
+    CommandInfo {
+        name: "IMAGEATTACH",
+        aliases: &["IAT"],
+        description: "Attach images: one placed by hand or by its georeferencing, or many GeoTIFFs at once",
+        make: None,
+    },
+    CommandInfo { name: "PDFATTACH", aliases: &[], description: "Attach a page of a PDF as an underlay", make: None },
+    CommandInfo {
+        name: "IMAGECLIP",
+        aliases: &["ICL", "PDFCLIP"],
+        description: "Clip an image or PDF underlay to a rectangle or polygon",
+        make: Some(|| Box::new(ImageClip::default())),
+    },
     CommandInfo { name: "PREVIEW", aliases: &["PRE"], description: "Show how the drawing will plot", make: None },
     CommandInfo {
         name: "PROPERTIES",
@@ -582,6 +607,63 @@ impl Engine {
     }
 
     /// PASTECLIP (or PASTEORIG, at the copied place) with a clipboard drawing.
+    /// XATTACH, once its dialog is filled in: places the attached drawing at
+    /// `at`, or asks for the insertion point with it on the cursor.
+    pub fn attach_xref(
+        &mut self,
+        xref: oxidraft_model::Xref,
+        content: Document,
+        scale: f64,
+        rotation: f64,
+        at: Option<Point>,
+        doc: &mut Document,
+    ) {
+        if self.active.is_some() {
+            self.cancel(doc);
+        }
+        let info = find("XATTACH").expect("XATTACH is a command");
+        self.log(format!("Command: {}", info.name));
+        let cmd = AttachXref::new(xref.clone(), content, scale, rotation);
+        match at {
+            Some(p) => {
+                doc.begin(info.name);
+                cmd.attach(doc, p);
+                doc.commit();
+                self.log(format!("Attach Xref \"{}\": {}", xref.name, xref.path));
+                self.log(format!("\"{}\" loaded.", xref.name));
+            }
+            None => self.launch(info, Box::new(cmd), doc, Point::ORIGIN, 0.0),
+        }
+    }
+
+    /// IMAGEATTACH and PDFATTACH, once their dialog is filled in: places the
+    /// picture with its corner at `at`, or asks for it with the frame on
+    /// the cursor.
+    pub fn attach_image(
+        &mut self,
+        def: oxidraft_model::ImageDef,
+        u: Point,
+        v: Point,
+        at: Option<Point>,
+        doc: &mut Document,
+    ) {
+        if self.active.is_some() {
+            self.cancel(doc);
+        }
+        let name = if def.is_pdf() { "PDFATTACH" } else { "IMAGEATTACH" };
+        let info = find(name).expect("attaching pictures is a command");
+        self.log(format!("Command: {}", info.name));
+        let cmd = AttachImage::new(def, u, v);
+        match at {
+            Some(p) => {
+                doc.begin(info.name);
+                cmd.attach(doc, p);
+                doc.commit();
+            }
+            None => self.launch(info, Box::new(cmd), doc, Point::ORIGIN, 0.0),
+        }
+    }
+
     /// The Plot dialog's Window< button: asks for the window's corners,
     /// then hands it back as [`UiRequest::PlotWindow`].
     pub fn pick_plot_window(&mut self, doc: &mut Document) {
@@ -2113,6 +2195,30 @@ mod tests {
         click(&mut e, &mut d, 5.0, 0.0);
         type_all(&mut e, &mut d, &[""]);
         assert!(matches!(only(&d), Geometry::Polyline { closed: true, .. }));
+    }
+
+    #[test]
+    fn imageclip_clips_and_unclips_a_picture() {
+        let (mut e, mut d) = (engine(), Document::new());
+        d.add(Geometry::Image {
+            image: "ortho".into(),
+            origin: Point::ORIGIN,
+            u: Point::new(100.0, 0.0),
+            v: Point::new(0.0, 50.0),
+            clip: Vec::new(),
+        });
+        type_all(&mut e, &mut d, &["icl"]);
+        click(&mut e, &mut d, 50.0, 0.0);
+        type_all(&mut e, &mut d, &["", "", "10,10", "60,40"]);
+        let Geometry::Image { clip, .. } = only(&d) else { panic!() };
+        assert_eq!(clip.len(), 4);
+        assert!(clip.contains(&Point::new(10.0, 10.0)) && clip.contains(&Point::new(60.0, 40.0)));
+        // The clipped picture is picked by its boundary now.
+        type_all(&mut e, &mut d, &["icl"]);
+        click(&mut e, &mut d, 35.0, 10.0);
+        type_all(&mut e, &mut d, &["d"]);
+        let Geometry::Image { clip, .. } = only(&d) else { panic!() };
+        assert!(clip.is_empty());
     }
 
     #[test]

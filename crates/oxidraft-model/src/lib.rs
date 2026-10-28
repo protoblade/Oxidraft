@@ -10,11 +10,15 @@ pub mod hatch;
 pub mod linetype;
 mod palette;
 pub mod snap;
+mod underlay;
+mod xref;
 
 pub use annotation::Attach;
-pub use document::{AttributeDisplay, Block, BlockEntity, Document, Layer, Styled, check_name};
+pub use document::{AttributeDisplay, Block, BlockEntity, Document, Layer, Styled, check_name, sanitize_name};
 pub use entity::{Attribute, Color, Entity, EntityId, FAR, Geometry, Placement, Vertex, constant_width};
 pub use hatch::HatchPattern;
 pub use linetype::{Linetype, Lineweight};
 pub use oxidraft_geom::{ellipse::Ellipse, spline::Spline};
 pub use palette::aci_rgb;
+pub use underlay::{ImageDef, image_corners};
+pub use xref::{Xref, XrefStatus, dependent_name, is_dependent};

@@ -51,6 +51,11 @@ pub enum Icon {
     Measure,
     Plot,
     PlotPreview,
+    Attach,
+    ExternalReferences,
+    Image,
+    Pdf,
+    ImageClip,
     InsertBlock,
     CreateBlock,
     MatchProperties,
@@ -355,6 +360,36 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
             pen.closed(&[(0.12, 0.38), (0.88, 0.38), (0.88, 0.7), (0.12, 0.7)], c);
             pen.filled(&[(0.3, 0.62), (0.7, 0.62), (0.7, 0.9), (0.3, 0.9)], blue);
             pen.dot((0.78, 0.48), 0.035, green);
+        }
+        Icon::Attach => {
+            // A sheet with a paper clip.
+            pen.closed(&[(0.18, 0.2), (0.7, 0.2), (0.7, 0.88), (0.18, 0.88)], c);
+            pen.line(&[(0.3, 0.45), (0.58, 0.45)], c);
+            pen.line(&[(0.3, 0.6), (0.5, 0.6)], c);
+            pen.line(&[(0.76, 0.5), (0.76, 0.12), (0.88, 0.12), (0.88, 0.62)], blue);
+            pen.line(&[(0.82, 0.18), (0.82, 0.5)], blue);
+        }
+        Icon::Image => {
+            // A picture: hills under a sun.
+            pen.closed(&[(0.1, 0.18), (0.9, 0.18), (0.9, 0.82), (0.1, 0.82)], c);
+            pen.line(&[(0.1, 0.78), (0.38, 0.45), (0.56, 0.64), (0.7, 0.5), (0.9, 0.72)], green);
+            pen.dot((0.7, 0.32), 0.07, yellow);
+        }
+        Icon::Pdf => {
+            pen.closed(&[(0.2, 0.08), (0.64, 0.08), (0.8, 0.24), (0.8, 0.92), (0.2, 0.92)], c);
+            pen.filled(&[(0.12, 0.5), (0.88, 0.5), (0.88, 0.74), (0.12, 0.74)], red);
+        }
+        Icon::ImageClip => {
+            pen.closed(&[(0.1, 0.18), (0.9, 0.18), (0.9, 0.82), (0.1, 0.82)], c);
+            pen.closed(&[(0.3, 0.32), (0.75, 0.32), (0.75, 0.7), (0.3, 0.7)], blue);
+            pen.grip((0.3, 0.32), blue);
+            pen.grip((0.75, 0.7), blue);
+        }
+        Icon::ExternalReferences => {
+            // A drawing with another one linked in.
+            pen.closed(&[(0.1, 0.12), (0.62, 0.12), (0.62, 0.7), (0.1, 0.7)], c);
+            pen.closed(&[(0.38, 0.38), (0.9, 0.38), (0.9, 0.9), (0.38, 0.9)], blue);
+            pen.line(&[(0.5, 0.75), (0.78, 0.55)], blue);
         }
         Icon::PlotPreview => {
             pen.closed(&[(0.14, 0.1), (0.62, 0.1), (0.62, 0.78), (0.14, 0.78)], c);

@@ -9,7 +9,9 @@ use eframe::egui::{
 use eframe::egui::{pos2, vec2};
 use oxidraft_geom::{Aabb, Point};
 use oxidraft_model::{Document, hatch};
-use oxidraft_plot::{Item, PAPERS, PlotArea, PlotScale, PlotSettings, PlotStyle, SCALES, Sheet, scale_label};
+use std::sync::Arc;
+
+use oxidraft_plot::{Item, PAPERS, Picture, PlotArea, PlotScale, PlotSettings, PlotStyle, SCALES, Sheet, scale_label};
 
 use crate::{app::OxidraftApp, theme};
 
@@ -29,10 +31,13 @@ pub(crate) struct PlotDialog {
 
 impl PlotDialog {
     /// Lays the sheet out again when the settings or the drawing changed.
-    fn refresh(&mut self, doc: &Document) {
-        let current = matches!(&self.sheet, Some((s, rev, _)) if *s == self.settings && *rev == doc.revision());
+    /// Lays the sheet out again when the settings, the drawing or the
+    /// loaded pictures (`revision` counts both) changed.
+    fn refresh(&mut self, doc: &Document, revision: u64, pictures: &dyn Fn(&str) -> Option<Arc<Picture>>) {
+        let current = matches!(&self.sheet, Some((s, rev, _)) if *s == self.settings && *rev == revision);
         if !current {
-            self.sheet = Some((self.settings, doc.revision(), oxidraft_plot::render(doc, &self.settings)));
+            let sheet = oxidraft_plot::render_with_pictures(doc, &self.settings, pictures);
+            self.sheet = Some((self.settings, revision, sheet));
         }
     }
 
@@ -54,7 +59,13 @@ fn rgb([r, g, b]: [u8; 3]) -> Color32 {
 
 /// Paints a sheet on its paper, filling `rect` (which has the paper's
 /// proportions): the same strokes, fills and text the PDF gets.
-pub(crate) fn paint_sheet(painter: &Painter, rect: Rect, sheet: &Sheet, printable: bool) {
+pub(crate) fn paint_sheet(
+    painter: &Painter,
+    rect: Rect,
+    sheet: &Sheet,
+    printable: bool,
+    textures: &dyn Fn(&str) -> Option<egui::TextureId>,
+) {
     let l = &sheet.layout;
     let k = rect.width() / l.width as f32;
     let to = |p: Point| pos2(rect.left() + p.x as f32 * k, rect.bottom() - p.y as f32 * k);
@@ -88,6 +99,29 @@ pub(crate) fn paint_sheet(painter: &Painter, rect: Rect, sheet: &Sheet, printabl
                     let i = mesh.vertices.len() as u32;
                     for p in t {
                         mesh.colored_vertex(to(p), rgb(*color));
+                    }
+                    mesh.add_triangle(i, i + 1, i + 2);
+                }
+                painter.add(Shape::mesh(mesh));
+            }
+            Item::Image { name, origin, u, v, clip, .. } => {
+                let Some(texture) = textures(name) else { continue };
+                let ring: Vec<Point> = if clip.len() >= 3 {
+                    clip.clone()
+                } else {
+                    oxidraft_model::image_corners(*origin, *u, *v).to_vec()
+                };
+                let det = u.cross(*v);
+                let uv = |p: Point| {
+                    let d = p - *origin;
+                    let (a, b) = if det.abs() > 0.0 { (d.cross(*v) / det, u.cross(d) / det) } else { (0.0, 0.0) };
+                    pos2(a as f32, (1.0 - b) as f32)
+                };
+                let mut mesh = egui::Mesh::with_texture(texture);
+                for t in hatch::triangles(std::slice::from_ref(&ring)) {
+                    let i = mesh.vertices.len() as u32;
+                    for p in t {
+                        mesh.vertices.push(egui::epaint::Vertex { pos: to(p), uv: uv(p), color: Color32::WHITE });
                     }
                     mesh.add_triangle(i, i + 1, i + 2);
                 }
@@ -161,7 +195,11 @@ impl OxidraftApp {
     /// `path`, and closes the dialog.
     pub fn plot_to(&mut self, path: &Path) -> Result<(), String> {
         let settings = self.plot.as_ref().map_or(self.plot_settings, |d| d.settings);
-        let sheet = oxidraft_plot::render(&self.doc, &settings).ok_or("There's nothing to plot.")?;
+        let sheet = {
+            let pictures = self.plot_pictures(true);
+            oxidraft_plot::render_with_pictures(&self.doc, &settings, &pictures)
+        };
+        let sheet = sheet.ok_or("There's nothing to plot.")?;
         let bytes = oxidraft_plot::pdf(&sheet, &self.file_name());
         std::fs::write(path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
         let area = sheet.layout.clip;
@@ -216,7 +254,8 @@ impl OxidraftApp {
                 return;
             }
         }
-        dialog.refresh(&self.doc);
+        let revision = self.doc.revision() + self.raster_revision;
+        dialog.refresh(&self.doc, revision, &self.plot_pictures(false));
         if dialog.preview {
             match self.plot_preview(ctx, &dialog) {
                 PreviewAction::Stay => {}
@@ -400,7 +439,9 @@ impl OxidraftApp {
                         ui.painter().rect_filled(space, 4.0, theme::INPUT_BG);
                         let paper = paper_rect(space.shrink(10.0), w, h);
                         match dialog.sheet.as_ref().and_then(|(_, _, sh)| sh.as_ref()) {
-                            Some(sheet) if sheet.layout.width == w => paint_sheet(ui.painter(), paper, sheet, true),
+                            Some(sheet) if sheet.layout.width == w => {
+                                paint_sheet(ui.painter(), paper, sheet, true, &|n| self.picture_texture(n));
+                            }
                             _ => {
                                 ui.painter().rect_filled(paper, 0.0, Color32::WHITE);
                             }
@@ -465,7 +506,8 @@ impl OxidraftApp {
                 });
                 if let Some(sheet) = dialog.sheet() {
                     let space = Rect::from_min_max(pos2(rect.left(), bar.bottom()), rect.max).shrink(24.0);
-                    paint_sheet(ui.painter(), paper_rect(space, sheet.layout.width, sheet.layout.height), sheet, false);
+                    let paper = paper_rect(space, sheet.layout.width, sheet.layout.height);
+                    paint_sheet(ui.painter(), paper, sheet, false, &|n| self.picture_texture(n));
                 }
             },
         );

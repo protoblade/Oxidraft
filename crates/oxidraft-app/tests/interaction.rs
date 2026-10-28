@@ -472,3 +472,146 @@ fn plot_a_window_to_pdf() {
     assert!(bytes.starts_with(b"%PDF-1.4"));
     assert_eq!(h.state().plot_open(), (false, false));
 }
+
+#[test]
+fn attach_reopen_and_detach_an_external_reference() {
+    use oxidraft_model::{Color, Layer, XrefStatus};
+    let dir = std::env::temp_dir().join(format!("oxidraft-xref-app-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut site = Document::new();
+    site.add_layer(Layer::new("Boundary", 1));
+    site.add_on_layer(Geometry::Line { start: Point::ORIGIN, end: Point::new(20.0, 0.0) }, "Boundary", Color::ByLayer);
+    oxidraft_io_dxf::save_file(&site, dir.join("site.dxf")).unwrap();
+    let mut plan = Document::new();
+    plan.add(Geometry::Line { start: Point::ORIGIN, end: Point::new(100.0, 60.0) });
+    let host = dir.join("plan.dxf");
+    oxidraft_io_dxf::save_file(&plan, &host).unwrap();
+
+    let mut h = app_with_line();
+    h.state_mut().open_path(host.clone());
+    h.run_steps(3);
+    h.state_mut().attach_file(dir.join("site.dxf"));
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let at = screen(&h, 50.0, 30.0);
+    click(&mut h, at);
+    {
+        let doc = h.state_mut().document_mut();
+        let x = doc.xref("site").expect("attached").clone();
+        assert_eq!((x.path.as_str(), x.status), ("site.dxf", XrefStatus::Loaded), "saved relative to the drawing");
+        assert_eq!(doc.xref_references("site"), 1);
+        assert!(doc.layer("site|Boundary").is_some());
+        let reference =
+            doc.entities().find(|e| matches!(&e.geometry, Geometry::Insert { block, .. } if block == "site"));
+        assert_eq!(reference.map(|e| e.layer.as_str()), Some("site"), "on a layer of its own");
+    }
+    // Saved as a path; reopening reads the file again.
+    h.state_mut().type_command("save");
+    h.run_steps(1);
+    h.state_mut().open_path(host.clone());
+    h.run_steps(2);
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.xref("site").map(|x| x.status), Some(XrefStatus::Loaded));
+    assert_eq!(doc.block("site").map(|b| b.entities.len()), Some(1));
+    // The palette lists it; Detach removes it.
+    h.state_mut().type_command("xr");
+    h.run_steps(2);
+    h.get_by_label("   site").click();
+    h.run_steps(2);
+    h.get_by_label("Detach").click();
+    h.run_steps(2);
+    let doc = h.state_mut().document_mut();
+    assert!(doc.xref("site").is_none() && doc.xref_references("site") == 0 && doc.len() == 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn many_georeferenced_tiles_attach_unloaded_and_load_in_view() {
+    use oxidraft_model::XrefStatus;
+    let dir = std::env::temp_dir().join(format!("oxidraft-tiles-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // Two 40 x 20 pixel tiles side by side at half a unit a pixel, and one
+    // image with nothing to say where it goes.
+    for (name, x) in [("tile_1", 0.0), ("tile_2", 20.0)] {
+        let png = dir.join(format!("{name}.png"));
+        image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 120, 40, 255])).save(&png).unwrap();
+        std::fs::write(png.with_extension("pgw"), format!("0.5\n0\n0\n-0.5\n{}\n9.75\n", x + 0.25)).unwrap();
+    }
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 0, 0, 255])).save(dir.join("scan.png")).unwrap();
+    let files: Vec<_> = ["tile_1.png", "tile_2.png", "scan.png"].iter().map(|f| dir.join(f)).collect();
+
+    let mut h = app_with_line();
+    h.state_mut().attach_images_unloaded(&files);
+    h.run_steps(3);
+    {
+        let doc = h.state_mut().document_mut();
+        assert_eq!(doc.image_defs().count(), 2, "the scan has no georeferencing");
+        assert!(doc.image_defs().all(|d| d.status == XrefStatus::Unloaded));
+        // Each on a layer of its own name, where its world file puts it.
+        let tile =
+            doc.entities().find(|e| matches!(&e.geometry, Geometry::Image { image, .. } if image == "tile_2")).unwrap();
+        assert_eq!(tile.layer, "tile_2");
+        let Geometry::Image { origin, u, v, .. } = &tile.geometry else { panic!() };
+        assert!(
+            origin.approx_eq(Point::new(20.0, 0.0))
+                && u.approx_eq(Point::new(20.0, 0.0))
+                && v.approx_eq(Point::new(0.0, 10.0))
+        );
+    }
+    assert!(!h.state().pictures_loading(), "nothing read yet");
+    // The view went to the tiles; load what it shows.
+    h.state_mut().load_images_in_view();
+    for _ in 0..100 {
+        h.run_steps(1);
+        if !h.state().pictures_loading() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(h.state_mut().document_mut().image_defs().all(|d| d.status == XrefStatus::Loaded));
+    // The plot shows them.
+    h.state_mut().type_command("plot");
+    h.run_steps(2);
+    let pdf = dir.join("tiles.pdf");
+    h.state_mut().plot_to(&pdf).unwrap();
+    let bytes = std::fs::read(&pdf).unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("/Subtype /Image"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn attach_a_pdf_page_as_an_underlay() {
+    let dir = std::env::temp_dir().join(format!("oxidraft-pdf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // An A4 landscape plot, written by Oxidraft itself.
+    let mut plan = Document::new();
+    plan.add(Geometry::Line { start: Point::ORIGIN, end: Point::new(100.0, 50.0) });
+    let sheet = oxidraft_plot::render(&plan, &oxidraft_plot::PlotSettings::default()).unwrap();
+    let pdf = dir.join("plan.pdf");
+    std::fs::write(&pdf, oxidraft_plot::pdf(&sheet, "plan")).unwrap();
+
+    let mut h = app_with_line();
+    h.state_mut().open_image_dialog(pdf);
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let at = screen(&h, 10.0, 10.0);
+    click(&mut h, at);
+    for _ in 0..100 {
+        h.run_steps(1);
+        if !h.state().pictures_loading() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let doc = h.state_mut().document_mut();
+    let def = doc.image_def("plan - 1").expect("the page is attached").clone();
+    assert_eq!((def.page, def.width.round(), def.height.round()), (Some(0), 842.0, 595.0));
+    let page = doc.entities().find(|e| matches!(e.geometry, Geometry::Image { .. })).unwrap();
+    assert_eq!(page.layer, "plan - 1");
+    // At scale 1 a page is its size in millimeters.
+    let Geometry::Image { u, v, .. } = &page.geometry else { panic!() };
+    assert!((u.length() - 297.0).abs() < 0.1 && (v.length() - 210.0).abs() < 0.1, "{u:?} {v:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}

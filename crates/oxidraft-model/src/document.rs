@@ -4,6 +4,8 @@ use oxidraft_geom::{Aabb, Point};
 
 use crate::entity::{Attribute, Color, Entity, EntityId, Geometry};
 use crate::linetype::{self, CONTINUOUS, Linetype, Lineweight};
+use crate::underlay::ImageDef;
+use crate::xref::{Xref, is_dependent};
 
 /// ATTDISP: which block attributes are drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -65,6 +67,14 @@ pub fn check_name(name: &str) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+/// `name` made into a valid layer or block name: characters AutoCAD
+/// doesn't allow become underscores ("plan, sheet 2" → "plan_ sheet 2").
+pub fn sanitize_name(name: &str) -> String {
+    let clean: String = name.trim().chars().map(|c| if BAD_NAME_CHARS.contains(&c) { '_' } else { c }).collect();
+    let clean: String = clean.chars().take(255).collect();
+    if clean.trim().is_empty() { "Unnamed".into() } else { clean }
 }
 
 /// An object inside a block definition.
@@ -151,6 +161,18 @@ enum Change {
         before: Option<Block>,
         after: Option<Block>,
     },
+    /// An attached drawing's record, by upper-case name.
+    Xref {
+        key: String,
+        before: Option<Xref>,
+        after: Option<Xref>,
+    },
+    /// An image or PDF underlay's definition, by upper-case name.
+    Image {
+        key: String,
+        before: Option<ImageDef>,
+        after: Option<ImageDef>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +208,10 @@ pub struct Document {
     attdisp: AttributeDisplay,
     /// INSBASE: the point that lands where the drawing is inserted or pasted.
     insbase: Point,
+    /// Attached drawings (XREF), by upper-case name.
+    xrefs: BTreeMap<String, Xref>,
+    /// Attached images and PDF pages, by upper-case name.
+    images: BTreeMap<String, ImageDef>,
 }
 
 impl Default for Document {
@@ -211,6 +237,8 @@ impl Document {
             pdsize: 0.0,
             attdisp: AttributeDisplay::Normal,
             insbase: Point::ORIGIN,
+            xrefs: BTreeMap::new(),
+            images: BTreeMap::new(),
         }
     }
 
@@ -546,7 +574,8 @@ impl Document {
 
     /// Makes `name` the layer new entities go on. Returns false if it doesn't exist.
     pub fn set_current_layer(&mut self, name: &str) -> bool {
-        let Some(l) = self.layer(name) else { return false };
+        // An xref's layers can't take new objects.
+        let Some(l) = self.layer(name).filter(|l| !is_dependent(&l.name)) else { return false };
         let table = LayerTable { current: l.name.clone(), ..self.table.clone() };
         self.set_table(table);
         true
@@ -558,6 +587,9 @@ impl Document {
         let Some(layer) = self.layer(old).cloned() else { return Err(format!("Layer \"{old}\" not found.")) };
         if layer.name == "0" {
             return Err("Layer 0 can't be renamed.".into());
+        }
+        if is_dependent(&layer.name) {
+            return Err(format!("\"{}\" comes from an external reference and can't be renamed.", layer.name));
         }
         if !new.eq_ignore_ascii_case(old) && self.layer(new).is_some() {
             return Err(format!("A layer named \"{new}\" already exists."));
@@ -585,6 +617,9 @@ impl Document {
         if layer.name == "0" {
             return Err("Layer 0 can't be deleted.".into());
         }
+        if is_dependent(&layer.name) {
+            return Err(format!("\"{}\" comes from an external reference; detach it instead.", layer.name));
+        }
         if layer.name == self.table.current {
             return Err("The current layer can't be deleted.".into());
         }
@@ -611,6 +646,81 @@ impl Document {
         let name = block.name.clone();
         let before = self.blocks.insert(name.clone(), block.clone());
         self.record(Change::Block { name, before, after: Some(block) });
+    }
+
+    /// Removes a block definition (whatever still references it draws nothing).
+    pub fn remove_block(&mut self, name: &str) -> Option<Block> {
+        let key = self.block(name)?.name.clone();
+        let before = self.blocks.remove(&key)?;
+        self.record(Change::Block { name: key, before: Some(before.clone()), after: None });
+        Some(before)
+    }
+
+    /// Changes the layer table in one undoable step (for xrefs, which bring
+    /// many layers along).
+    pub(crate) fn edit_layers(&mut self, f: impl FnOnce(&mut Vec<Layer>)) {
+        let mut table = self.table.clone();
+        f(&mut table.layers);
+        self.set_table(table);
+    }
+
+    /// Forgets a linetype definition the drawing has.
+    pub(crate) fn remove_linetype(&mut self, name: &str) {
+        if self.linetypes.remove(&name.to_ascii_uppercase()).is_some() {
+            self.revision += 1;
+        }
+    }
+
+    // ---- external references -----------------------------------------------
+
+    /// The drawings attached to this one.
+    pub fn xrefs(&self) -> impl Iterator<Item = &Xref> {
+        self.xrefs.values()
+    }
+
+    pub fn xref(&self, name: &str) -> Option<&Xref> {
+        self.xrefs.get(&name.to_ascii_uppercase())
+    }
+
+    /// Adds or replaces an attached drawing's record.
+    pub fn set_xref(&mut self, xref: Xref) {
+        let key = xref.name.to_ascii_uppercase();
+        let before = self.xrefs.insert(key.clone(), xref.clone());
+        if before.as_ref() != Some(&xref) {
+            self.record(Change::Xref { key, before, after: Some(xref) });
+        }
+    }
+
+    /// The images and PDF pages attached to this drawing.
+    pub fn image_defs(&self) -> impl Iterator<Item = &ImageDef> {
+        self.images.values()
+    }
+
+    pub fn image_def(&self, name: &str) -> Option<&ImageDef> {
+        self.images.get(&name.to_ascii_uppercase())
+    }
+
+    /// Adds or replaces an image or PDF underlay's definition.
+    pub fn set_image_def(&mut self, def: ImageDef) {
+        let key = def.name.to_ascii_uppercase();
+        let before = self.images.insert(key.clone(), def.clone());
+        if before.as_ref() != Some(&def) {
+            self.record(Change::Image { key, before, after: Some(def) });
+        }
+    }
+
+    pub(crate) fn remove_image_def(&mut self, name: &str) -> Option<ImageDef> {
+        let key = name.to_ascii_uppercase();
+        let before = self.images.remove(&key)?;
+        self.record(Change::Image { key, before: Some(before.clone()), after: None });
+        Some(before)
+    }
+
+    pub(crate) fn remove_xref(&mut self, name: &str) -> Option<Xref> {
+        let key = name.to_ascii_uppercase();
+        let before = self.xrefs.remove(&key)?;
+        self.record(Change::Xref { key, before: Some(before.clone()), after: None });
+        Some(before)
     }
 
     // ---- edits ---------------------------------------------------------
@@ -779,6 +889,8 @@ impl Document {
                     Change::Entity { .. } => "Modify",
                     Change::Layers { .. } => "Layer",
                     Change::Block { .. } => "Block",
+                    Change::Xref { .. } => "Xref",
+                    Change::Image { .. } => "Image",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -807,6 +919,18 @@ impl Document {
                 match if forward { after } else { before } {
                     Some(b) => self.blocks.insert(name.clone(), b.clone()),
                     None => self.blocks.remove(name),
+                };
+            }
+            Change::Xref { key, before, after } => {
+                match if forward { after } else { before } {
+                    Some(x) => self.xrefs.insert(key.clone(), x.clone()),
+                    None => self.xrefs.remove(key),
+                };
+            }
+            Change::Image { key, before, after } => {
+                match if forward { after } else { before } {
+                    Some(d) => self.images.insert(key.clone(), d.clone()),
+                    None => self.images.remove(key),
                 };
             }
         }

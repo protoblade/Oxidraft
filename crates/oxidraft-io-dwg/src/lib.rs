@@ -215,6 +215,47 @@ mod tests {
     }
 
     #[test]
+    fn xrefs_keep_their_path_in_every_version() {
+        use oxidraft_model::{Xref, XrefStatus};
+        let mut doc = Document::new();
+        doc.set_xref(Xref {
+            name: "SITE".into(),
+            path: "site.dwg".into(),
+            overlay: false,
+            status: XrefStatus::NotFound,
+        });
+        doc.define_block(Block { name: "SITE".into(), base: Point::ORIGIN, entities: Vec::new() });
+        doc.add(Geometry::Insert {
+            block: "SITE".into(),
+            placement: Placement::at(Point::new(3.0, 4.0)),
+            attributes: Vec::new(),
+        });
+        doc.set_xref(Xref {
+            name: "ROADS".into(),
+            path: "C:\\maps\\roads.dxf".into(),
+            overlay: true,
+            status: XrefStatus::NotFound,
+        });
+        doc.define_block(Block { name: "ROADS".into(), base: Point::ORIGIN, entities: Vec::new() });
+        let mut off = oxidraft_model::Layer::new("SITE|Walls", 5);
+        off.on = false;
+        doc.add_layer(off.clone());
+        doc.update_layer(off);
+        for version in [Version::R2000, Version::R2004, Version::R2018] {
+            let back = read(&write(&doc, version).unwrap()).unwrap().imported.document;
+            let site = back.xref("SITE").unwrap_or_else(|| panic!("{version:?}: no SITE"));
+            assert!(site.path == "site.dwg" && !site.overlay, "{version:?}: {site:?}");
+            let roads = back.xref("ROADS").unwrap_or_else(|| panic!("{version:?}: no ROADS"));
+            assert!(roads.path == "C:\\maps\\roads.dxf" && roads.overlay, "{version:?}: {roads:?}");
+            assert_eq!(back.xref_references("SITE"), 1);
+            assert!(
+                back.layer("SITE|Walls").is_some_and(|l| !l.on && l.color == 5),
+                "{version:?}: xref layer settings"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_what_isnt_dwg() {
         assert!(read(b"0\nSECTION\n").is_err());
         assert!(is_dwg("plan.DWG") && !is_dwg("plan.dxf"));

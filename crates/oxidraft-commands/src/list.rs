@@ -126,6 +126,16 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
                 }
             }
         }
+        Geometry::Image { image, origin, u, v, clip } => {
+            out.push(value("Image name:", format!("\"{image}\"")));
+            out.push(at("Insertion point:", *origin));
+            out.push(value("Width:", n(u.length()).trim()));
+            out.push(value("Height:", n(v.length()).trim()));
+            out.push(value("Rotation:", format_angle(Point::ORIGIN.angle_to(*u))));
+            if clip.len() >= 3 {
+                out.push(value("", "Clipped"));
+            }
+        }
         Geometry::Xline { base, direction } => {
             out.push(at("basepoint,", *base));
             out.push(at("second point,", *base + *direction * (1.0 / direction.length().max(f64::MIN_POSITIVE))));

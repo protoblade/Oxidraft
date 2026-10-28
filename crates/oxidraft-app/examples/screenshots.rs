@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{Event, PointerButton, vec2};
-use egui_kittest::Harness;
+use egui_kittest::{Harness, kittest::Queryable};
 use oxidraft_app::{
     OxidraftApp,
     update::{Release, UpdateState},
@@ -364,6 +364,75 @@ fn main() {
     h.state_mut().type_command("preview");
     h.run_steps(2);
     save(&mut h, &dir, "22-plot-preview");
+
+    // An attached site survey, faded, with the External References palette.
+    let mut site = Document::new();
+    site.add_layer(Layer::new("Parcels", 3));
+    site.add_layer(Layer::new("Labels", 2));
+    for (a, b) in [((-20.0, -15.0), (130.0, -15.0)), ((130.0, -15.0), (130.0, 85.0)), ((-20.0, 85.0), (130.0, 85.0))] {
+        let g = Geometry::Line { start: Point::new(a.0, a.1), end: Point::new(b.0, b.1) };
+        site.add_on_layer(g, "Parcels", Color::ByLayer);
+    }
+    site.add_on_layer(
+        Geometry::Text {
+            position: Point::new(110.0, 75.0),
+            height: 3.0,
+            rotation: 0.0,
+            width: 0.0,
+            attach: Attach::BottomLeft,
+            content: "ПИ 5022".into(),
+        },
+        "Labels",
+        Color::ByLayer,
+    );
+    let site_path = dir.join("site-survey.dxf");
+    oxidraft_io_dxf::save_file(&site, &site_path).expect("save the survey");
+    let mut h = harness();
+    h.state_mut().attach_file(site_path);
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    click(&mut h, Point::new(0.0, 0.0));
+    h.state_mut().type_command("xr");
+    h.run_steps(2);
+    h.get_by_label("   site-survey").click();
+    h.run_steps(3);
+    save(&mut h, &dir, "23-external-references");
+
+    // Four georeferenced tiles attached at once: two loaded, two still
+    // frames, with the palette listing them.
+    let mut tiles = Vec::new();
+    for (i, (x, y)) in [(-20.0, -20.0), (60.0, -20.0), (-20.0, 40.0), (60.0, 40.0)].into_iter().enumerate() {
+        let png = dir.join(format!("ortho_{}.png", i + 1));
+        let img = image::RgbaImage::from_fn(160, 120, |px, py| {
+            let (fx, fy) = (f64::from(px) + x * 2.0, f64::from(py) - y * 2.0);
+            let field = ((fx / 23.0).sin() + (fy / 17.0).cos()) * 0.5 + 0.5;
+            let g = (90.0 + 80.0 * field) as u8;
+            image::Rgba([g / 2, g, g / 3, 255])
+        });
+        img.save(&png).expect("save a tile");
+        // Half a unit a pixel: each tile is 80 x 60 units.
+        let world = format!("0.5\n0\n0\n-0.5\n{}\n{}\n", x + 0.25, y + 60.0 - 0.25);
+        std::fs::write(png.with_extension("pgw"), world).expect("save its world file");
+        tiles.push(png);
+    }
+    let mut h = harness();
+    h.state_mut().attach_images_unloaded(&tiles);
+    h.run_steps(2);
+    h.state_mut().load_image("ortho_1");
+    h.state_mut().load_image("ortho_4");
+    for _ in 0..100 {
+        h.run_steps(1);
+        if !h.state().pictures_loading() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    h.state_mut().type_command("xr");
+    h.run_steps(2);
+    h.get_by_label("   ortho_2").click();
+    h.run_steps(3);
+    save(&mut h, &dir, "24-image-underlays");
 
     // AutoComplete on the command line.
     let mut h = harness();

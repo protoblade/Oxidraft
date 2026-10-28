@@ -12,12 +12,13 @@ use dxf::{Color as DxfColor, Drawing, Point as DxfPoint};
 use oxidraft_geom::Point;
 use oxidraft_model::{
     Attach, Attribute, AttributeDisplay, Block, BlockEntity, Color, Document, Ellipse, Geometry, HatchPattern, Layer,
-    Linetype, Lineweight, Placement, Spline, Vertex,
+    Linetype, Lineweight, Placement, Spline, Vertex, Xref, XrefStatus,
     annotation::{angle_around, decode_control_codes, two_line_angle},
-    constant_width, hatch, linetype,
+    constant_width, hatch, is_dependent, linetype,
 };
 
 mod hatch_dxf;
+mod underlay_dxf;
 
 pub type Error = dxf::DxfError;
 
@@ -200,6 +201,8 @@ struct Exporter {
     blocks: Vec<dxf::Block>,
     /// AcDbHatch data for each placeholder POINT, by its X coordinate.
     hatches: Vec<Vec<(i32, String)>>,
+    /// The image and PDF definitions' handles, for their references.
+    images: underlay_dxf::Handles,
 }
 
 impl Exporter {
@@ -437,6 +440,7 @@ impl Exporter {
                 }
                 out
             }
+            Geometry::Image { .. } => underlay_dxf::entity(g, &self.images).into_iter().collect(),
             // A placeholder the crate can write; `write` turns it into a HATCH.
             Geometry::Hatch { .. } => {
                 self.hatches.push(hatch_dxf::hatch_data(g));
@@ -497,8 +501,10 @@ pub fn to_drawing(doc: &Document) -> Drawing {
 /// The drawing, and the AcDbHatch data of each hatch placeholder.
 fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
     let mut drawing = Drawing::new();
-    // R2000 is the oldest version with lightweight polylines.
-    drawing.header.version = AcadVersion::R2000;
+    // R2000 is the oldest version with lightweight polylines; PDF underlays
+    // need R2007 or later.
+    let pdfs = doc.image_defs().any(|d| d.is_pdf());
+    drawing.header.version = if pdfs { AcadVersion::R2010 } else { AcadVersion::R2000 };
     drawing.header.line_type_scale = doc.ltscale();
     drawing.header.insertion_base = to_dxf(doc.insbase());
     drawing.header.point_display_mode = doc.pdmode();
@@ -516,7 +522,8 @@ fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
         .chain(doc.entities().map(|e| e.linetype.clone()))
         .chain(doc.blocks().flat_map(|b| b.entities.iter().map(|e| e.linetype.clone())));
     let mut defined: Vec<String> = Vec::new();
-    for name in used {
+    // What came from xrefs is read from them again, so it isn't saved.
+    for name in used.filter(|n| !is_dependent(n)) {
         let Some(lt) = doc.linetype(&name) else { continue };
         if lt.pattern.is_empty() || defined.iter().any(|d| d.eq_ignore_ascii_case(&lt.name)) {
             continue;
@@ -532,8 +539,12 @@ fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
             ..Default::default()
         });
     }
-    for l in doc.layers() {
-        let line_type_name = if doc.linetype(&l.linetype).is_some() { l.linetype.clone() } else { "Continuous".into() };
+    // An attached drawing's layers are kept, marked as coming from it, so
+    // turning them off or freezing them here lasts (AutoCAD's VISRETAIN).
+    let from_xref = |name: &str| name.split_once('|').is_some_and(|(x, _)| doc.xref(x).is_some());
+    for l in doc.layers().iter().filter(|l| !is_dependent(&l.name) || from_xref(&l.name)) {
+        let known = doc.linetype(&l.linetype).is_some() && !is_dependent(&l.linetype);
+        let line_type_name = if known { l.linetype.clone() } else { "Continuous".into() };
         if l.name == "0" {
             // Drawing::new() already has layer 0.
             if let Some(zero) = drawing.layers_mut().find(|z| z.name == "0") {
@@ -549,9 +560,22 @@ fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
             ..Default::default()
         });
     }
-    let mut ex = Exporter::default();
+    let mut ex = Exporter { images: underlay_dxf::add_definitions(&mut drawing, doc), ..Default::default() };
     let mut blocks = Vec::new();
-    for b in doc.blocks() {
+    for b in doc.blocks().filter(|b| !is_dependent(&b.name)) {
+        // An attached drawing is saved as its path; its contents stay in its own file.
+        if let Some(x) = doc.xref(&b.name) {
+            let mut block = dxf::Block {
+                name: b.name.clone(),
+                base_point: to_dxf(b.base),
+                xref_path_name: x.path.clone(),
+                ..Default::default()
+            };
+            block.set_is_xref(true);
+            block.set_is_xref_overlay(x.overlay);
+            blocks.push(block);
+            continue;
+        }
         let entities = b
             .entities
             .iter()
@@ -859,6 +883,21 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         n.starts_with("*model_space") || n.starts_with("*paper_space")
     };
     for b in drawing.blocks().filter(|b| !is_space(&b.name)) {
+        // Attached drawings keep their path; whoever opens this reads them.
+        // The blocks they bring along come from them too.
+        if b.is_xref() || b.is_xref_overlay() {
+            doc.define_block(Block { name: b.name.clone(), base: from_dxf(&b.base_point), entities: Vec::new() });
+            doc.set_xref(Xref {
+                name: b.name.clone(),
+                path: b.xref_path_name.clone(),
+                overlay: b.is_xref_overlay(),
+                status: XrefStatus::NotFound,
+            });
+            continue;
+        }
+        if is_dependent(&b.name) {
+            continue;
+        }
         let mut entities = Vec::new();
         for e in &b.entities {
             if is_template(&e.specific) {
@@ -895,6 +934,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         EntityType::Insert(i) => i.attributes().count(),
         _ => 0,
     };
+    let pictures = underlay_dxf::Definitions::read(drawing);
     let total: usize = drawing.entities().map(attribute_count).sum();
     let styles = raw.attributes.filter(|s| s.len() == total);
     let mut next = 0;
@@ -906,7 +946,11 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         if e.common.is_in_paper_space || is_template(&e.specific) {
             continue;
         }
-        match geometry_from_dxf(&e.specific) {
+        let picture = match &e.specific {
+            EntityType::Image(_) | EntityType::PdfUnderlay(_) => pictures.geometry(&e.specific, &mut doc),
+            _ => None,
+        };
+        match picture.or_else(|| geometry_from_dxf(&e.specific)) {
             Some(mut g) => {
                 style_attributes(&mut g, style, &e.common.layer);
                 let (color, linetype) = (from_dxf_color(&e.common.color), linetype_from_dxf(&e.common.line_type_name));
@@ -1008,12 +1052,17 @@ pub fn write<W: Write>(doc: &Document, writer: &mut W) -> Result<(), Error> {
             _ => Vec::new(),
         })
         .collect();
+    // Layer flags: 1 frozen, 4 locked; 16 from an xref, 32 that xref found.
     let layers: Vec<(String, i16, i16)> = doc
         .layers()
         .iter()
-        .map(|l| (l.name.clone(), i16::from(l.frozen) | (i16::from(l.locked) << 2), l.lineweight.to_dxf()))
+        .map(|l| {
+            let xref = if is_dependent(&l.name) { 48 } else { 0 };
+            (l.name.clone(), i16::from(l.frozen) | (i16::from(l.locked) << 2) | xref, l.lineweight.to_dxf())
+        })
         .collect();
     let fixed = fix_tables(&fix_attributes(&buf, &styles), &layers);
+    let fixed = underlay_dxf::rename_type(&fixed, "UNDERLAYDEFINITION", "PDFDEFINITION");
     writer.write_all(&hatch_dxf::insert_hatches(&fixed, &hatches)).map_err(Error::IoError)
 }
 
@@ -1131,6 +1180,7 @@ fn fix_attributes(dxf: &[u8], styles: &[(String, Color)]) -> Vec<u8> {
 pub fn read<R: BufRead>(reader: &mut R) -> Result<Imported, Error> {
     let mut bytes = Vec::new();
     reader.read_to_end(&mut bytes).map_err(Error::IoError)?;
+    let bytes = underlay_dxf::rename_type(&bytes, "PDFDEFINITION", "UNDERLAYDEFINITION");
     let drawing = Drawing::load(&mut bytes.as_slice())?;
     let raw = Raw {
         attributes: attribute_styles(&bytes),
@@ -1154,6 +1204,100 @@ pub fn load_file(path: impl AsRef<Path>) -> Result<Imported, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn images_and_pdf_pages_save_with_their_definitions() {
+        use oxidraft_model::ImageDef;
+        let mut doc = Document::new();
+        let def = |name: &str, path: &str, page, width, height| ImageDef {
+            name: name.into(),
+            path: path.into(),
+            page,
+            width,
+            height,
+            status: XrefStatus::Loaded,
+        };
+        doc.set_image_def(def("ortho", "tiles\\ortho.tif", None, 400.0, 200.0));
+        doc.set_image_def(def("plan - 2", "plan.pdf", Some(1), 842.0, 595.0));
+        let clip = vec![Point::new(110.0, 205.0), Point::new(130.0, 205.0), Point::new(120.0, 215.0)];
+        let ortho = Geometry::Image {
+            image: "ortho".into(),
+            origin: Point::new(100.0, 200.0),
+            u: Point::new(40.0, 0.0),
+            v: Point::new(0.0, 20.0),
+            clip: clip.clone(),
+        };
+        doc.add(ortho.clone());
+        let page = Geometry::Image {
+            image: "plan - 2".into(),
+            origin: Point::new(0.0, 0.0),
+            u: Point::new(0.0, 297.0),
+            v: Point::new(-210.0, 0.0),
+            clip: Vec::new(),
+        };
+        doc.add(page.clone());
+
+        let mut buf = Vec::new();
+        write(&doc, &mut buf).unwrap();
+        let text = String::from_utf8_lossy(&buf);
+        assert!(text.contains("PDFDEFINITION") && !text.contains("UNDERLAYDEFINITION"));
+        assert!(text.contains("ACAD_IMAGE_DICT") && text.contains("ACAD_PDFDEFINITIONS"));
+        let imported = read(&mut buf.as_slice()).unwrap();
+        assert_eq!(imported.skipped, 0);
+        let mut back = imported.document;
+        let d = back.image_def("ortho").unwrap();
+        assert_eq!((d.path.as_str(), d.page, d.width, d.height), ("tiles\\ortho.tif", None, 400.0, 200.0));
+        let shapes: Vec<Geometry> = back.entities().map(|e| e.geometry.clone()).collect();
+        let Geometry::Image { origin, u, v, clip: c, .. } = &shapes[0] else { panic!() };
+        assert!(
+            origin.approx_eq(Point::new(100.0, 200.0))
+                && u.approx_eq(Point::new(40.0, 0.0))
+                && v.approx_eq(Point::new(0.0, 20.0))
+        );
+        assert!(c.len() == 3 && c.iter().zip(&clip).all(|(a, b)| a.distance(*b) < 1e-9), "{c:?}");
+        // A PDF page's size comes from the PDF; until it's read, its scale stands in.
+        assert_eq!(back.image_def("plan - 2").map(|d| d.page), Some(Some(1)));
+        back.size_pdf("plan - 2", 842.0, 595.0);
+        let Geometry::Image { u, v, .. } = &back.entities().nth(1).unwrap().geometry else { panic!() };
+        assert!(u.distance(Point::new(0.0, 297.0)) < 1e-6 && v.distance(Point::new(-210.0, 0.0)) < 1e-6, "{u:?} {v:?}");
+    }
+
+    #[test]
+    fn xrefs_save_as_their_path() {
+        let mut doc = Document::new();
+        doc.set_xref(Xref {
+            name: "SITE".into(),
+            path: "..\\survey\\site.dwg".into(),
+            overlay: true,
+            status: XrefStatus::NotFound,
+        });
+        let mut site = Document::new();
+        site.add_layer(Layer::new("Boundary", 1));
+        site.add_on_layer(
+            Geometry::Line { start: Point::ORIGIN, end: Point::new(5.0, 0.0) },
+            "Boundary",
+            Color::ByLayer,
+        );
+        doc.load_xref("SITE", &site);
+        doc.add(Geometry::Insert {
+            block: "SITE".into(),
+            placement: Placement::at(Point::new(10.0, 10.0)),
+            attributes: Vec::new(),
+        });
+        assert!(doc.layer("SITE|Boundary").is_some());
+
+        let mut buf = Vec::new();
+        write(&doc, &mut buf).unwrap();
+        let text = String::from_utf8_lossy(&buf);
+        assert!(!text.contains("SITE|Boundary\r\n  6\r\nSITE|"), "its linetypes aren't saved");
+        let back = read(&mut buf.as_slice()).unwrap().document;
+        // Its layers are, so what's set on them here lasts.
+        assert!(back.layer("SITE|Boundary").is_some_and(|l| l.color == 1));
+        let x = back.xref("site").unwrap();
+        assert_eq!((x.path.as_str(), x.overlay, x.status), ("..\\survey\\site.dwg", true, XrefStatus::NotFound));
+        assert!(back.block("SITE").is_some_and(|b| b.entities.is_empty()));
+        assert_eq!(back.len(), 1);
+    }
 
     #[test]
     fn roundtrip_ellipses_splines_construction_lines_and_widths() {

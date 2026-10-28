@@ -21,6 +21,7 @@ oxidraft-commands.workspace = true
 oxidraft-io-dxf.workspace = true
 oxidraft-io-dwg.workspace = true
 oxidraft-plot.workspace = true
+oxidraft-raster.workspace = true
 eframe.workspace = true
 arboard = "3"
 rfd.workspace = true

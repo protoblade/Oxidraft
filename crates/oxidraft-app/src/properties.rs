@@ -250,6 +250,15 @@ impl OxidraftApp {
                 }
                 rows
             }
+            Geometry::Image { image, origin, u, v, clip } => vec![
+                ("Name", Value::Text(image.clone())),
+                ("Position X", Value::Number(origin.x)),
+                ("Position Y", Value::Number(origin.y)),
+                ("Width", Value::Text(fmt(u.length()))),
+                ("Height", Value::Text(fmt(v.length()))),
+                ("Rotation", Value::Angle(Point::ORIGIN.angle_to(*u))),
+                ("Clipped", Value::Text(if clip.len() >= 3 { "Yes" } else { "No" }.into())),
+            ],
             Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => vec![
                 ("Basepoint X", Value::Number(base.x)),
                 ("Basepoint Y", Value::Number(base.y)),
@@ -427,6 +436,15 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
         (Geometry::Ellipse(e), "Center Y") => e.center.y = v,
         (Geometry::Ellipse(e), "Major radius") if v > 0.0 => *e = e.with_axes(v, e.b()),
         (Geometry::Ellipse(e), "Minor radius") if v > 0.0 => *e = e.with_axes(e.a(), v),
+        (Geometry::Image { origin, .. }, "Position X" | "Position Y") => {
+            let o = *origin;
+            let to = if label == "Position X" { Point::new(v, o.y) } else { Point::new(o.x, v) };
+            return Some(g.translated(to - o));
+        }
+        (Geometry::Image { origin, u, .. }, "Rotation") => {
+            let (o, turn) = (*origin, v - Point::ORIGIN.angle_to(*u));
+            return Some(g.rotated(o, turn));
+        }
         (Geometry::Xline { base, .. } | Geometry::Ray { base, .. }, "Basepoint X") => base.x = v,
         (Geometry::Xline { base, .. } | Geometry::Ray { base, .. }, "Basepoint Y") => base.y = v,
         (Geometry::Xline { direction, .. } | Geometry::Ray { direction, .. }, "Angle") => {

@@ -28,6 +28,11 @@ impl Command for Explode {
                 }
                 // One level, as in AutoCAD: nested references stay references.
                 // Attribute values become plain text (like AutoCAD's BURST).
+                // AutoCAD won't explode an attached drawing: bind it first.
+                Geometry::Insert { block, .. } if ctx.doc.xref(block).is_some() => {
+                    ctx.messages.push(format!("\"{block}\" is an external reference; bind it to explode it."));
+                    not_exploded += 1;
+                }
                 Geometry::Insert { block, placement, attributes } => {
                     let Some(def) = ctx.doc.block(block).cloned() else {
                         not_exploded += 1;

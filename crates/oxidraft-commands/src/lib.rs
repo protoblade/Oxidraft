@@ -49,7 +49,9 @@ mod select;
 mod spline;
 mod stretch;
 mod trim_extend;
+mod underlay;
 mod xline;
+mod xref;
 mod zoom;
 
 pub use clipboard::{clip_of, paste};

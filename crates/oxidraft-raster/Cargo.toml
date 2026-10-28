@@ -1,0 +1,19 @@
+[package]
+name = "oxidraft-raster"
+description = "Raster and PDF underlays for Oxidraft: GeoTIFF and world-file placement, decoding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxidraft-geom.workspace = true
+# GeoTIFF's placement tags, besides the pixels.
+tiff = "0.11"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "bmp"] }
+# Renders PDF pages for PDF underlays.
+hayro = "0.8"
+
+[lints]
+workspace = true

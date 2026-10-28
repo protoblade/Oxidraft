@@ -1,6 +1,9 @@
 //! The plotted sheet: the drawing as strokes, fills and text in
 //! millimeters on the paper, ready to write as PDF or show as a preview.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use oxidraft_geom::{Aabb, Point, curve::Seg, intersect::clip_segment};
 use oxidraft_model::{Document, Geometry, HatchPattern, Styled, Vertex, constant_width, hatch, linetype};
 
@@ -33,13 +36,26 @@ pub enum Item {
     /// A line of text from the start of its baseline; `size` is the font
     /// size in millimeters.
     Text { at: Point, rotation: f64, size: f64, text: String, color: Rgb },
+    /// Picture `name` over the parallelogram from `origin` along `u` and
+    /// `v`, inside `clip` when that has points; in grays for monochrome
+    /// and grayscale pen tables.
+    Image { name: String, origin: Point, u: Point, v: Point, clip: Vec<Point>, gray: bool },
 }
 
-/// A plotted sheet.
+/// An image's pixels, RGBA, rows top to bottom.
+#[derive(Debug, PartialEq)]
+pub struct Picture {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// A plotted sheet, with the pictures its images show.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sheet {
     pub layout: Layout,
     pub items: Vec<Item>,
+    pub pictures: HashMap<String, Arc<Picture>>,
 }
 
 struct Plotter<'a> {
@@ -47,6 +63,8 @@ struct Plotter<'a> {
     settings: &'a PlotSettings,
     layout: Layout,
     items: Vec<Item>,
+    lookup: &'a dyn Fn(&str) -> Option<Arc<Picture>>,
+    pictures: HashMap<String, Arc<Picture>>,
 }
 
 /// How many straight pieces draw an arc of radius `r` and `sweep` radians
@@ -126,6 +144,17 @@ impl Plotter<'_> {
         let width = if self.settings.lineweights { s.lineweight.mm().unwrap_or(0.25) } else { 0.0 };
         let g = &s.geometry;
         match g {
+            // Unloaded images don't plot; frames don't either (IMAGEFRAME 2).
+            Geometry::Image { image, origin, u, v, clip } => {
+                let Some(picture) = (self.lookup)(image) else { return };
+                self.pictures.insert(image.clone(), picture);
+                let paper = |q: Point| self.paper(q);
+                let (o, pu, pv) =
+                    (paper(*origin), paper(*origin + *u) - paper(*origin), paper(*origin + *v) - paper(*origin));
+                let clip = clip.iter().map(|q| paper(*q)).collect();
+                let gray = self.settings.style != crate::PlotStyle::None;
+                self.items.push(Item::Image { name: image.clone(), origin: o, u: pu, v: pv, clip, gray });
+            }
             Geometry::Text { .. } => self.text(g, color),
             Geometry::Hatch { .. } => self.hatch(g, color, width),
             Geometry::Point { position } => self.point(*position, color, width),
@@ -261,13 +290,29 @@ impl Plotter<'_> {
 }
 
 /// The sheet `settings` plot `doc` on, or `None` when there's nothing to
-/// plot. Hatches go first, behind everything else, as on screen.
+/// plot; images draw as nothing. Hatches go first, behind everything
+/// else, as on screen.
 pub fn render(doc: &Document, settings: &PlotSettings) -> Option<Sheet> {
+    render_with_pictures(doc, settings, &|_| None)
+}
+
+/// Like [`render`], with images showing the pictures `lookup` has for
+/// them (loaded ones); images go behind even hatches.
+pub fn render_with_pictures(
+    doc: &Document,
+    settings: &PlotSettings,
+    lookup: &dyn Fn(&str) -> Option<Arc<Picture>>,
+) -> Option<Sheet> {
     let layout = settings.layout(doc)?;
-    let mut plotter = Plotter { doc, settings, layout, items: Vec::new() };
-    let (hatches, others): (Vec<_>, Vec<_>) =
-        doc.entities().partition(|e| matches!(e.geometry, Geometry::Hatch { .. }));
-    for e in hatches.into_iter().chain(others) {
+    let mut plotter = Plotter { doc, settings, layout, items: Vec::new(), lookup, pictures: HashMap::new() };
+    let rank = |g: &Geometry| match g {
+        Geometry::Image { .. } => 0,
+        Geometry::Hatch { .. } => 1,
+        _ => 2,
+    };
+    let mut entities: Vec<_> = doc.entities().collect();
+    entities.sort_by_key(|e| rank(&e.geometry));
+    for e in entities {
         if !doc.is_shown(&e.layer) || (!e.geometry.is_infinite() && !overlaps(&doc.entity_bounds(e), &layout.window)) {
             continue;
         }
@@ -275,7 +320,7 @@ pub fn render(doc: &Document, settings: &PlotSettings) -> Option<Sheet> {
             plotter.styled(&s);
         }
     }
-    Some(Sheet { layout, items: plotter.items })
+    Some(Sheet { layout, items: plotter.items, pictures: plotter.pictures })
 }
 
 #[cfg(test)]

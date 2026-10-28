@@ -417,18 +417,29 @@ impl OxidraftApp {
         // Dash patterns in screen pixels by linetype name, looked up once a frame.
         let mut patterns: HashMap<String, Option<Vec<f64>>> = HashMap::new();
         let px_per_unit = self.doc.ltscale() * self.view.scale;
-        // Hatches go behind everything else (AutoCAD's HPDRAWORDER "behind boundary").
-        let (hatches, others): (Vec<_>, Vec<_>) =
-            self.doc.entities().partition(|e| matches!(e.geometry, Geometry::Hatch { .. }));
-        for e in hatches.into_iter().chain(others) {
+        // Images go behind everything, then hatches (AutoCAD's HPDRAWORDER
+        // "behind boundary").
+        let rank = |g: &Geometry| match g {
+            Geometry::Image { .. } => 0,
+            Geometry::Hatch { .. } => 1,
+            _ => 2,
+        };
+        let mut entities: Vec<_> = self.doc.entities().collect();
+        entities.sort_by_key(|e| rank(&e.geometry));
+        for e in entities {
             if !self.doc.is_shown(&e.layer) || !on_screen(&self.doc.entity_bounds(e), &view) {
                 continue;
             }
+            // Attached drawings draw faded (AutoCAD's XDWGFADECTL).
+            let xref = matches!(&e.geometry, Geometry::Insert { block, .. } if self.doc.xref(block).is_some());
             for s in self.doc.expanded_styled(e) {
                 let mut color = theme::aci(s.color);
                 // Locked layers draw faded (AutoCAD's LAYLOCKFADECTL).
                 if self.doc.layer(&s.layer).is_some_and(|l| l.locked) {
                     color = color.gamma_multiply(0.45);
+                }
+                if xref {
+                    color = color.gamma_multiply(0.6);
                 }
                 let pattern = patterns.entry(s.linetype.clone()).or_insert_with(|| {
                     let lt = self.doc.linetype(&s.linetype).filter(|l| !l.is_continuous())?;
@@ -518,6 +529,7 @@ impl OxidraftApp {
             Geometry::Point { position } => return self.draw_point(painter, rect, *position, stroke),
             Geometry::Text { .. } => return self.draw_text(painter, rect, g, stroke),
             Geometry::Hatch { .. } => return self.draw_hatch(painter, rect, g, stroke),
+            Geometry::Image { .. } => return self.draw_image(painter, rect, g, stroke),
             Geometry::Polyline { vertices, closed }
                 if vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0) =>
             {

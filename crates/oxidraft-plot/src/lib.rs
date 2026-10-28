@@ -8,4 +8,4 @@ pub mod sheet;
 
 pub use pdf::pdf;
 pub use setup::{Layout, MARGIN, PAPERS, Paper, PlotArea, PlotScale, PlotSettings, PlotStyle, SCALES, scale_label};
-pub use sheet::{Item, Path, Rgb, Sheet, render};
+pub use sheet::{Item, Path, Picture, Rgb, Sheet, render, render_with_pictures};

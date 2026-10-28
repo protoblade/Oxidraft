@@ -177,6 +177,17 @@ pub enum Geometry {
         base: Point,
         direction: Point,
     },
+    /// An image or PDF page underlay (DXF IMAGE, PDFUNDERLAY): the picture
+    /// [`crate::ImageDef`] `image` names, over the parallelogram from
+    /// `origin` (its lower-left corner) along `u` (its bottom edge) and `v`
+    /// (its left edge); shown only inside `clip` when that has points.
+    Image {
+        image: String,
+        origin: Point,
+        u: Point,
+        v: Point,
+        clip: Vec<Point>,
+    },
 }
 
 /// An attribute of a block reference: a tagged text value (parcel number,
@@ -295,6 +306,7 @@ impl Geometry {
             Geometry::Spline(_) => "Spline",
             Geometry::Xline { .. } => "Xline",
             Geometry::Ray { .. } => "Ray",
+            Geometry::Image { .. } => "Raster Image",
         }
     }
 
@@ -327,6 +339,12 @@ impl Geometry {
             }
             Geometry::Hatch { loops, .. } => loops.iter().flat_map(|l| hatch::loop_segments(l)).collect(),
             Geometry::Point { position } => vec![Seg::Line(Segment::new(*position, *position))],
+            // Its frame, or its clipping boundary.
+            Geometry::Image { origin, u, v, clip, .. } => {
+                let corners = crate::underlay::image_corners(*origin, *u, *v).to_vec();
+                let ring = if clip.len() >= 3 { clip } else { &corners };
+                (0..ring.len()).map(|i| Seg::Line(Segment::new(ring[i], ring[(i + 1) % ring.len()]))).collect()
+            }
             _ => self.segments(),
         }
     }
@@ -371,6 +389,7 @@ impl Geometry {
             // Expanded by the document (blocks) or by `primitives` (dimensions,
             // leaders); points, text and hatches aren't curves.
             Geometry::Point { .. }
+            | Geometry::Image { .. }
             | Geometry::Insert { .. }
             | Geometry::Text { .. }
             | Geometry::Dimension { .. }
@@ -628,6 +647,13 @@ impl Geometry {
             Geometry::Xline { base, direction } => {
                 Geometry::Xline { base: f(*base), direction: f(*base + *direction) - f(*base) }
             }
+            Geometry::Image { image, origin, u, v, clip } => Geometry::Image {
+                image: image.clone(),
+                origin: f(*origin),
+                u: f(*origin + *u) - f(*origin),
+                v: f(*origin + *v) - f(*origin),
+                clip: clip.iter().map(|p| f(*p)).collect(),
+            },
             Geometry::Ray { base, direction } => {
                 Geometry::Ray { base: f(*base), direction: f(*base + *direction) - f(*base) }
             }
@@ -740,6 +766,7 @@ impl Geometry {
                 s.with_grip_points(&moved).map_or_else(|| self.clone(), Geometry::Spline)
             }
             Geometry::Xline { base, .. } | Geometry::Ray { base, .. } => self.translated(shift(*base) - *base),
+            Geometry::Image { origin, .. } => self.translated(shift(*origin) - *origin),
             Geometry::Insert { placement, .. } => self.translated(shift(placement.position) - placement.position),
             Geometry::Text { position, .. } => self.translated(shift(*position) - *position),
             Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale } => Geometry::Dimension {
@@ -817,6 +844,7 @@ impl Geometry {
                 g
             }
             Geometry::Spline(s) => s.grip_points(),
+            Geometry::Image { origin, u, v, .. } => crate::underlay::image_corners(*origin, *u, *v).to_vec(),
             Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => vec![*base, *base + *direction],
         }
     }
@@ -906,6 +934,13 @@ impl Geometry {
                 Geometry::Ray { base: *base, direction: to - *base }
             }
             (Geometry::Xline { .. } | Geometry::Ray { .. }, _) => self.clone(),
+            // The first corner moves the picture; the others scale it from there.
+            (Geometry::Image { origin, .. }, 0) => self.translated(to - *origin),
+            (Geometry::Image { origin, u, v, .. }, i) => {
+                let corner = crate::underlay::image_corners(*origin, *u, *v)[i.min(3)];
+                let (from, now) = (origin.distance(corner), origin.distance(to));
+                if from > EPSILON && now > EPSILON { self.scaled(*origin, now / from) } else { self.clone() }
+            }
         }
     }
 }

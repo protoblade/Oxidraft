@@ -38,6 +38,21 @@ pub struct OxidraftApp {
     /// The Quick Select dialog's choices while it's open.
     pub(crate) quick_select: Option<QuickSelect>,
     pub(crate) attribute_editor: Option<crate::attedit::AttributeEditor>,
+    /// XATTACH's Attach External Reference dialog while it's open.
+    pub(crate) attach_dialog: Option<crate::xref::AttachDialog>,
+    /// The External References palette, and the reference selected in it.
+    pub(crate) xref_palette_open: bool,
+    pub(crate) xref_selected: Option<String>,
+    /// What each attached drawing attaches itself, as read with it.
+    pub(crate) nested_xrefs: std::collections::HashMap<String, Vec<(String, String, oxidraft_model::XrefStatus)>>,
+    /// Images and PDF pages: their pixels as read so far, the reader, and
+    /// a count that changes whenever pictures come or go.
+    pub(crate) rasters: std::collections::HashMap<String, crate::underlay::Raster>,
+    pub(crate) loader: crate::underlay::Loader,
+    pub(crate) raster_revision: u64,
+    pub(crate) image_attach_dialog: Option<crate::underlay::ImageAttachDialog>,
+    /// Images picked in the External References palette.
+    pub(crate) image_selected: Vec<String>,
     /// The Plot dialog while it's open.
     pub(crate) plot: Option<crate::plot::PlotDialog>,
     /// The last plot's settings, which the next one starts from.
@@ -111,6 +126,15 @@ impl OxidraftApp {
             pending_views: Vec::new(),
             quick_select: None,
             attribute_editor: None,
+            attach_dialog: None,
+            xref_palette_open: false,
+            xref_selected: None,
+            nested_xrefs: Default::default(),
+            rasters: Default::default(),
+            loader: Default::default(),
+            raster_revision: 0,
+            image_attach_dialog: None,
+            image_selected: Vec::new(),
             plot: None,
             plot_settings: oxidraft_plot::PlotSettings {
                 area: oxidraft_plot::PlotArea::Display(oxidraft_geom::Aabb::from_points(Point::ORIGIN, Point::ORIGIN)),
@@ -209,6 +233,9 @@ impl OxidraftApp {
         self.saved_revision = 0;
         self.path = None;
         self.dwg_version = None;
+        self.rasters.clear();
+        self.image_selected.clear();
+        self.nested_xrefs.clear();
         self.view = View::default();
     }
 
@@ -244,6 +271,12 @@ impl OxidraftApp {
                 self.engine.log(msg);
                 self.path = Some(path);
                 self.dwg_version = version;
+                self.xref_selected = None;
+                self.load_xrefs();
+                self.load_pictures();
+                // Reading what's attached isn't an edit, and can't be undone.
+                self.doc.forget_history();
+                self.saved_revision = self.doc.revision();
             }
             Err(e) => self.engine.log(format!("Could not open {}: {e}", path.display())),
         }
@@ -307,6 +340,10 @@ impl OxidraftApp {
             "NEW" => self.new_drawing(),
             "LAYER" | "LA" => self.layer_manager_open = true,
             "PLOT" | "PRINT" => self.open_plot(false),
+            "EXTERNALREFERENCES" | "ER" | "XREF" | "XR" => self.xref_palette_open = true,
+            "XATTACH" | "XA" => self.xattach(),
+            "IMAGEATTACH" | "IAT" => self.image_attach(),
+            "PDFATTACH" => self.pdf_attach(),
             "PREVIEW" | "PRE" => self.open_plot(true),
             "QSELECT" => self.open_quick_select(),
             "PROPERTIES" | "PR" | "PROPS" | "MO" | "CH" => self.properties_open = true,
@@ -492,6 +529,7 @@ impl eframe::App for OxidraftApp {
         self.prev_text_fields = std::mem::take(&mut self.text_fields);
         self.handle_shortcuts(&ctx);
         self.handle_clipboard_keys(&ctx);
+        self.receive_pictures(&ctx);
         self.update_title(&ctx);
 
         self.top_bar(ui);
@@ -507,6 +545,9 @@ impl eframe::App for OxidraftApp {
         self.quick_select_dialog(&ctx);
         self.attribute_editor(&ctx);
         self.plot_dialog(&ctx);
+        self.attach_dialog(&ctx);
+        self.image_attach_dialog(&ctx);
+        self.xref_palette(&ctx);
         self.update_window(&ctx);
         self.command_line(&ctx);
         self.publish_copied(&ctx);

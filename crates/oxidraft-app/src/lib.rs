@@ -13,8 +13,10 @@ mod properties;
 mod qselect;
 mod shortcut_menu;
 mod theme;
+mod underlay;
 pub mod update;
 mod view;
+mod xref;
 
 pub use app::OxidraftApp;
 pub use layers::LAYER_MANAGER;

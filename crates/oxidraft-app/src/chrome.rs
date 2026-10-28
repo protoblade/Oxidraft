@@ -189,6 +189,8 @@ impl OxidraftApp {
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                 if self.ribbon_tab == 0 {
                     self.home_tab(ui);
+                } else if RIBBON_TABS[self.ribbon_tab] == "Insert" {
+                    self.insert_tab(ui);
                 } else if RIBBON_TABS[self.ribbon_tab] == "Output" {
                     self.output_tab(ui);
                 } else {
@@ -200,6 +202,47 @@ impl OxidraftApp {
                             format!("The {} tab is {}.", RIBBON_TABS[self.ribbon_tab], NOT_YET.to_lowercase()),
                         );
                     });
+                }
+            });
+        });
+    }
+
+    fn insert_tab(&mut self, ui: &mut Ui) {
+        ribbon_panel(ui, "Block", |ui| {
+            self.large_tool(ui, &tool(Icon::InsertBlock, "Insert", Some("INSERT"), "Inserts a block reference (I)"));
+            self.large_tool(ui, &tool(Icon::CreateBlock, "Create", Some("BLOCK"), "Creates a block from objects (B)"));
+        });
+        ribbon_panel(ui, "Reference", |ui| {
+            self.large_tool(
+                ui,
+                &tool(
+                    Icon::Attach,
+                    "Attach",
+                    Some("XATTACH"),
+                    "Attaches a DWG or DXF drawing as an external reference (XA)",
+                ),
+            );
+            self.large_tool(
+                ui,
+                &tool(
+                    Icon::ExternalReferences,
+                    "External\nReferences",
+                    Some("EXTERNALREFERENCES"),
+                    "Opens the External References palette (XR)",
+                ),
+            );
+            ui.vertical(|ui| {
+                for t in [
+                    tool(
+                        Icon::Image,
+                        "Image",
+                        Some("IMAGEATTACH"),
+                        "Attaches an image, placed by its georeferencing if it has some; pick many GeoTIFFs to attach them unloaded (IAT)",
+                    ),
+                    tool(Icon::Pdf, "PDF", Some("PDFATTACH"), "Attaches a page of a PDF as an underlay"),
+                    tool(Icon::ImageClip, "Clip", Some("IMAGECLIP"), "Clips an image or PDF underlay (ICL)"),
+                ] {
+                    self.small_tool(ui, &t);
                 }
             });
         });
@@ -420,6 +463,10 @@ impl OxidraftApp {
             });
         });
         match chosen {
+            // An xref's layers stay its own: nothing new goes on them.
+            Some(name) if oxidraft_model::is_dependent(&name) => {
+                self.engine.log(format!("\"{name}\" comes from an external reference; objects can't be put on it."));
+            }
             Some(name) if selected.is_empty() => {
                 self.doc.set_current_layer(&name);
             }
