@@ -63,6 +63,7 @@ impl OxidraftApp {
             let common_color = common(selected.iter().map(|e| e.color));
             let text = match (selected.is_empty(), common_color) {
                 (true, _) | (false, Some(Color::ByLayer)) => "ByLayer".to_string(),
+                (false, Some(Color::ByBlock)) => "ByBlock".to_string(),
                 (false, Some(Color::Index(i))) => color_name(i),
                 (false, None) => VARIES.to_string(),
             };
@@ -72,6 +73,9 @@ impl OxidraftApp {
                     egui::ComboBox::from_id_salt("props_color").width(150.0).selected_text(text).show_ui(ui, |ui| {
                         if ui.selectable_label(common_color == Some(Color::ByLayer), "ByLayer").clicked() {
                             chosen = Some(Color::ByLayer);
+                        }
+                        if ui.selectable_label(common_color == Some(Color::ByBlock), "ByBlock").clicked() {
+                            chosen = Some(Color::ByBlock);
                         }
                         for &(index, name) in NAMED_COLORS {
                             ui.horizontal(|ui| {
@@ -166,14 +170,19 @@ impl OxidraftApp {
                 }
                 rows
             }
-            Geometry::Insert { block, placement } => vec![
-                ("Name", Value::Text(block.clone())),
-                ("Position X", Value::Number(placement.position.x)),
-                ("Position Y", Value::Number(placement.position.y)),
-                ("Scale", Value::Number(placement.scale)),
-                ("Rotation", Value::Angle(placement.rotation)),
-                ("Mirrored", Value::Text(if placement.mirror { "Yes" } else { "No" }.into())),
-            ],
+            Geometry::Insert { block, placement, attributes } => {
+                let mut rows = vec![
+                    ("Name", Value::Text(block.clone())),
+                    ("Position X", Value::Number(placement.position.x)),
+                    ("Position Y", Value::Number(placement.position.y)),
+                    ("Scale", Value::Number(placement.scale)),
+                    ("Rotation", Value::Angle(placement.rotation)),
+                    ("Mirrored", Value::Text(if placement.mirror { "Yes" } else { "No" }.into())),
+                ];
+                // Attribute values are editable by tag, as in AutoCAD's palette.
+                rows.extend(attributes.iter().map(|a| (a.tag.as_str(), Value::Edit(a.value.clone()))));
+                rows
+            }
             Geometry::Text { position, height, rotation, width, content, .. } => vec![
                 ("Contents", Value::Edit(content.clone())),
                 ("Height", Value::Number(*height)),
@@ -317,6 +326,11 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
 /// The geometry with one text property changed, or `None` if it's invalid.
 fn with_text_property(g: &Geometry, label: &str, s: &str) -> Option<Geometry> {
     let mut g = g.clone();
+    if let Geometry::Insert { attributes, .. } = &mut g {
+        let a = attributes.iter_mut().find(|a| a.tag == label)?;
+        a.value = s.to_string();
+        return Some(g);
+    }
     match (&mut g, label) {
         (Geometry::Text { content, .. } | Geometry::Leader { content, .. }, "Contents") => *content = s.to_string(),
         (Geometry::Dimension { text, .. }, "Text override") => {

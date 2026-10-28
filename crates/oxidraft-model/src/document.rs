@@ -182,16 +182,19 @@ impl Document {
         self.entities.values().filter(|e| e.layer.eq_ignore_ascii_case(layer)).count()
     }
 
-    fn color_on(&self, layer: &str, color: Color) -> u8 {
+    /// The ACI color `color` resolves to on `layer`, where ByBlock means
+    /// `by_block` (the enclosing reference's color; white outside blocks).
+    fn color_on(&self, layer: &str, color: Color, by_block: u8) -> u8 {
         match color {
             Color::Index(i) => i,
             Color::ByLayer => self.layer(layer).map_or(7, |l| l.color),
+            Color::ByBlock => by_block,
         }
     }
 
     /// Resolved ACI color of an entity (layer color when `ByLayer`).
     pub fn display_color(&self, e: &Entity) -> u8 {
-        self.color_on(&e.layer, e.color)
+        self.color_on(&e.layer, e.color, 7)
     }
 
     pub fn blocks(&self) -> impl Iterator<Item = &Block> {
@@ -207,7 +210,7 @@ impl Document {
     /// layer "0" inside a block take the reference's layer, as in AutoCAD.
     pub fn expanded_styled(&self, e: &Entity) -> Vec<(Geometry, u8, String)> {
         let mut out = Vec::new();
-        self.expand_into(&e.geometry, &e.layer, e.color, 0, &mut out);
+        self.expand_into(&e.geometry, &e.layer, e.color, 7, 0, &mut out);
         out
     }
 
@@ -224,26 +227,33 @@ impl Document {
         g: &Geometry,
         layer: &str,
         color: Color,
+        by_block: u8,
         depth: usize,
         out: &mut Vec<(Geometry, u8, String)>,
     ) {
         if let Some(parts) = g.primitives() {
             for part in &parts {
-                self.expand_into(part, layer, color, depth + 1, out);
+                self.expand_into(part, layer, color, by_block, depth + 1, out);
             }
             return;
         }
-        let Geometry::Insert { block, placement } = g else {
-            out.push((g.clone(), self.color_on(layer, color), layer.to_string()));
+        let Geometry::Insert { block, placement, attributes } = g else {
+            out.push((g.clone(), self.color_on(layer, color, by_block), layer.to_string()));
             return;
         };
-        let Some(def) = self.block(block).filter(|_| depth < MAX_BLOCK_DEPTH) else { return };
-        for be in &def.entities {
-            let inner_layer = if be.layer == "0" { layer } else { &be.layer };
-            if !self.is_shown(inner_layer) {
-                continue;
+        // What ByBlock means for everything inside this reference.
+        let own = self.color_on(layer, color, by_block);
+        if let Some(def) = self.block(block).filter(|_| depth < MAX_BLOCK_DEPTH) {
+            for be in &def.entities {
+                let inner_layer = if be.layer == "0" { layer } else { &be.layer };
+                if self.is_shown(inner_layer) {
+                    let placed = placement.place(def.base, &be.geometry);
+                    self.expand_into(&placed, inner_layer, be.color, own, depth + 1, out);
+                }
             }
-            self.expand_into(&placement.place(def.base, &be.geometry), inner_layer, be.color, depth + 1, out);
+        }
+        for a in attributes.iter().filter(|a| !a.invisible && !a.value.is_empty() && self.is_shown(&a.layer)) {
+            out.push((a.text(), self.color_on(&a.layer, a.color, own), a.layer.clone()));
         }
     }
 
@@ -267,9 +277,14 @@ impl Document {
         self.expanded(e).iter().any(|g| g.touches(b))
     }
 
-    /// Bounding box of all entities, or `None` for an empty drawing.
+    /// Bounding box of all entities, or `None` for an empty drawing. Like
+    /// AutoCAD's ZOOM Extents, objects on frozen layers don't count.
     pub fn extents(&self) -> Option<Aabb> {
-        self.entities.values().map(|e| self.entity_bounds(e)).reduce(Aabb::union)
+        self.entities
+            .values()
+            .filter(|e| !self.layer(&e.layer).is_some_and(|l| l.frozen))
+            .map(|e| self.entity_bounds(e))
+            .reduce(Aabb::union)
     }
 
     // ---- layers ----------------------------------------------------------
@@ -645,6 +660,17 @@ mod tests {
     }
 
     #[test]
+    fn extents_skip_frozen_layers() {
+        let mut d = Document::new();
+        d.add(line(0.0));
+        d.add_layer(Layer::new("Far", 1));
+        d.add_on_layer(line(1.0e6), "Far", Color::ByLayer);
+        assert!(d.extents().unwrap().max.x > 1.0e5);
+        d.update_layer(Layer { frozen: true, ..Layer::new("Far", 1) });
+        assert_eq!(d.extents().unwrap().max.x, 0.0);
+    }
+
+    #[test]
     fn delete_layer_rules() {
         let mut d = Document::new();
         d.add_layer(Layer::new("Empty", 1));
@@ -670,7 +696,11 @@ mod tests {
                 BlockEntity { layer: "Red".into(), color: Color::ByLayer, geometry: line(2.0) },
             ],
         });
-        let insert = Geometry::Insert { block: "DOOR".into(), placement: Placement::at(Point::new(10.0, 0.0)) };
+        let insert = Geometry::Insert {
+            block: "DOOR".into(),
+            placement: Placement::at(Point::new(10.0, 0.0)),
+            attributes: Vec::new(),
+        };
         let id = d.add_on_layer(insert, "Doors", Color::ByLayer);
         let e = d.entity(id).unwrap();
         let styled = d.expanded_styled(e);
@@ -686,9 +716,71 @@ mod tests {
     }
 
     #[test]
+    fn attributes_draw_with_the_reference_and_byblock_takes_its_color() {
+        use crate::{Attach, entity::Attribute};
+        let mut d = Document::new();
+        d.add_layer(Layer::new("Points", 3));
+        d.define_block(Block {
+            name: "PT".into(),
+            base: Point::ORIGIN,
+            entities: vec![BlockEntity {
+                layer: "0".into(),
+                color: Color::ByBlock,
+                geometry: Geometry::Circle { center: Point::ORIGIN, radius: 0.5 },
+            }],
+        });
+        let attr = |tag: &str, value: &str, invisible| Attribute {
+            tag: tag.into(),
+            value: value.into(),
+            layer: "0".into(),
+            color: Color::ByBlock,
+            position: Point::new(11.0, 0.0),
+            height: 2.0,
+            rotation: 0.0,
+            attach: Attach::BottomLeft,
+            invisible,
+        };
+        let id = d.add_on_layer(
+            Geometry::Insert {
+                block: "PT".into(),
+                placement: Placement::at(Point::new(10.0, 0.0)),
+                attributes: vec![attr("NOMER", "17", false), attr("CREATOR", "x", true), attr("KOTA", "", false)],
+            },
+            "Points",
+            Color::ByLayer,
+        );
+        let styled = d.expanded_styled(d.entity(id).unwrap());
+        assert_eq!(styled.len(), 2, "the circle and the one visible, non-empty attribute");
+        assert!(styled.iter().all(|(_, aci, _)| *aci == 3), "ByBlock takes the reference's (layer) color");
+        assert!(matches!(&styled[1].0, Geometry::Text { content, .. } if content == "17"));
+
+        // An attribute on an off layer isn't drawn; one with its own color keeps it.
+        let mut off = Layer::new("Labels", 5);
+        off.on = false;
+        d.add_layer(off.clone());
+        d.update_layer(off);
+        let mut g = d.entity(id).unwrap().geometry.clone();
+        if let Geometry::Insert { attributes, .. } = &mut g {
+            attributes[0].layer = "Labels".into();
+            attributes[2] = Attribute { value: "9.81".into(), color: Color::Index(150), ..attributes[2].clone() };
+        }
+        d.modify(id, g);
+        let styled = d.expanded_styled(d.entity(id).unwrap());
+        assert_eq!(styled.len(), 2);
+        assert!(matches!(&styled[1], (Geometry::Text { content, .. }, 150, _) if content == "9.81"));
+        d.undo();
+
+        // Moving the reference moves its attributes.
+        let moved = d.entity(id).unwrap().geometry.translated(Point::new(5.0, 5.0));
+        let Geometry::Insert { attributes, .. } = moved else { panic!() };
+        assert_eq!(attributes[0].position, Point::new(16.0, 5.0));
+    }
+
+    #[test]
     fn self_referencing_blocks_stop_expanding() {
         let mut d = Document::new();
-        let me = Geometry::Insert { block: "LOOP".into(), placement: Placement::at(Point::ORIGIN) };
+        let me =
+            Geometry::Insert { block: "LOOP".into(), placement: Placement::at(Point::ORIGIN), attributes: Vec::new() };
         d.define_block(Block {
             name: "LOOP".into(),
             base: Point::ORIGIN,

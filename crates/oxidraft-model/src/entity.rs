@@ -18,6 +18,8 @@ pub enum Color {
     /// Use the color of the entity's layer.
     #[default]
     ByLayer,
+    /// Inside a block: use the color of the block reference.
+    ByBlock,
     /// AutoCAD Color Index, 1..=255 (1 red, 2 yellow, 3 green, 4 cyan, 5 blue, 6 magenta, 7 white/black).
     Index(u8),
 }
@@ -69,6 +71,8 @@ pub enum Geometry {
     Insert {
         block: String,
         placement: Placement,
+        /// Attribute values (DXF ATTRIB), in world coordinates.
+        attributes: Vec<Attribute>,
     },
     /// Text (MTEXT, or single-line TEXT with a bottom-left attachment).
     /// `content` may hold several lines; `width` > 0 wraps long lines.
@@ -109,6 +113,47 @@ pub enum Geometry {
     },
 }
 
+/// An attribute of a block reference: a tagged text value (parcel number,
+/// elevation, …). Its text is in world coordinates and moves with the
+/// reference.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Attribute {
+    pub tag: String,
+    pub value: String,
+    /// Attributes have their own layer and color; ByBlock means the
+    /// reference's color.
+    pub layer: String,
+    pub color: Color,
+    pub position: Point,
+    pub height: f64,
+    pub rotation: f64,
+    pub attach: Attach,
+    pub invisible: bool,
+}
+
+impl Attribute {
+    pub fn text(&self) -> Geometry {
+        Geometry::Text {
+            position: self.position,
+            height: self.height,
+            rotation: self.rotation,
+            width: 0.0,
+            attach: self.attach,
+            content: self.value.clone(),
+        }
+    }
+
+    /// The attribute after the same transform as its reference.
+    fn mapped(&self, f: &dyn Fn(Point) -> Point, length_factor: f64, flips: bool) -> Attribute {
+        match self.text().map_points(f, length_factor, flips) {
+            Geometry::Text { position, height, rotation, .. } => {
+                Attribute { position, height, rotation, ..self.clone() }
+            }
+            _ => self.clone(),
+        }
+    }
+}
+
 /// Where and how a block reference places its block: the block's base point
 /// lands on `position`, scaled uniformly, rotated, and optionally mirrored
 /// (a negative X scale in DXF).
@@ -137,7 +182,7 @@ impl Placement {
 
     /// Block-local geometry placed in the world.
     pub fn place(&self, base: Point, g: &Geometry) -> Geometry {
-        g.map_points(|p| self.apply(base, p), self.scale, self.mirror)
+        g.map_points(&|p| self.apply(base, p), self.scale, self.mirror)
     }
 }
 
@@ -393,26 +438,26 @@ impl Geometry {
     // ---- transforms --------------------------------------------------------
 
     pub fn translated(&self, d: Point) -> Geometry {
-        self.map_points(|p| p + d, 1.0, false)
+        self.map_points(&|p| p + d, 1.0, false)
     }
 
     pub fn rotated(&self, base: Point, angle_deg: f64) -> Geometry {
-        self.map_points(|p| p.rotated_about(base, angle_deg), 1.0, false)
+        self.map_points(&|p| p.rotated_about(base, angle_deg), 1.0, false)
     }
 
     /// Scaled about `base`; `factor` must be positive.
     pub fn scaled(&self, base: Point, factor: f64) -> Geometry {
-        self.map_points(|p| p.scaled_about(base, factor), factor, false)
+        self.map_points(&|p| p.scaled_about(base, factor), factor, false)
     }
 
     /// Reflected across the line through `a` and `b`.
     pub fn mirrored(&self, a: Point, b: Point) -> Geometry {
-        self.map_points(|p| p.mirrored(a, b), 1.0, true)
+        self.map_points(&|p| p.mirrored(a, b), 1.0, true)
     }
 
     /// Applies a similarity transform given by where it sends points, how it
     /// scales lengths, and whether it flips orientation (mirroring).
-    pub(crate) fn map_points(&self, f: impl Fn(Point) -> Point, length_factor: f64, flips: bool) -> Geometry {
+    pub(crate) fn map_points(&self, f: &dyn Fn(Point) -> Point, length_factor: f64, flips: bool) -> Geometry {
         match self {
             Geometry::Line { start, end } => Geometry::Line { start: f(*start), end: f(*end) },
             Geometry::Circle { center, radius } => {
@@ -435,7 +480,7 @@ impl Geometry {
                 position: f(*position),
                 height: height * length_factor,
                 // Mirrored text stays readable (AutoCAD's MIRRTEXT=0).
-                rotation: if flips { *rotation } else { mapped_angle(&f, *position, *rotation) },
+                rotation: if flips { *rotation } else { mapped_angle(f, *position, *rotation) },
                 width: width * length_factor,
                 attach: *attach,
                 content: content.clone(),
@@ -444,7 +489,7 @@ impl Geometry {
                 p1: f(*p1),
                 p2: f(*p2),
                 line: f(*line),
-                rotation: mapped_angle(&f, *p1, *rotation),
+                rotation: mapped_angle(f, *p1, *rotation),
                 aligned: *aligned,
                 text: text.clone(),
                 scale: scale * length_factor,
@@ -466,10 +511,10 @@ impl Geometry {
                     pattern: *pattern,
                     scale: scale * length_factor,
                     // Mirrored patterns keep their direction (AutoCAD's MIRRHATCH=0).
-                    angle: if flips { *angle } else { mapped_angle(&f, origin, *angle) },
+                    angle: if flips { *angle } else { mapped_angle(f, origin, *angle) },
                 }
             }
-            Geometry::Insert { block, placement } => {
+            Geometry::Insert { block, placement, attributes } => {
                 let position = f(placement.position);
                 let axis = f(placement.position.polar(1.0, placement.rotation)) - position;
                 let mut rotation = Point::ORIGIN.angle_to(axis);
@@ -486,6 +531,7 @@ impl Geometry {
                         rotation,
                         mirror: placement.mirror != flips,
                     },
+                    attributes: attributes.iter().map(|a| a.mapped(f, length_factor, flips)).collect(),
                 }
             }
         }
@@ -610,7 +656,7 @@ impl Geometry {
 }
 
 /// Where a transform sends a direction: the angle of `f(at + dir(angle)) - f(at)`.
-fn mapped_angle(f: &impl Fn(Point) -> Point, at: Point, angle: f64) -> f64 {
+fn mapped_angle(f: &dyn Fn(Point) -> Point, at: Point, angle: f64) -> f64 {
     Point::ORIGIN.angle_to(f(at.polar(1.0, angle)) - f(at))
 }
 
@@ -668,7 +714,11 @@ mod tests {
         // (2,0) is 1 unit right of the base: scaled to 2, rotated to point up.
         assert!(p.apply(base, Point::new(2.0, 0.0)).approx_eq(Point::new(10.0, 12.0)));
 
-        let insert = Geometry::Insert { block: "B".into(), placement: Placement::at(Point::new(5.0, 0.0)) };
+        let insert = Geometry::Insert {
+            block: "B".into(),
+            placement: Placement::at(Point::new(5.0, 0.0)),
+            attributes: Vec::new(),
+        };
         let local = Geometry::Line { start: Point::ORIGIN, end: Point::new(3.0, 1.0) };
         // Mirroring the reference must give the same curves as mirroring its contents.
         for axis in [Point::new(0.0, 1.0), Point::new(1.0, 0.0), Point::new(1.0, 2.0)] {

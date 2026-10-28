@@ -25,6 +25,8 @@ pub struct OxidraftApp {
     /// Document revision at the last save/open, for the `*` unsaved marker.
     pub(crate) saved_revision: u64,
     pub(crate) zoom_extents_pending: bool,
+    /// A region to zoom to on the next frame (ZOOM Window).
+    pub(crate) zoom_window: Option<oxidraft_geom::Aabb>,
     pub(crate) title: String,
     /// Snapped/tracked cursor in drawing units, from the last frame.
     pub(crate) cursor: Option<Point>,
@@ -75,6 +77,7 @@ impl OxidraftApp {
             path: None,
             saved_revision: 0,
             zoom_extents_pending: false,
+            zoom_window: None,
             title: String::new(),
             cursor: None,
             canvas_rect: Rect::NOTHING,
@@ -119,6 +122,11 @@ impl OxidraftApp {
     /// Puts text on the command line without pressing Enter.
     pub fn set_command_text(&mut self, text: &str) {
         self.command_text = text.to_string();
+    }
+
+    /// Zooms so the window between two corners fills the view.
+    pub fn zoom_to(&mut self, a: Point, b: Point) {
+        self.zoom_window = Some(oxidraft_geom::Aabb::from_points(a, b));
     }
 
     /// Screen position of a drawing point, as of the last frame.

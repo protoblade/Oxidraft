@@ -59,7 +59,11 @@ impl Command for DefineBlock {
                 for e in &selected {
                     ctx.doc.remove(e.id);
                 }
-                ctx.doc.add(Geometry::Insert { block: name.clone(), placement: Placement::at(*base) });
+                ctx.doc.add(Geometry::Insert {
+                    block: name.clone(),
+                    placement: Placement::at(*base),
+                    attributes: Vec::new(),
+                });
                 // INSERT will offer the new block first.
                 ctx.vars.insert_name = Some(name.clone());
                 let n = selected.len();
@@ -159,7 +163,11 @@ impl Command for InsertBlock {
             },
             (InsertStage::Point, Input::Point(at)) => {
                 let block = self.block.as_ref().ok_or("No block chosen.")?;
-                ctx.doc.add(Geometry::Insert { block: block.name.clone(), placement: self.placement(at) });
+                ctx.doc.add(Geometry::Insert {
+                    block: block.name.clone(),
+                    placement: self.placement(at),
+                    attributes: Vec::new(),
+                });
                 ctx.vars.insert_name = Some(block.name.clone());
                 return Ok(Step::Done);
             }

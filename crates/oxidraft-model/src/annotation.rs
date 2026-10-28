@@ -11,11 +11,69 @@ use crate::hatch::HatchPattern;
 pub enum Attach {
     #[default]
     TopLeft,
-    /// Single-line TEXT: the start of the baseline.
-    BottomLeft,
+    TopCenter,
+    TopRight,
     MiddleLeft,
+    MiddleCenter,
     MiddleRight,
+    /// Also single-line TEXT's default: the start of the baseline.
+    BottomLeft,
     BottomCenter,
+    BottomRight,
+}
+
+impl Attach {
+    /// Where the attachment point sits in the text box, as fractions of its
+    /// width (from the left) and height (from the top).
+    pub fn fractions(self) -> (f64, f64) {
+        let x = match self {
+            Attach::TopLeft | Attach::MiddleLeft | Attach::BottomLeft => 0.0,
+            Attach::TopCenter | Attach::MiddleCenter | Attach::BottomCenter => 0.5,
+            Attach::TopRight | Attach::MiddleRight | Attach::BottomRight => 1.0,
+        };
+        let y = match self {
+            Attach::TopLeft | Attach::TopCenter | Attach::TopRight => 0.0,
+            Attach::MiddleLeft | Attach::MiddleCenter | Attach::MiddleRight => 0.5,
+            Attach::BottomLeft | Attach::BottomCenter | Attach::BottomRight => 1.0,
+        };
+        (x, y)
+    }
+}
+
+/// Replaces AutoCAD's `%%` control codes in TEXT and attribute values:
+/// %%d (degree), %%p (plus/minus), %%c (diameter), %%nnn (character code);
+/// overline and underline toggles (%%o, %%u) are dropped.
+pub fn decode_control_codes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("%%") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        let mut chars = after.chars();
+        match chars.next().map(|c| c.to_ascii_lowercase()) {
+            Some('d') => out.push('°'),
+            Some('p') => out.push('±'),
+            Some('c') => out.push('Ø'),
+            Some('%') => out.push('%'),
+            Some('o' | 'u') => {}
+            Some(c) if c.is_ascii_digit() => {
+                let digits: String = after.chars().take(3).take_while(char::is_ascii_digit).collect();
+                if let Some(ch) = digits.parse::<u32>().ok().and_then(char::from_u32) {
+                    out.push(ch);
+                }
+                rest = &after[digits.len()..];
+                continue;
+            }
+            _ => {
+                out.push_str("%%");
+                rest = after;
+                continue;
+            }
+        }
+        rest = chars.as_str();
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Line-to-line distance as a multiple of the text height (AutoCAD's MTEXT
@@ -59,13 +117,8 @@ pub fn text_box(
     content: &str,
 ) -> [Point; 4] {
     let (w, h) = text_extent(content, height, wrap_width);
-    let (x0, y0) = match attach {
-        Attach::TopLeft => (0.0, -h),
-        Attach::BottomLeft => (0.0, 0.0),
-        Attach::MiddleLeft => (0.0, -h / 2.0),
-        Attach::MiddleRight => (-w, -h / 2.0),
-        Attach::BottomCenter => (-w / 2.0, 0.0),
-    };
+    let (fx, fy) = attach.fractions();
+    let (x0, y0) = (-fx * w, -h * (1.0 - fy));
     [(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h)]
         .map(|(x, y)| (position + Point::new(x, y)).rotated_about(position, rotation))
 }
@@ -241,6 +294,15 @@ mod tests {
 
         assert!((measurement(Point::ORIGIN, Point::new(3.0, 4.0), 0.0, true) - 5.0).abs() < 1e-12);
         assert_eq!(dimension_text(Some("<> TYP"), 5.0), "5.00 TYP");
+    }
+
+    #[test]
+    fn control_codes() {
+        assert_eq!(decode_control_codes("45%%d"), "45°");
+        assert_eq!(decode_control_codes("%%c20 %%p0.5"), "Ø20 ±0.5");
+        assert_eq!(decode_control_codes("%%OTOP%%o 100%%%"), "TOP 100%");
+        assert_eq!(decode_control_codes("%%065B"), "AB");
+        assert_eq!(decode_control_codes("50%"), "50%");
     }
 
     #[test]

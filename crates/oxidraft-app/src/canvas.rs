@@ -7,7 +7,7 @@ use eframe::egui::{
 use oxidraft_commands::Tracked;
 use oxidraft_geom::{Aabb, Point, curve::Seg};
 use oxidraft_model::{
-    Attach, Geometry, HatchPattern,
+    Geometry, HatchPattern,
     annotation::text_box,
     hatch,
     snap::{self, Snap, SnapKind},
@@ -48,9 +48,9 @@ impl OxidraftApp {
         self.canvas_rect = rect;
         let painter = ui.painter_at(rect);
 
-        if self.zoom_extents_pending {
+        if self.zoom_extents_pending || self.zoom_window.is_some() {
             self.zoom_extents_pending = false;
-            match self.doc.extents() {
+            match self.zoom_window.take().or_else(|| self.doc.extents()) {
                 Some(b) => {
                     // Keep the drawing clear of the viewport label and the command line.
                     let fit = Rect::from_min_max(rect.min + vec2(24.0, 36.0), rect.max - vec2(24.0, 120.0));
@@ -367,13 +367,8 @@ impl OxidraftApp {
         let first = galley.rows.first().map_or(0.0, baseline);
         let last = galley.rows.last().map_or(0.0, baseline);
         let (top, width) = (first - size * 0.7, galley.size().x);
-        let offset = match attach {
-            Attach::TopLeft => vec2(0.0, top),
-            Attach::BottomLeft => vec2(0.0, last),
-            Attach::MiddleLeft => vec2(0.0, (top + last) / 2.0),
-            Attach::MiddleRight => vec2(width, (top + last) / 2.0),
-            Attach::BottomCenter => vec2(width / 2.0, last),
-        };
+        let (fx, fy) = attach.fractions();
+        let offset = vec2(fx as f32 * width, top + fy as f32 * (last - top));
         // World angles run counterclockwise; egui's clockwise on a y-down screen.
         let angle = -(*rotation as f32).to_radians();
         let pos = anchor - egui::emath::Rot2::from_angle(angle) * offset;

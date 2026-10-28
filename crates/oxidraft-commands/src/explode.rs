@@ -27,7 +27,8 @@ impl Command for Explode {
                     }
                 }
                 // One level, as in AutoCAD: nested references stay references.
-                Geometry::Insert { block, placement } => {
+                // Attribute values become plain text (like AutoCAD's BURST).
+                Geometry::Insert { block, placement, attributes } => {
                     let Some(def) = ctx.doc.block(block).cloned() else {
                         not_exploded += 1;
                         continue;
@@ -36,6 +37,11 @@ impl Command for Explode {
                     for be in &def.entities {
                         let layer = if be.layer == "0" { &e.layer } else { &be.layer };
                         ctx.doc.add_on_layer(placement.place(def.base, &be.geometry), layer, be.color);
+                    }
+                    for a in attributes.iter().filter(|a| !a.invisible && !a.value.is_empty()) {
+                        // ByBlock only means something inside a reference.
+                        let color = if a.color == oxidraft_model::Color::ByBlock { e.color } else { a.color };
+                        ctx.doc.add_on_layer(a.text(), &a.layer, color);
                     }
                 }
                 _ => not_exploded += 1,
