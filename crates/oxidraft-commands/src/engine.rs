@@ -6,13 +6,13 @@ use crate::{
     annotate::MText, annotate::SingleText, arc::Arc, array::Array, array::ArrayKind, attribute::AttDisp,
     attribute::EattEdit, block::DefineBlock, block::InsertBlock, break_join::Break, break_join::Join, chamfer::Chamfer,
     circle::Circle, clipboard::CopyClip, clipboard::Paste, dims::DimAngular, dims::DimChain, dims::DimRadial,
-    donut::Donut, ellipse::EllipseCmd, erase::Erase, explode::Explode, fillet::Fillet, grip::GripStretch, hatch::Hatch,
-    inquiry::Area, inquiry::Dist, inquiry::Id, inquiry::Ltscale, layer::LayIso, layer::LayMcur, layer::LayerPick,
-    lengthen::Lengthen, line::Line, list::List, matchprop::MatchProp, mirror::Mirror, move_copy::MoveCopy,
-    offset::Offset, parse_input, pedit::Pedit, pline::Pline, plot::PlotWindow, point::Marks, point::PointCmd,
-    point::PointStyle, polygon::Polygon, rectang::Rectang, revcloud::RevCloud, rotate::Rotate, scale::Scale,
-    select::SelectSimilar, spline::SplineCmd, stretch::Stretch, trim_extend::TrimExtend, underlay::AttachImage,
-    underlay::ImageClip, xline::ConstructionLine, xref::AttachXref, zoom::Zoom,
+    donut::Donut, draworder::DrawOrder, draworder::TextToFront, ellipse::EllipseCmd, erase::Erase, explode::Explode,
+    fillet::Fillet, grip::GripStretch, hatch::Hatch, inquiry::Area, inquiry::Dist, inquiry::Id, inquiry::Ltscale,
+    layer::LayIso, layer::LayMcur, layer::LayerPick, lengthen::Lengthen, line::Line, list::List, matchprop::MatchProp,
+    mirror::Mirror, move_copy::MoveCopy, offset::Offset, parse_input, pedit::Pedit, pline::Pline, plot::PlotWindow,
+    point::Marks, point::PointCmd, point::PointStyle, polygon::Polygon, rectang::Rectang, revcloud::RevCloud,
+    rotate::Rotate, scale::Scale, select::SelectSimilar, spline::SplineCmd, stretch::Stretch, trim_extend::TrimExtend,
+    underlay::AttachImage, underlay::ImageClip, xline::ConstructionLine, xref::AttachXref, zoom::Zoom,
 };
 
 /// A command the user can type, with its aliases.
@@ -456,6 +456,19 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Unlock the layer of a selected object",
         make: Some(|| Box::new(LayerPick::unlock())),
     },
+    CommandInfo {
+        name: "DRAWORDER",
+        aliases: &["DR"],
+        description: "Bring objects to the front, send them to the back, or put them above or under others",
+        make: Some(|| Box::new(DrawOrder::new(None))),
+    },
+    CommandInfo {
+        name: "TEXTTOFRONT",
+        aliases: &[],
+        description: "Bring text, dimensions and leaders to the front",
+        make: Some(|| Box::new(TextToFront)),
+    },
+    CommandInfo { name: "HATCHTOBACK", aliases: &[], description: "Send every hatch to the back", make: None },
     CommandInfo { name: "LAYON", aliases: &[], description: "Turn on all layers", make: None },
     CommandInfo { name: "LAYTHW", aliases: &[], description: "Thaw all layers", make: None },
     CommandInfo {
@@ -662,6 +675,19 @@ impl Engine {
             }
             None => self.launch(info, Box::new(cmd), doc, Point::ORIGIN, 0.0),
         }
+    }
+
+    /// DRAWORDER with its option chosen already (the ribbon's and the
+    /// shortcut menu's Bring to Front, Send to Back, Above and Under):
+    /// "Front", "Back", "Above objects" or "Under objects".
+    pub fn draw_order(&mut self, option: &'static str, doc: &mut Document) {
+        if self.active.is_some() {
+            self.cancel(doc);
+        }
+        let info = find("DRAWORDER").expect("DRAWORDER is a command");
+        self.log(format!("Command: {}", info.name));
+        self.started.push(info.name);
+        self.launch(info, Box::new(DrawOrder::new(Some(option))), doc, Point::ORIGIN, 0.0);
     }
 
     /// The Plot dialog's Window< button: asks for the window's corners,
@@ -1140,6 +1166,12 @@ impl Engine {
                 "Press Esc or Enter to exit, or right-click to exit.".into()
             }
             "REDO" => doc.redo().unwrap_or_else(|| "Nothing to redo.".into()),
+            "HATCHTOBACK" => {
+                doc.begin(name);
+                let msg = crate::draworder::hatch_to_back(doc);
+                doc.commit();
+                msg
+            }
             "LAYON" | "LAYTHW" | "LAYUNISO" => {
                 doc.begin(name);
                 let msg = match name {
@@ -2195,6 +2227,44 @@ mod tests {
         click(&mut e, &mut d, 5.0, 0.0);
         type_all(&mut e, &mut d, &[""]);
         assert!(matches!(only(&d), Geometry::Polyline { closed: true, .. }));
+    }
+
+    #[test]
+    fn draworder_moves_objects_and_new_hatches_go_behind() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["l", "0,0", "10,0", "", "l", "0,5", "10,5", "", "l", "0,9", "10,9", ""]);
+        let order = |d: &Document| -> Vec<u64> { d.entities_in_draw_order().iter().map(|x| x.id.0).collect() };
+        // The middle line to the front, then the top one under it.
+        type_all(&mut e, &mut d, &["dr"]);
+        click(&mut e, &mut d, 5.0, 5.0);
+        type_all(&mut e, &mut d, &["", "f"]);
+        assert_eq!(order(&d), vec![1, 3, 2]);
+        type_all(&mut e, &mut d, &["dr"]);
+        click(&mut e, &mut d, 5.0, 9.0);
+        type_all(&mut e, &mut d, &["", "u"]);
+        click(&mut e, &mut d, 5.0, 0.0);
+        type_all(&mut e, &mut d, &[""]);
+        assert_eq!(order(&d), vec![3, 1, 2]);
+        // Preselected objects and a preset option, as the ribbon does it.
+        click(&mut e, &mut d, 5.0, 9.0);
+        e.draw_order("Front", &mut d);
+        assert_eq!(order(&d), vec![1, 2, 3]);
+        // A hatch goes behind the lines around it; HATCHTOBACK and
+        // TEXTTOFRONT reorder whole kinds of objects.
+        type_all(&mut e, &mut d, &["rec", "20,0", "30,10", "h"]);
+        click(&mut e, &mut d, 25.0, 5.0);
+        type_all(&mut e, &mut d, &[""]);
+        let hatch = d.entities().find(|x| matches!(x.geometry, Geometry::Hatch { .. })).unwrap().id;
+        assert_eq!(order(&d)[0], hatch.0);
+        type_all(&mut e, &mut d, &["mtext", "40,0", "50,5", "Note", ""]);
+        type_all(&mut e, &mut d, &["dr"]);
+        click(&mut e, &mut d, 25.0, 0.0);
+        type_all(&mut e, &mut d, &["", "f", "texttofront", ""]);
+        let text = d.entities().find(|x| matches!(x.geometry, Geometry::Text { .. })).map(|x| x.id.0);
+        assert_eq!(order(&d).last().copied(), text);
+        type_all(&mut e, &mut d, &["hatchtoback"]);
+        assert_eq!(order(&d)[0], hatch.0);
+        assert!(e.history().iter().any(|l| l == "1 hatch object(s) sent to back."));
     }
 
     #[test]

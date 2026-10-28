@@ -417,16 +417,7 @@ impl OxidraftApp {
         // Dash patterns in screen pixels by linetype name, looked up once a frame.
         let mut patterns: HashMap<String, Option<Vec<f64>>> = HashMap::new();
         let px_per_unit = self.doc.ltscale() * self.view.scale;
-        // Images go behind everything, then hatches (AutoCAD's HPDRAWORDER
-        // "behind boundary").
-        let rank = |g: &Geometry| match g {
-            Geometry::Image { .. } => 0,
-            Geometry::Hatch { .. } => 1,
-            _ => 2,
-        };
-        let mut entities: Vec<_> = self.doc.entities().collect();
-        entities.sort_by_key(|e| rank(&e.geometry));
-        for e in entities {
+        for e in self.doc.entities_in_draw_order() {
             if !self.doc.is_shown(&e.layer) || !on_screen(&self.doc.entity_bounds(e), &view) {
                 continue;
             }

@@ -18,6 +18,7 @@ mod clipboard;
 mod common;
 mod dims;
 mod donut;
+mod draworder;
 mod edit;
 mod ellipse;
 mod engine;

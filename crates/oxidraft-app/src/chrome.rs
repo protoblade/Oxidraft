@@ -290,6 +290,27 @@ impl OxidraftApp {
                     }
                 });
             }
+            // Draw order, as the panel's split button offers it.
+            ui.vertical(|ui| {
+                for (icon, label, option, tip) in [
+                    (
+                        Icon::BringToFront,
+                        "Bring to Front",
+                        "Front",
+                        "Draws the selected objects over everything (DRAWORDER)",
+                    ),
+                    (
+                        Icon::SendToBack,
+                        "Send to Back",
+                        "Back",
+                        "Draws the selected objects under everything (DRAWORDER)",
+                    ),
+                ] {
+                    if self.small_tool_clicked(ui, &tool(icon, "", None, tip), label) {
+                        self.engine.draw_order(option, &mut self.doc);
+                    }
+                }
+            });
         });
         ribbon_panel(ui, "Annotation", |ui| {
             for t in ANNOTATION_LARGE {
@@ -395,6 +416,17 @@ impl OxidraftApp {
             ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, t.label, font, color);
         }
         self.tool_response(&response, t);
+    }
+
+    /// A small icon button that does something other than run a command;
+    /// `label` names it for screen readers.
+    fn small_tool_clicked(&mut self, ui: &mut Ui, t: &Tool, label: &str) -> bool {
+        let (rect, response) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+        paint_hover(ui, rect, &response, true);
+        let icon = Rect::from_center_size(rect.center(), vec2(16.0, 16.0));
+        icons::paint(ui.painter(), icon, t.icon, theme::TEXT, true);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+        response.on_hover_text(t.tip).clicked()
     }
 
     fn tool_response(&mut self, response: &Response, t: &Tool) {

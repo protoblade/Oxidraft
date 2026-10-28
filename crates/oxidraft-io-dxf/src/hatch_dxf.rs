@@ -9,6 +9,10 @@ use crate::{color_from_raw, eol, linetype_from_dxf, lineweight_from_dxf};
 
 /// A HATCH read from the file, with where it belongs.
 pub(crate) struct RawHatch {
+    /// Its handle, which orders it among the other objects, and how many
+    /// objects come before it in its section.
+    pub handle: u64,
+    pub position: usize,
     /// The block it's in, or `None` for the drawing itself.
     pub block: Option<String>,
     pub paper_space: bool,
@@ -194,6 +198,7 @@ pub(crate) fn read_hatches(dxf: &[u8]) -> Vec<RawHatch> {
         lines.chunks(2).filter_map(|p| Some((p[0].trim().parse().ok()?, p.get(1)?.trim()))).collect();
     let mut out = Vec::new();
     let (mut section, mut block): (&str, Option<String>) = ("", None);
+    let mut position = 0;
     let mut i = 0;
     while i < pairs.len() {
         let (code, value) = pairs[i];
@@ -204,11 +209,16 @@ pub(crate) fn read_hatches(dxf: &[u8]) -> Vec<RawHatch> {
         let end = pairs[i..].iter().position(|p| p.0 == 0).map_or(pairs.len(), |n| i + n);
         let body = &pairs[i..end];
         match value {
-            "SECTION" => section = body.iter().find(|p| p.0 == 2).map_or("", |p| p.1),
+            "SECTION" => {
+                section = body.iter().find(|p| p.0 == 2).map_or("", |p| p.1);
+                position = 0;
+            }
             "BLOCK" => block = body.iter().find(|p| p.0 == 2).map(|p| p.1.to_string()),
             "ENDBLK" => block = None,
             "HATCH" if section == "ENTITIES" || section == "BLOCKS" => {
                 let mut h = RawHatch {
+                    handle: 0,
+                    position,
                     block: if section == "BLOCKS" { block.clone() } else { None },
                     paper_space: false,
                     layer: "0".into(),
@@ -226,6 +236,7 @@ pub(crate) fn read_hatches(dxf: &[u8]) -> Vec<RawHatch> {
                 // Common entity data and the pattern name come before the boundary.
                 for &(c, v) in body.iter().take_while(|p| p.0 != 91) {
                     match c {
+                        5 => h.handle = u64::from_str_radix(v, 16).unwrap_or(0),
                         8 => h.layer = v.to_string(),
                         6 => h.linetype = linetype_from_dxf(v),
                         62 => h.color = color_from_raw(v.parse().unwrap_or(256)),
@@ -241,7 +252,12 @@ pub(crate) fn read_hatches(dxf: &[u8]) -> Vec<RawHatch> {
                     out.push(h);
                 }
             }
+            "ENDSEC" | "SEQEND" | "VERTEX" | "ATTRIB" => {}
+            _ if section == "ENTITIES" => position += 1,
             _ => {}
+        }
+        if value == "HATCH" && section == "ENTITIES" {
+            position += 1;
         }
         i = end;
     }

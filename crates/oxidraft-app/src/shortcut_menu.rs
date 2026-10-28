@@ -118,6 +118,18 @@ impl OxidraftApp {
                 self.run(command);
             }
         }
+        ui.menu_button("Draw Order", |ui| {
+            for (label, option) in [
+                ("Bring to Front", "Front"),
+                ("Send to Back", "Back"),
+                ("Bring Above Objects", "Above objects"),
+                ("Send Under Objects", "Under objects"),
+            ] {
+                if item(ui, label, "") {
+                    self.engine.draw_order(option, &mut self.doc);
+                }
+            }
+        });
         ui.separator();
         if item(ui, "Select Similar", "") {
             self.run("SELECTSIMILAR");

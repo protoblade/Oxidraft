@@ -53,6 +53,8 @@ pub enum Icon {
     PlotPreview,
     Attach,
     ExternalReferences,
+    BringToFront,
+    SendToBack,
     Image,
     Pdf,
     ImageClip,
@@ -368,6 +370,15 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
             pen.line(&[(0.3, 0.6), (0.5, 0.6)], c);
             pen.line(&[(0.76, 0.5), (0.76, 0.12), (0.88, 0.12), (0.88, 0.62)], blue);
             pen.line(&[(0.82, 0.18), (0.82, 0.5)], blue);
+        }
+        Icon::BringToFront => {
+            pen.closed(&[(0.1, 0.4), (0.6, 0.4), (0.6, 0.9), (0.1, 0.9)], c);
+            pen.filled(&[(0.4, 0.1), (0.9, 0.1), (0.9, 0.6), (0.4, 0.6)], blue);
+        }
+        Icon::SendToBack => {
+            pen.filled(&[(0.4, 0.1), (0.9, 0.1), (0.9, 0.6), (0.4, 0.6)], blue);
+            pen.filled(&[(0.1, 0.4), (0.6, 0.4), (0.6, 0.9), (0.1, 0.9)], Color32::from_gray(60));
+            pen.closed(&[(0.1, 0.4), (0.6, 0.4), (0.6, 0.9), (0.1, 0.9)], c);
         }
         Icon::Image => {
             // A picture: hills under a sun.

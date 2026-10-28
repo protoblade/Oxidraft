@@ -1,5 +1,6 @@
 //! Reading and writing DXF, Oxidraft's native exchange format.
 
+use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::path::Path;
 
@@ -11,8 +12,8 @@ use dxf::tables::Layer as DxfLayer;
 use dxf::{Color as DxfColor, Drawing, Point as DxfPoint};
 use oxidraft_geom::Point;
 use oxidraft_model::{
-    Attach, Attribute, AttributeDisplay, Block, BlockEntity, Color, Document, Ellipse, Geometry, HatchPattern, Layer,
-    Linetype, Lineweight, Placement, Spline, Vertex, Xref, XrefStatus,
+    Attach, Attribute, AttributeDisplay, Block, BlockEntity, Color, Document, Ellipse, EntityId, Geometry,
+    HatchPattern, Layer, Linetype, Lineweight, Placement, Spline, Vertex, Xref, XrefStatus,
     annotation::{angle_around, decode_control_codes, two_line_angle},
     constant_width, hatch, is_dependent, linetype,
 };
@@ -583,8 +584,10 @@ fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
             .collect();
         blocks.push(dxf::Block { name: b.name.clone(), base_point: to_dxf(b.base), entities, ..Default::default() });
     }
+    // Objects are written in draw order, which is the order AutoCAD draws
+    // them in when there's no SORTENTSTABLE.
     let mut entities: Vec<DxfEntity> = Vec::new();
-    for e in doc.entities() {
+    for e in doc.entities_in_draw_order() {
         for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
             if let (EntityType::Insert(ins), Geometry::Insert { attributes, .. }) = (&mut de.specific, &e.geometry) {
                 for a in attributes {
@@ -935,10 +938,21 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         _ => 0,
     };
     let pictures = underlay_dxf::Definitions::read(drawing);
+    // Draw order: by SORTENTSTABLE where it says, else by handle (else, in
+    // files without handles, by place in the file).
+    let mut sort_handles: HashMap<u64, u64> = HashMap::new();
+    for o in drawing.objects() {
+        if let dxf::objects::ObjectType::SortentsTable(t) = &o.specific {
+            for (e, s) in t.__entities_handle.iter().zip(&t.__sort_items_handle) {
+                sort_handles.insert(e.0, s.0);
+            }
+        }
+    }
+    let mut placed: Vec<(u64, f64, EntityId)> = Vec::new();
     let total: usize = drawing.entities().map(attribute_count).sum();
     let styles = raw.attributes.filter(|s| s.len() == total);
     let mut next = 0;
-    for e in drawing.entities() {
+    for (position, e) in drawing.entities().enumerate() {
         let n = attribute_count(e);
         let style = styles.as_ref().map(|s| &s[next..next + n]);
         next += n;
@@ -954,21 +968,33 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
             Some(mut g) => {
                 style_attributes(&mut g, style, &e.common.layer);
                 let (color, linetype) = (from_dxf_color(&e.common.color), linetype_from_dxf(&e.common.line_type_name));
-                doc.add_styled(
+                let id = doc.add_styled(
                     g,
                     &e.common.layer,
                     color,
                     &linetype,
                     lineweight_from_dxf(e.common.lineweight_enum_value),
                 );
+                placed.push((e.common.handle.0, position as f64, id));
             }
             None => skipped += 1,
         }
     }
-    // Hatches come last; they're drawn behind everything anyway.
+    // Hatches are read last, then put in their place in the draw order.
     for h in raw.hatches.into_iter().filter(|h| h.block.is_none() && !h.paper_space) {
-        doc.add_styled(h.geometry, &h.layer, h.color, &h.linetype, h.lineweight);
+        let id = doc.add_styled(h.geometry, &h.layer, h.color, &h.linetype, h.lineweight);
+        placed.push((h.handle, h.position as f64 - 0.5, id));
     }
+    let by_handle = placed.iter().all(|p| p.0 != 0);
+    let mut order: Vec<(f64, EntityId)> = placed
+        .iter()
+        .map(|&(handle, position, id)| {
+            let key = if by_handle { sort_handles.get(&handle).copied().unwrap_or(handle) as f64 } else { position };
+            (key, id)
+        })
+        .collect();
+    order.sort_by(|a, b| a.0.total_cmp(&b.0));
+    doc.set_draw_order(&order.into_iter().map(|(_, id)| id).collect::<Vec<_>>());
     // A freshly opened file starts with an empty undo history.
     doc.forget_history();
     Imported { document: doc, skipped }
@@ -1260,6 +1286,63 @@ mod tests {
         back.size_pdf("plan - 2", 842.0, 595.0);
         let Geometry::Image { u, v, .. } = &back.entities().nth(1).unwrap().geometry else { panic!() };
         assert!(u.distance(Point::new(0.0, 297.0)) < 1e-6 && v.distance(Point::new(-210.0, 0.0)) < 1e-6, "{u:?} {v:?}");
+    }
+
+    fn drawn(doc: &Document) -> Vec<Geometry> {
+        doc.entities_in_draw_order().iter().map(|e| e.geometry.clone()).collect()
+    }
+
+    #[test]
+    fn draw_order_round_trips_and_follows_sortentstable() {
+        let mut doc = Document::new();
+        let line = |x: f64| Geometry::Line { start: Point::new(x, 0.0), end: Point::new(x, 1.0) };
+        let a = doc.add(line(0.0));
+        doc.add(line(1.0));
+        let square = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(x, y)| Vertex::at(Point::new(x, y)));
+        let hatch = doc.add(Geometry::Hatch {
+            loops: vec![square.to_vec()],
+            pattern: HatchPattern::Solid,
+            scale: 1.0,
+            angle: 0.0,
+        });
+        doc.bring_to_front(&[a]);
+        doc.send_to_back(&[hatch]);
+        let before = drawn(&doc);
+        let mut buf = Vec::new();
+        write(&doc, &mut buf).unwrap();
+        assert_eq!(drawn(&read(&mut buf.as_slice()).unwrap().document), before);
+
+        // AutoCAD's SORTENTSTABLE: the first line sorts after the second.
+        let mut drawing = Drawing::new();
+        let h1 = drawing
+            .add_entity(DxfEntity::new(EntityType::Line(dxf::entities::Line::new(
+                to_dxf(Point::ORIGIN),
+                to_dxf(Point::new(0.0, 1.0)),
+            ))))
+            .common
+            .handle;
+        let h2 = drawing
+            .add_entity(DxfEntity::new(EntityType::Line(dxf::entities::Line::new(
+                to_dxf(Point::new(1.0, 0.0)),
+                to_dxf(Point::new(1.0, 1.0)),
+            ))))
+            .common
+            .handle;
+        let table = dxf::objects::SortentsTable {
+            __entities_handle: vec![h1],
+            __sort_items_handle: vec![dxf::Handle(h2.0 + 100)],
+        };
+        drawing.add_object(dxf::objects::Object::new(dxf::objects::ObjectType::SortentsTable(table)));
+        let back = from_drawing(&drawing).document;
+        let xs: Vec<f64> = back
+            .entities_in_draw_order()
+            .iter()
+            .map(|e| match e.geometry {
+                Geometry::Line { start, .. } => start.x,
+                _ => f64::NAN,
+            })
+            .collect();
+        assert_eq!(xs, vec![1.0, 0.0]);
     }
 
     #[test]

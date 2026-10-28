@@ -173,6 +173,12 @@ enum Change {
         before: Option<ImageDef>,
         after: Option<ImageDef>,
     },
+    /// An object's place in the draw order (`None`: where it was made).
+    Order {
+        id: EntityId,
+        before: Option<f64>,
+        after: Option<f64>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -212,6 +218,11 @@ pub struct Document {
     xrefs: BTreeMap<String, Xref>,
     /// Attached images and PDF pages, by upper-case name.
     images: BTreeMap<String, ImageDef>,
+    /// Draw order: objects draw from the lowest key to the highest. Each
+    /// object's key is its id unless DRAWORDER has moved it.
+    order: BTreeMap<EntityId, f64>,
+    /// The highest key given out, so new objects still go on top.
+    top: f64,
 }
 
 impl Default for Document {
@@ -239,6 +250,8 @@ impl Document {
             insbase: Point::ORIGIN,
             xrefs: BTreeMap::new(),
             images: BTreeMap::new(),
+            order: BTreeMap::new(),
+            top: 0.0,
         }
     }
 
@@ -756,9 +769,138 @@ impl Document {
         let id = EntityId(self.next_id);
         self.next_id += 1;
         let entity = Entity { id, layer, color, linetype: linetype.to_string(), lineweight, geometry };
+        // Something was brought to the front: new objects go above it, in
+        // the same undo step.
+        let over_top = self.top >= id.0 as f64;
+        let own = over_top && self.open.is_none();
+        if own {
+            self.begin("Add");
+        }
         self.entities.insert(id, entity.clone());
         self.record(Change::Entity { id, before: None, after: Some(entity) });
+        if over_top {
+            self.set_draw_key(id, self.top + 1.0);
+        }
+        if own {
+            self.commit();
+        }
         id
+    }
+
+    // ---- draw order ------------------------------------------------------
+
+    /// Where an object is in the draw order: higher draws over lower.
+    pub fn draw_key(&self, id: EntityId) -> f64 {
+        self.order.get(&id).copied().unwrap_or(id.0 as f64)
+    }
+
+    /// The objects from the back to the front.
+    pub fn entities_in_draw_order(&self) -> Vec<&Entity> {
+        let mut all: Vec<&Entity> = self.entities.values().collect();
+        if !self.order.is_empty() {
+            all.sort_by(|a, b| self.draw_key(a.id).total_cmp(&self.draw_key(b.id)));
+        }
+        all
+    }
+
+    fn set_draw_key(&mut self, id: EntityId, key: f64) {
+        let before = self.order.insert(id, key);
+        self.top = self.top.max(key);
+        self.record(Change::Order { id, before, after: Some(key) });
+    }
+
+    /// `ids` from the back to the front, as they draw now.
+    fn in_draw_order(&self, ids: &[EntityId]) -> Vec<EntityId> {
+        let mut ids: Vec<EntityId> = ids.iter().copied().filter(|id| self.entities.contains_key(id)).collect();
+        ids.sort_by(|a, b| self.draw_key(*a).total_cmp(&self.draw_key(*b)));
+        ids.dedup();
+        ids
+    }
+
+    /// Gives `ids` keys spread evenly between `low` and `high`, keeping
+    /// their order among themselves.
+    fn spread(&mut self, ids: &[EntityId], low: f64, high: f64) {
+        let ids = self.in_draw_order(ids);
+        let step = (high - low) / (ids.len() + 1) as f64;
+        for (i, id) in ids.into_iter().enumerate() {
+            self.set_draw_key(id, low + step * (i + 1) as f64);
+        }
+    }
+
+    /// The lowest and highest keys among objects other than `except`.
+    fn key_range(&self, except: &[EntityId]) -> Option<(f64, f64)> {
+        let keys = self.entities.keys().filter(|id| !except.contains(id)).map(|id| self.draw_key(*id));
+        keys.fold(None, |r, k| Some(r.map_or((k, k), |(lo, hi): (f64, f64)| (lo.min(k), hi.max(k)))))
+    }
+
+    /// DRAWORDER Front: `ids` over everything else.
+    pub fn bring_to_front(&mut self, ids: &[EntityId]) {
+        let top = self.key_range(ids).map_or(0.0, |r| r.1).max(self.top);
+        self.spread(ids, top, top + ids.len() as f64 + 1.0);
+    }
+
+    /// DRAWORDER Back: `ids` under everything else.
+    pub fn send_to_back(&mut self, ids: &[EntityId]) {
+        let bottom = self.key_range(ids).map_or(0.0, |r| r.0);
+        self.spread(ids, bottom - ids.len() as f64 - 1.0, bottom);
+    }
+
+    /// DRAWORDER Above objects: `ids` just over the topmost of `reference`.
+    pub fn place_above(&mut self, ids: &[EntityId], reference: &[EntityId]) {
+        let Some(low) = reference.iter().map(|id| self.draw_key(*id)).reduce(f64::max) else { return };
+        let high = self
+            .entities
+            .keys()
+            .filter(|id| !ids.contains(id))
+            .map(|id| self.draw_key(*id))
+            .filter(|k| *k > low)
+            .reduce(f64::min)
+            .unwrap_or(low + ids.len() as f64 + 1.0);
+        self.spread(ids, low, high);
+    }
+
+    /// DRAWORDER Under objects: `ids` just under the lowest of `reference`.
+    pub fn place_under(&mut self, ids: &[EntityId], reference: &[EntityId]) {
+        let Some(high) = reference.iter().map(|id| self.draw_key(*id)).reduce(f64::min) else { return };
+        let low = self
+            .entities
+            .keys()
+            .filter(|id| !ids.contains(id))
+            .map(|id| self.draw_key(*id))
+            .filter(|k| *k < high)
+            .reduce(f64::max)
+            .unwrap_or(high - ids.len() as f64 - 1.0);
+        self.spread(ids, low, high);
+    }
+
+    /// New hatches go behind the drawing they fill, though not behind
+    /// images (AutoCAD's HPDRAWORDER "Behind boundary", near enough).
+    pub fn send_behind_drawing(&mut self, ids: &[EntityId]) {
+        let others = || self.entities.values().filter(|e| !ids.contains(&e.id));
+        let images_top = others()
+            .filter(|e| matches!(e.geometry, Geometry::Image { .. }))
+            .map(|e| self.draw_key(e.id))
+            .reduce(f64::max);
+        let bottom = others()
+            .filter(|e| !matches!(e.geometry, Geometry::Image { .. }))
+            .map(|e| self.draw_key(e.id))
+            .reduce(f64::min);
+        match (images_top, bottom) {
+            (_, None) => {}
+            (Some(low), Some(high)) if low < high => self.spread(ids, low, high),
+            (_, Some(high)) => self.spread(ids, high - ids.len() as f64 - 1.0, high),
+        }
+    }
+
+    /// Puts the objects in this draw order, back to front (a file's).
+    pub fn set_draw_order(&mut self, back_to_front: &[EntityId]) {
+        let in_id_order = back_to_front.windows(2).all(|w| w[0] < w[1]);
+        if in_id_order && self.order.is_empty() {
+            return;
+        }
+        for (i, id) in back_to_front.iter().enumerate() {
+            self.set_draw_key(*id, i as f64 + 1.0);
+        }
     }
 
     /// Adds an entity with the layer, color, linetype and lineweight of
@@ -829,6 +971,14 @@ impl Document {
             return false;
         };
         self.apply(&change, false);
+        // An object's place in the draw order goes with the object.
+        if let Change::Order { id, .. } = change
+            && let Some(t) = self.open.as_mut()
+            && matches!(t.changes.last(), Some(Change::Entity { id: added, before: None, .. }) if *added == id)
+            && let Some(add) = t.changes.pop()
+        {
+            self.apply(&add, false);
+        }
         true
     }
 
@@ -891,6 +1041,7 @@ impl Document {
                     Change::Block { .. } => "Block",
                     Change::Xref { .. } => "Xref",
                     Change::Image { .. } => "Image",
+                    Change::Order { .. } => "Draw order",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -933,6 +1084,12 @@ impl Document {
                     None => self.images.remove(key),
                 };
             }
+            Change::Order { id, before, after } => {
+                match if forward { after } else { before } {
+                    Some(k) => self.order.insert(*id, *k),
+                    None => self.order.remove(id),
+                };
+            }
         }
     }
 }
@@ -944,6 +1101,43 @@ mod tests {
 
     fn line(x: f64) -> Geometry {
         Geometry::Line { start: Point::new(x, 0.0), end: Point::new(x, 1.0) }
+    }
+
+    fn draw_order(d: &Document) -> Vec<u64> {
+        d.entities_in_draw_order().iter().map(|e| e.id.0).collect()
+    }
+
+    #[test]
+    fn draw_order_moves_objects_and_undoes() {
+        let mut d = Document::new();
+        let ids: Vec<EntityId> = (0..4).map(|i| d.add(line(f64::from(i)))).collect();
+        assert_eq!(draw_order(&d), vec![1, 2, 3, 4]);
+        d.send_to_back(&[ids[2]]);
+        assert_eq!(draw_order(&d), vec![3, 1, 2, 4]);
+        d.bring_to_front(&[ids[0], ids[1]]);
+        assert_eq!(draw_order(&d), vec![3, 4, 1, 2], "moved together, keeping their order");
+        d.place_under(&[ids[3]], &[ids[2]]);
+        assert_eq!(draw_order(&d), vec![4, 3, 1, 2]);
+        d.place_above(&[ids[3]], &[ids[0]]);
+        assert_eq!(draw_order(&d), vec![3, 1, 4, 2]);
+        // Something new goes on top, even of what was brought to the front.
+        let new = d.add(line(9.0));
+        assert_eq!(*draw_order(&d).last().unwrap(), new.0);
+        d.undo();
+        d.undo();
+        assert_eq!(draw_order(&d), vec![4, 3, 1, 2]);
+        // A new hatch goes behind lines, but over images.
+        let image = d.add(Geometry::Image {
+            image: "ortho".into(),
+            origin: Point::ORIGIN,
+            u: Point::new(1.0, 0.0),
+            v: Point::new(0.0, 1.0),
+            clip: Vec::new(),
+        });
+        d.send_to_back(&[image]);
+        let hatch = d.add(line(5.0));
+        d.send_behind_drawing(&[hatch]);
+        assert_eq!(draw_order(&d)[..2], [image.0, hatch.0]);
     }
 
     #[test]

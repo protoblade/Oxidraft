@@ -256,6 +256,29 @@ mod tests {
     }
 
     #[test]
+    fn draw_order_survives() {
+        let mut doc = Document::new();
+        let line = |x: f64| Geometry::Line { start: Point::new(x, 0.0), end: Point::new(x, 1.0) };
+        let first = doc.add(line(0.0));
+        doc.add(line(1.0));
+        doc.add(line(2.0));
+        doc.bring_to_front(&[first]);
+        let xs = |d: &Document| -> Vec<f64> {
+            d.entities_in_draw_order()
+                .iter()
+                .map(|e| match e.geometry {
+                    Geometry::Line { start, .. } => start.x,
+                    _ => f64::NAN,
+                })
+                .collect()
+        };
+        for version in [Version::R2000, Version::R2018] {
+            let back = read(&write(&doc, version).unwrap()).unwrap().imported.document;
+            assert_eq!(xs(&back), vec![1.0, 2.0, 0.0], "{version:?}");
+        }
+    }
+
+    #[test]
     fn rejects_what_isnt_dwg() {
         assert!(read(b"0\nSECTION\n").is_err());
         assert!(is_dwg("plan.DWG") && !is_dwg("plan.dxf"));

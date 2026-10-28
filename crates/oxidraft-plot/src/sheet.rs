@@ -290,14 +290,13 @@ impl Plotter<'_> {
 }
 
 /// The sheet `settings` plot `doc` on, or `None` when there's nothing to
-/// plot; images draw as nothing. Hatches go first, behind everything
-/// else, as on screen.
+/// plot; images draw as nothing. Objects plot in draw order, as on screen.
 pub fn render(doc: &Document, settings: &PlotSettings) -> Option<Sheet> {
     render_with_pictures(doc, settings, &|_| None)
 }
 
 /// Like [`render`], with images showing the pictures `lookup` has for
-/// them (loaded ones); images go behind even hatches.
+/// them (loaded ones).
 pub fn render_with_pictures(
     doc: &Document,
     settings: &PlotSettings,
@@ -305,14 +304,7 @@ pub fn render_with_pictures(
 ) -> Option<Sheet> {
     let layout = settings.layout(doc)?;
     let mut plotter = Plotter { doc, settings, layout, items: Vec::new(), lookup, pictures: HashMap::new() };
-    let rank = |g: &Geometry| match g {
-        Geometry::Image { .. } => 0,
-        Geometry::Hatch { .. } => 1,
-        _ => 2,
-    };
-    let mut entities: Vec<_> = doc.entities().collect();
-    entities.sort_by_key(|e| rank(&e.geometry));
-    for e in entities {
+    for e in doc.entities_in_draw_order() {
         if !doc.is_shown(&e.layer) || (!e.geometry.is_infinite() && !overlaps(&doc.entity_bounds(e), &layout.window)) {
             continue;
         }

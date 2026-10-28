@@ -337,10 +337,11 @@ fn pick_on(doc: &Document, p: Point, tolerance: f64, layer_ok: impl Fn(&str) -> 
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, id)| id)
         .or_else(|| {
-            // Clicking inside a hatched area picks it; the last-drawn hatch is on top.
-            editable()
-                .filter(|e| matches!(e.geometry, Geometry::Hatch { .. }) && e.geometry.contains(p))
-                .last()
+            // Clicking inside a hatched area picks it; the one drawn on top.
+            doc.entities_in_draw_order()
+                .into_iter()
+                .filter(|e| layer_ok(&e.layer))
+                .rfind(|e| matches!(e.geometry, Geometry::Hatch { .. }) && e.geometry.contains(p))
                 .map(|e| e.id)
         })
 }

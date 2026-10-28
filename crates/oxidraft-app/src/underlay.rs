@@ -359,7 +359,8 @@ impl OxidraftApp {
             let image = Geometry::Image { image: name.clone(), origin: g.origin, u: g.u, v: g.v, clip: Vec::new() };
             let bounds = image.bounds();
             extent = Some(extent.map_or(bounds, |b| b.union(bounds)));
-            self.doc.add_on_layer(image, &sanitize_name(&name), Color::ByLayer);
+            let id = self.doc.add_on_layer(image, &sanitize_name(&name), Color::ByLayer);
+            self.doc.send_to_back(&[id]);
             placed += 1;
         }
         self.doc.commit();
