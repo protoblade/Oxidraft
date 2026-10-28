@@ -6,9 +6,10 @@ use crate::{
     annotate::MText, annotate::SingleText, arc::Arc, array::Array, array::ArrayKind, block::DefineBlock,
     block::InsertBlock, break_join::Break, break_join::Join, chamfer::Chamfer, circle::Circle, dims::DimAngular,
     dims::DimChain, dims::DimRadial, erase::Erase, explode::Explode, fillet::Fillet, grip::GripStretch, hatch::Hatch,
-    inquiry::Area, inquiry::Dist, inquiry::Id, inquiry::Ltscale, lengthen::Lengthen, line::Line, matchprop::MatchProp,
-    mirror::Mirror, move_copy::MoveCopy, offset::Offset, parse_input, pline::Pline, rectang::Rectang, rotate::Rotate,
-    scale::Scale, select::SelectSimilar, stretch::Stretch, trim_extend::TrimExtend, zoom::Zoom,
+    inquiry::Area, inquiry::Dist, inquiry::Id, inquiry::Ltscale, layer::LayMcur, lengthen::Lengthen, line::Line,
+    matchprop::MatchProp, mirror::Mirror, move_copy::MoveCopy, offset::Offset, parse_input, pline::Pline,
+    rectang::Rectang, rotate::Rotate, scale::Scale, select::SelectSimilar, stretch::Stretch, trim_extend::TrimExtend,
+    zoom::Zoom,
 };
 
 /// A command the user can type, with its aliases.
@@ -293,6 +294,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         description: "Select objects by type and property (Quick Select)",
         make: None,
+    },
+    CommandInfo {
+        name: "LAYMCUR",
+        aliases: &[],
+        description: "Make the layer of a selected object current",
+        make: Some(|| Box::new(LayMcur)),
     },
     // Handled by the app, which owns the windows and palettes.
     CommandInfo { name: "LAYER", aliases: &["LA"], description: "Open the Layer Properties Manager", make: None },
@@ -681,6 +688,7 @@ impl Engine {
                 self.selection_windows.push(Aabb::from_points(first, p));
             }
             self.add_to_selection(ids, shift);
+            self.end_single_selection(doc, p, tolerance);
             return;
         }
         if self.active.is_none() && !shift && self.start_grip_edit(p, doc, tolerance) {
@@ -689,6 +697,16 @@ impl Engine {
         match snap::pick(doc, p, tolerance) {
             Some(id) => self.add_to_selection(vec![id], shift),
             None => self.window_start = Some(p),
+        }
+        self.end_single_selection(doc, p, tolerance);
+    }
+
+    /// At a one-object prompt, the first object found ends the selection.
+    fn end_single_selection(&mut self, doc: &mut Document, cursor: Point, tolerance: f64) {
+        let single = self.active.as_ref().is_some_and(|a| a.cmd.single_selection());
+        if single && !self.selection.is_empty() {
+            let selection = self.take_selection();
+            self.feed(Input::Selection(selection), doc, cursor, tolerance);
         }
     }
 
@@ -939,6 +957,31 @@ mod tests {
         click(&mut e, &mut d, 5.0, 0.0);
         type_all(&mut e, &mut d, &[""]);
         assert_eq!(e.selection(), &[red]);
+    }
+
+    #[test]
+    fn laymcur_makes_the_picked_objects_layer_current() {
+        let (mut e, mut d) = (engine(), Document::new());
+        d.add_layer(oxidraft_model::Layer::new("WALLS", 1));
+        d.add_layer(oxidraft_model::Layer::new("DOORS", 2));
+        let line = |y: f64| Geometry::Line { start: Point::new(0.0, y), end: Point::new(10.0, y) };
+        d.add_on_layer(line(0.0), "WALLS", oxidraft_model::Color::ByLayer);
+        d.add_on_layer(line(5.0), "DOORS", oxidraft_model::Color::ByLayer);
+
+        // Selected first: used right away.
+        click(&mut e, &mut d, 5.0, 0.0);
+        type_all(&mut e, &mut d, &["laymcur"]);
+        assert!(!e.is_active());
+        assert_eq!(d.current_layer(), "WALLS");
+        assert!(e.history().iter().any(|l| l == "WALLS is now the current layer."));
+
+        // Picked at the prompt: one click is enough.
+        type_all(&mut e, &mut d, &["laymcur"]);
+        click(&mut e, &mut d, 5.0, 5.0);
+        assert!(!e.is_active());
+        assert_eq!(d.current_layer(), "DOORS");
+        d.undo();
+        assert_eq!(d.current_layer(), "WALLS");
     }
 
     #[test]

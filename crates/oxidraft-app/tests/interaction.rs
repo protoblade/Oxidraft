@@ -1,7 +1,10 @@
 //! Drives the real app through egui pointer events, the way a user would.
 
 use eframe::egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use oxidraft_app::OxidraftApp;
 use oxidraft_geom::Point;
 use oxidraft_model::{Document, Geometry};
@@ -239,6 +242,44 @@ fn quick_select_dialog_selects_by_layer() {
     choose(&mut h, "OK");
     assert_eq!(h.state_mut().engine_mut().selection().len(), 2);
     assert!(h.state_mut().engine_mut().history().iter().any(|l| l == "2 items selected."));
+}
+
+fn layer_control(h: &Harness<'_, OxidraftApp>) -> Option<String> {
+    h.get_by_label("Layer control").accesskit_node().value()
+}
+
+#[test]
+fn layer_control_shows_and_changes_the_selected_objects_layer() {
+    let mut h = app_with_line();
+    let doc = h.state_mut().document_mut();
+    doc.add_layer(oxidraft_model::Layer::new("WALLS", 1));
+    let first = doc.entities().next().unwrap().id;
+    let second = doc.entities().nth(1).unwrap().id;
+    doc.update(second, |e| e.layer = "WALLS".into());
+    h.run_steps(2);
+    assert_eq!(layer_control(&h).as_deref(), Some("0"), "the current layer");
+
+    let (a, b) = (screen(&h, 50.0, 60.0), screen(&h, 50.0, 0.0));
+    click(&mut h, a);
+    h.run_steps(1);
+    assert_eq!(layer_control(&h).as_deref(), Some("WALLS"), "the selected line's layer");
+    click(&mut h, b);
+    h.run_steps(1);
+    assert_eq!(layer_control(&h), Some(String::new()), "blank: the lines are on different layers");
+
+    // Picking a layer moves the selected objects; the current layer stays.
+    h.get_by_label("Layer control").click();
+    h.run_steps(2);
+    choose(&mut h, "WALLS");
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.entity(first).unwrap().layer, "WALLS");
+    assert_eq!(doc.current_layer(), "0");
+    assert_eq!(h.state_mut().engine_mut().selection().len(), 2, "still selected");
+
+    // With nothing selected it shows the current layer again.
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert_eq!(layer_control(&h).as_deref(), Some("0"));
 }
 
 #[test]

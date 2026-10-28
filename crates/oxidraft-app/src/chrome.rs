@@ -10,6 +10,7 @@ use crate::{
     app::OxidraftApp,
     icons::{self, Icon},
     layers::layer_state_icons,
+    properties::common,
     theme,
 };
 
@@ -216,6 +217,16 @@ impl OxidraftApp {
             ui.vertical(|ui| {
                 ui.add_space(6.0);
                 self.layer_combo(ui);
+                ui.add_space(4.0);
+                self.small_tool(
+                    ui,
+                    &tool(
+                        Icon::MakeCurrent,
+                        "Make Current",
+                        Some("LAYMCUR"),
+                        "Makes a selected object's layer current",
+                    ),
+                );
             });
         });
         ribbon_panel(ui, "Block", |ui| {
@@ -302,22 +313,40 @@ impl OxidraftApp {
         }
     }
 
-    /// The layer dropdown: each row has LT's on/freeze/lock toggles and color,
-    /// and picking a row makes it the current layer.
+    /// The layer dropdown: each row has LT's on/freeze/lock toggles and color.
+    /// With nothing selected it shows the current layer, and picking a row
+    /// makes it current. With objects selected it shows their layer (blank if
+    /// they differ), and picking a row moves them to it, as in AutoCAD.
     fn layer_combo(&mut self, ui: &mut Ui) {
-        let current = self.doc.current_layer().to_string();
-        let current_layer = self.doc.layer(&current).cloned().unwrap_or_else(|| oxidraft_model::Layer::new("0", 7));
+        let selected = if self.engine.is_active() { Vec::new() } else { self.engine.selection().to_vec() };
+        let shown_name = if selected.is_empty() {
+            Some(self.doc.current_layer().to_string())
+        } else {
+            common(selected.iter().filter_map(|&id| self.doc.entity(id)).map(|e| e.layer.clone()))
+        };
+        let shown_layer = shown_name.as_deref().and_then(|n| self.doc.layer(n)).cloned();
         let layers = self.doc.layers().to_vec();
+        let mut chosen = None;
         ui.horizontal(|ui| {
             ui.add_space(6.0);
             ui.spacing_mut().item_spacing.x = 1.0;
-            if let Some(changed) = layer_state_icons(ui, &current_layer) {
-                self.doc.update_layer(changed);
-            }
+            // Objects on different layers: keep the room, show nothing.
+            let blank = oxidraft_model::Layer::new("0", 7);
+            ui.scope(|ui| {
+                if shown_layer.is_none() {
+                    ui.set_invisible();
+                }
+                let layer = shown_layer.as_ref().unwrap_or(&blank);
+                if let Some(changed) = layer_state_icons(ui, layer) {
+                    self.doc.update_layer(changed);
+                }
+                ui.add_space(3.0);
+                color_swatch(ui, layer.color);
+            });
             ui.add_space(3.0);
-            color_swatch(ui, current_layer.color);
-            ui.add_space(3.0);
-            let combo = egui::ComboBox::from_id_salt("layer_combo").width(150.0).selected_text(current.clone());
+            let combo = egui::ComboBox::from_id_salt("layer_combo")
+                .width(150.0)
+                .selected_text(shown_name.clone().unwrap_or_default());
             let shown = combo.show_ui(ui, |ui| {
                 ui.set_min_width(230.0);
                 for layer in layers {
@@ -326,14 +355,24 @@ impl OxidraftApp {
                             self.doc.update_layer(changed);
                         }
                         color_swatch(ui, layer.color);
-                        if ui.selectable_label(layer.name == current, &layer.name).clicked() {
-                            self.doc.set_current_layer(&layer.name);
+                        if ui.selectable_label(shown_name.as_ref() == Some(&layer.name), &layer.name).clicked() {
+                            chosen = Some(layer.name.clone());
                         }
                     });
                 }
             });
-            shown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Current layer"));
+            shown.response.widget_info(|| egui::WidgetInfo {
+                current_text_value: shown_name.clone(),
+                ..egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Layer control")
+            });
         });
+        match chosen {
+            Some(name) if selected.is_empty() => {
+                self.doc.set_current_layer(&name);
+            }
+            Some(name) => self.edit(selected, |e| e.layer = name.clone()),
+            None => {}
+        }
     }
 
     /// Drawing tabs under the ribbon.

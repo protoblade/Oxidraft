@@ -32,6 +32,7 @@ pub enum Icon {
     Leader,
     Table,
     LayerProperties,
+    MakeCurrent,
     Measure,
     InsertBlock,
     CreateBlock,
@@ -287,6 +288,13 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
                 let y = 0.25 + 0.2 * i as f32;
                 pen.closed(&[(0.3, y), (0.9, y), (0.7, y + 0.2), (0.1, y + 0.2)], col);
             }
+        }
+        Icon::MakeCurrent => {
+            for (i, col) in [(0, c), (1, blue)] {
+                let y = 0.3 + 0.24 * i as f32;
+                pen.closed(&[(0.25, y), (0.75, y), (0.55, y + 0.2), (0.05, y + 0.2)], col);
+            }
+            pen.line(&[(0.58, 0.32), (0.72, 0.46), (0.95, 0.12)], green);
         }
         Icon::Pan => {
             for to in [(0.5, 0.08), (0.92, 0.5), (0.5, 0.92), (0.08, 0.5)] {

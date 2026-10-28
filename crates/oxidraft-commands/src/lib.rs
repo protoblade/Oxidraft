@@ -24,6 +24,7 @@ mod grip;
 mod hatch;
 mod input;
 mod inquiry;
+mod layer;
 mod lengthen;
 mod line;
 mod matchprop;
@@ -227,6 +228,12 @@ pub trait Command {
     /// then handles picks and windows itself and sends [`Input::Selection`]
     /// on Enter.
     fn wants_selection(&self) -> bool {
+        false
+    }
+
+    /// For selection prompts that take one object: the first pick (or
+    /// window) ends the selection without Enter.
+    fn single_selection(&self) -> bool {
         false
     }
 

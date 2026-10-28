@@ -334,7 +334,7 @@ impl OxidraftApp {
     }
 
     /// Applies one undoable edit to several objects.
-    fn edit(&mut self, ids: impl IntoIterator<Item = EntityId>, f: impl Fn(&mut Entity)) {
+    pub(crate) fn edit(&mut self, ids: impl IntoIterator<Item = EntityId>, f: impl Fn(&mut Entity)) {
         self.doc.begin("PROPERTIES");
         for id in ids {
             self.doc.update(id, &f);
@@ -414,7 +414,7 @@ fn selection_title(selected: &[Entity]) -> String {
 }
 
 /// The value all items share, or `None` if they differ (or there are none).
-fn common<T: PartialEq>(mut items: impl Iterator<Item = T>) -> Option<T> {
+pub(crate) fn common<T: PartialEq>(mut items: impl Iterator<Item = T>) -> Option<T> {
     let first = items.next()?;
     items.all(|x| x == first).then_some(first)
 }
