@@ -2683,7 +2683,7 @@ dependencies = [
 
 [[package]]
 name = "oxidraft-app"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "eframe",
  "egui_kittest",
@@ -2705,7 +2705,7 @@ dependencies = [
 
 [[package]]
 name = "oxidraft-commands"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "oxidraft-geom",
  "oxidraft-model",
@@ -2713,14 +2713,14 @@ dependencies = [
 
 [[package]]
 name = "oxidraft-geom"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "cavalier_contours",
 ]
 
 [[package]]
 name = "oxidraft-io-dxf"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "dxf",
  "oxidraft-geom",
@@ -2729,7 +2729,7 @@ dependencies = [
 
 [[package]]
 name = "oxidraft-model"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "earcutr",
  "oxidraft-geom",

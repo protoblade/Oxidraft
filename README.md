@@ -8,7 +8,7 @@ snaps, polar tracking, dynamic input, grips and window/crossing selection, and
 DXF files. The goal is to cover the commands that make up most day-to-day 2D
 work (LINE, PLINE, OFFSET, TRIM, FILLET, LAYER, DIM, HATCH…).
 
-> Status: early prototype (v0.1). Expect breaking changes.
+> Status: early prototype (v0.5). Expect breaking changes.
 
 ## What works today
 
