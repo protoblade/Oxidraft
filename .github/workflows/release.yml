@@ -17,6 +17,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # .cargo/config.toml builds into target.nosync (to keep iCloud out of it
+  # locally); CI wants the standard location for packaging and caching.
+  CARGO_TARGET_DIR: target
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:

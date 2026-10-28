@@ -7,6 +7,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # .cargo/config.toml builds into target.nosync (to keep iCloud out of it
+  # locally); CI wants the standard location for packaging and caching.
+  CARGO_TARGET_DIR: target
 
 jobs:
   fmt:
