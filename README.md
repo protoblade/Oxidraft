@@ -8,7 +8,7 @@ snaps, polar tracking, dynamic input, grips and window/crossing selection, and
 DWG and DXF files. The goal is to cover the commands that make up most day-to-day 2D
 work (LINE, PLINE, OFFSET, TRIM, FILLET, LAYER, DIM, HATCH…).
 
-> Status: early prototype (v0.6). Expect breaking changes.
+> Status: early prototype (v0.7). Expect breaking changes.
 
 ## What works today
 
@@ -112,7 +112,7 @@ Adding a command is usually one new file plus one entry in `COMMANDS`.
 
 ## Roadmap
 
-- **v0.7:** layouts and viewports, plotting from them
+- **v0.8:** layouts and viewports, plotting from them
 
 ## Contributing
 
