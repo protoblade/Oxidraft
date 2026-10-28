@@ -3,17 +3,17 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/protoblade/Oxidraft"
 rust-version = "1.95"
 
 [workspace.dependencies]
-oxidraft-geom = { path = "crates/oxidraft-geom", version = "0.5.1" }
-oxidraft-model = { path = "crates/oxidraft-model", version = "0.5.1" }
-oxidraft-commands = { path = "crates/oxidraft-commands", version = "0.5.1" }
-oxidraft-io-dxf = { path = "crates/oxidraft-io-dxf", version = "0.5.1" }
+oxidraft-geom = { path = "crates/oxidraft-geom", version = "0.6.0" }
+oxidraft-model = { path = "crates/oxidraft-model", version = "0.6.0" }
+oxidraft-commands = { path = "crates/oxidraft-commands", version = "0.6.0" }
+oxidraft-io-dxf = { path = "crates/oxidraft-io-dxf", version = "0.6.0" }
 cavalier_contours = "0.9"
 dxf = "0.6"
 earcutr = "0.5"

@@ -109,7 +109,7 @@ Adding a command is usually one new file plus one entry in `COMMANDS`.
 
 ## Roadmap
 
-- **v0.6:** layouts, viewports, plot to PDF/SVG
+- **v0.7:** layouts, viewports, plot to PDF/SVG
 
 ## Contributing
 
