@@ -129,6 +129,9 @@ pub struct OxidraftApp {
     pub(crate) point_style: Option<crate::drafting::PointStyle>,
     pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
     pub(crate) field_dialog: Option<crate::fields::FieldDialog>,
+    pub(crate) array_dialog: Option<crate::classic::ArrayDialog>,
+    pub(crate) group_dialog: Option<crate::classic::GroupDialog>,
+    pub(crate) layout_wizard: Option<crate::classic::LayoutWizard>,
     pub(crate) paste_special: Option<crate::paste_scales::PasteSpecial>,
     pub(crate) scale_list_dialog: Option<crate::paste_scales::ScaleList>,
     /// ANNOAUTOSCALE: a new annotation scale is added to annotative objects.
@@ -317,6 +320,9 @@ impl OxidraftApp {
             point_style: None,
             tolerance_dialog: None,
             field_dialog: None,
+            array_dialog: None,
+            group_dialog: None,
+            layout_wizard: None,
             paste_special: None,
             scale_list_dialog: None,
             anno_autoscale: false,
@@ -675,6 +681,9 @@ impl OxidraftApp {
             "TOLERANCE" | "TOL" => self.open_tolerance(),
             "FIELD" => self.open_field_dialog(false),
             "STATUS" => self.status(),
+            "ARRAYCLASSIC" => self.open_array_dialog(),
+            "CLASSICGROUP" => self.open_group_dialog(),
+            "LAYOUTWIZARD" => self.open_layout_wizard(),
             "PASTESPEC" | "PA" => self.open_paste_special(),
             "SCALELISTEDIT" | "-SCALELISTEDIT" => self.open_scale_list(),
             "FILTER" | "FI" => self.open_quick_select(),
@@ -1108,6 +1117,9 @@ impl eframe::App for OxidraftApp {
         self.tolerance_dialog(&ctx);
         self.text_editor(&ctx);
         self.field_dialog(&ctx);
+        self.array_dialog(&ctx);
+        self.group_dialog(&ctx);
+        self.layout_wizard(&ctx);
         self.paste_special_dialog(&ctx);
         self.scale_list_dialog(&ctx);
         self.tool_palettes_window(&ctx);

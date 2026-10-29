@@ -2641,3 +2641,39 @@ fn scale_list_takes_scales_of_your_own() {
     h.run_steps(1);
     assert_eq!(h.state_mut().document_mut().anno_scale(), 75.0);
 }
+
+#[test]
+fn classic_array_group_and_layout_wizard() {
+    let mut h = app_with_line();
+    let first = h.state_mut().document_mut().entities().next().unwrap().id;
+    h.state_mut().engine_mut().set_selection(vec![first]);
+    h.run_steps(1);
+    // ARRAYCLASSIC: 4 x 4 of the selected line, 15 copies.
+    type_all(&mut h, &["arrayclassic"]);
+    h.run_steps(2);
+    let before = h.state_mut().document_mut().len();
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().len(), before + 15);
+    // CLASSICGROUP: a group of the selection, named.
+    h.state_mut().engine_mut().set_selection(vec![first]);
+    type_all(&mut h, &["classicgroup"]);
+    h.run_steps(2);
+    let field = h.get_by_role_and_label(Role::TextInput, "Group Name:").rect().center();
+    click(&mut h, field);
+    h.get_by_role_and_label(Role::TextInput, "Group Name:").type_text("WALLS");
+    h.run_steps(1);
+    h.get_by_label("New").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().groups().iter().map(|g| g.name.clone()).collect::<Vec<_>>(), ["WALLS"]);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    // LAYOUTWIZARD: an A3 landscape layout with a viewport.
+    h.state_mut().finish_layout_wizard("Plans", 1, true, true).unwrap();
+    h.run_steps(2);
+    let doc = h.state_mut().document_mut();
+    let layout = doc.layouts().into_iter().find(|l| l.name == "Plans").cloned().unwrap();
+    assert_eq!((layout.paper.width, layout.paper.height), (420.0, 297.0));
+    assert!(doc.space_in_draw_order(layout.id).iter().any(|e| matches!(e.geometry, Geometry::Viewport { .. })));
+    assert_eq!(doc.space(), layout.id);
+}

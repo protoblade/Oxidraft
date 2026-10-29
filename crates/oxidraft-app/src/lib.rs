@@ -7,6 +7,7 @@ mod battman;
 mod blocks;
 mod canvas;
 mod chrome;
+mod classic;
 mod clipboard;
 mod cmdline;
 mod compare;

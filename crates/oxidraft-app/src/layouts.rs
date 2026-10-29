@@ -56,7 +56,7 @@ pub(crate) struct PageSetup {
 
 /// The paper size's name as AutoCAD writes it, turned for the
 /// orientation: "ISO_A4_(297.00_x_210.00_MM)".
-fn media_name(p: &oxidraft_plot::Paper, (w, h): (f64, f64)) -> String {
+pub(crate) fn media_name(p: &oxidraft_plot::Paper, (w, h): (f64, f64)) -> String {
     let base = p.name.split(" (").next().unwrap_or(p.name).replace(' ', "_");
     if p.name.contains("Inches") {
         format!("{base}_({:.2}_x_{:.2}_Inches)", w / 25.4, h / 25.4)
@@ -66,7 +66,7 @@ fn media_name(p: &oxidraft_plot::Paper, (w, h): (f64, f64)) -> String {
 }
 
 /// The sheet `paper` makes, in millimeters, turned for the orientation.
-fn turned(p: &oxidraft_plot::Paper, landscape: bool) -> (f64, f64) {
+pub(crate) fn turned(p: &oxidraft_plot::Paper, landscape: bool) -> (f64, f64) {
     let (short, long) = (p.width.min(p.height), p.width.max(p.height));
     if landscape { (long, short) } else { (short, long) }
 }

@@ -680,6 +680,24 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: None,
     },
     CommandInfo {
+        name: "ARRAYCLASSIC",
+        aliases: &[],
+        description: "The Array dialog: rectangular or polar copies",
+        make: None,
+    },
+    CommandInfo {
+        name: "CLASSICGROUP",
+        aliases: &[],
+        description: "Object Grouping: make, rename, describe, select and explode groups",
+        make: None,
+    },
+    CommandInfo {
+        name: "LAYOUTWIZARD",
+        aliases: &[],
+        description: "Create a layout: its name, paper, orientation and a viewport",
+        make: None,
+    },
+    CommandInfo {
         name: "PASTESPEC",
         aliases: &["PA"],
         description: "Paste the clipboard as objects, a block or text",
