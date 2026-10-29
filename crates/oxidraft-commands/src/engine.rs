@@ -45,6 +45,7 @@ use crate::{
     matchprop::MatchProp,
     mirror::Mirror,
     move_copy::MoveCopy,
+    mview::{Mview, VpMax},
     offset::Offset,
     parse_input,
     pedit::Pedit,
@@ -568,6 +569,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(ImageClip::default())),
     },
     CommandInfo {
+        name: "MVIEW",
+        aliases: &["MV"],
+        description: "Make viewports onto model space in a layout, or turn them on, off or locked",
+        make: Some(|| Box::new(Mview::default())),
+    },
+    CommandInfo {
+        name: "VPMAX",
+        aliases: &[],
+        description: "Work in model space through a layout viewport filling the drawing area",
+        make: Some(|| Box::new(VpMax::default())),
+    },
+    CommandInfo {
         name: "XCLIP",
         aliases: &["XC"],
         description: "Clip a block reference or xref to a rectangle, polygon or polyline",
@@ -618,6 +631,14 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Open the Options dialog: color theme and drawing background",
         make: None,
     },
+    CommandInfo {
+        name: "MSPACE",
+        aliases: &["MS"],
+        description: "Work in model space through a layout viewport",
+        make: None,
+    },
+    CommandInfo { name: "PSPACE", aliases: &["PS"], description: "Go back to a layout's paper space", make: None },
+    CommandInfo { name: "VPMIN", aliases: &[], description: "Go back to the layout from VPMAX", make: None },
     CommandInfo { name: "PREVIEW", aliases: &["PRE"], description: "Show how the drawing will plot", make: None },
     CommandInfo {
         name: "PROPERTIES",
@@ -886,6 +907,12 @@ impl Engine {
 
     pub fn history(&self) -> &[String] {
         &self.history
+    }
+
+    /// Puts a line in the history before the one at `index`, as the
+    /// "Command:" line of a command the app ran after it printed.
+    pub fn log_at(&mut self, index: usize, line: impl Into<String>) {
+        self.history.insert(index.min(self.history.len()), line.into());
     }
 
     /// Previously typed inputs, oldest first.

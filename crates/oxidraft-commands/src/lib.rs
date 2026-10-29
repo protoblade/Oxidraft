@@ -36,6 +36,7 @@ mod list;
 mod matchprop;
 mod mirror;
 mod move_copy;
+mod mview;
 mod offset;
 mod pedit;
 mod pline;
@@ -60,6 +61,7 @@ mod zoom;
 pub use clipboard::{clip_of, paste};
 pub use engine::{COMMANDS, CommandInfo, Engine, Tracked};
 pub use input::{Input, parse_input};
+pub use mview::{viewport_at, viewport_onto_model};
 pub use select::{QuickOperator, QuickProperty, QuickSelect, SimilarMode, color_label, object_type, select_similar};
 
 use oxidraft_geom::{Aabb, Point};
@@ -150,6 +152,8 @@ pub enum UiRequest {
     SaveXrefEdit,
     /// COLORTHEME: 0 dark, 1 light.
     ColorTheme(u8),
+    /// VPMAX: model space through this viewport, filling the drawing area.
+    MaximizeViewport(EntityId),
 }
 
 /// Result of feeding one input to a command.

@@ -667,6 +667,11 @@ fn main() {
     h.state_mut().switch_space(space);
     h.run_steps(4);
     save(&mut h, &dir, "33-layout");
+    // Working in model space through the viewport (MSPACE), the sheet around it.
+    h.state_mut().type_command("ms");
+    h.run_steps(3);
+    hover(&mut h, Point::new(40.0, 25.0));
+    save(&mut h, &dir, "34-viewport");
 
     // AutoComplete on the command line.
     let mut h = harness();

@@ -20,6 +20,7 @@ use crate::{
     icons::{self, Icon},
     theme,
     view::View,
+    viewport::Frame,
 };
 
 /// AutoSnap aperture and pickbox radius, in screen points.
@@ -55,6 +56,16 @@ impl OxidraftApp {
         self.canvas_rect = rect;
         let painter = ui.painter_at(rect);
 
+        // The viewport worked in was undone or erased: back on its sheet.
+        if let Some(a) = self.active_viewport
+            && Frame::of(&self.doc, a.id).is_none()
+        {
+            self.leave_viewport();
+        }
+        // Double-clicking in or out of a viewport, before the view is used.
+        let switched = response.double_clicked_by(PointerButton::Primary)
+            && response.interact_pointer_pos().is_some_and(|p| self.viewport_double_click(p, rect));
+
         // A newly opened drawing fits the view, with no earlier view to go back to.
         if self.zoom_extents_pending {
             self.zoom_extents_pending = false;
@@ -63,17 +74,32 @@ impl OxidraftApp {
                 None => self.view = View::default(),
             }
         }
+        // In a locked viewport, zooming and panning move the sheet.
+        let locked = self.active_frame(rect).map(|(f, _)| f).filter(|f| f.locked);
+        if let (Some(_), Some(a)) = (&locked, self.active_viewport) {
+            self.view = a.page;
+        }
         let requests: Vec<ViewRequest> = self.pending_views.drain(..).chain(self.engine.take_view_requests()).collect();
         for r in requests {
             self.apply_view(r, rect);
         }
         self.navigate(ui, &response, rect);
+        if let Some(f) = &locked
+            && let Some(a) = self.active_viewport.as_mut()
+        {
+            a.page = self.view;
+            self.view = f.model_view(a.page);
+        }
         // VIEWSIZE and VIEWCTR, for ZOOM Center's default.
         self.engine.vars.view_size = f64::from(rect.height()) / self.view.scale;
         self.engine.vars.view_center = self.view.center;
 
         // While dragging a grip the pointer may leave the hover state; keep tracking it.
         let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos());
+        // In a viewport, the crosshair is only inside its frame.
+        let frame = self.active_frame(rect).map(|(_, r)| r);
+        let dragging = self.drag.is_some() || response.dragged();
+        let pointer = pointer.filter(|p| dragging || frame.is_none_or(|r| r.contains(*p)));
         let cursor = pointer.map(|screen| self.resolve_cursor(rect, screen));
         self.cursor = cursor.as_ref().map(|c| c.point);
         // Real-time pan and zoom own the mouse; right-click ends them.
@@ -81,7 +107,7 @@ impl OxidraftApp {
             if response.secondary_clicked() {
                 self.realtime = None;
             }
-        } else {
+        } else if !switched {
             self.handle_clicks(ui, &response, cursor.as_ref());
             // Right-click opens the shortcut menu (Enter, options, editing…). This
             // runs every frame: once open, the pointer is over the menu, not here.
@@ -91,26 +117,55 @@ impl OxidraftApp {
             response.context_menu(|ui| self.shortcut_menu(ui));
         }
 
-        // A layout: its sheet, and model space through its viewports.
-        let layout = self.doc.layout(self.doc.space()).cloned();
+        // A layout: its sheet, and model space through its viewports. In a
+        // viewport, the sheet stays around it (but not when maximized).
+        let sheet_space = self.shown_space();
+        let maximized = self.active_viewport.is_some_and(|a| a.maximized);
+        let layout = if maximized { None } else { self.doc.layout(sheet_space).cloned() };
+        let active = self.active_frame(rect);
+        let model_view = self.view;
+        if let (Some(_), Some(a)) = (&active, self.active_viewport) {
+            self.view = a.page;
+        }
         theme::set_paper(layout.is_some());
         match &layout {
             Some(l) => self.draw_sheet(&painter, rect, &l.paper),
             None if self.grid => self.draw_grid(&painter, rect),
             None => {}
         }
-        self.draw_ucs_icon(&painter, rect);
         if layout.is_some() {
-            self.draw_viewports(&painter, rect);
+            self.draw_viewports(&painter, rect, sheet_space, self.active_viewport.map(|a| a.id));
         }
-        self.draw_entities(&painter, rect, cursor.as_ref(), self.doc.space(), &[]);
+        self.view = model_view;
+        // Model space in the viewport worked in shows inside its frame only.
+        let (model, area, frozen) = match &active {
+            Some((f, r)) => (painter.with_clip_rect(r.intersect(rect)), *r, f.frozen.clone()),
+            None => (painter.clone(), rect, Vec::new()),
+        };
+        self.draw_ucs_icon(&model, rect, area);
+        self.draw_entities(&model, rect, cursor.as_ref(), self.doc.space(), &frozen);
+        // The sheet's own objects over it, and the frame worked in.
+        if let (Some((_, r)), Some(a)) = (&active, self.active_viewport) {
+            self.view = a.page;
+            self.draw_entities(&painter, rect, None, a.layout, &[]);
+            self.view = model_view;
+            painter.rect_stroke(*r, 0.0, Stroke::new(2.5, theme::accent()), StrokeKind::Middle);
+        }
+        if maximized {
+            painter.rect_stroke(
+                rect.shrink(1.5),
+                0.0,
+                Stroke::new(3.0, Color32::from_rgb(210, 40, 40)),
+                StrokeKind::Inside,
+            );
+        }
         self.request_details();
         if let Some(c) = &cursor {
             for g in self.engine.preview(c.point) {
-                self.draw_geometry(&painter, rect, &g, Stroke::new(1.0, theme::preview()));
+                self.draw_geometry(&model, rect, &g, Stroke::new(1.0, theme::preview()));
             }
         }
-        self.draw_grips(&painter, rect, cursor.as_ref());
+        self.draw_grips(&model, rect, cursor.as_ref());
         if let Some(c) = &cursor {
             let dragging = response.dragged_by(PointerButton::Primary);
             let icon = match self.realtime {
@@ -121,12 +176,12 @@ impl OxidraftApp {
                 None => CursorIcon::None,
             };
             if self.realtime.is_none() {
-                self.draw_window(&painter, rect, c);
-                self.draw_tracking(&painter, rect, c);
+                self.draw_window(&model, rect, c);
+                self.draw_tracking(&model, rect, c);
                 if let Some(s) = c.snap {
-                    draw_snap_marker(&painter, self.view.to_screen(rect, s.point), s.kind);
+                    draw_snap_marker(&model, self.view.to_screen(rect, s.point), s.kind);
                 }
-                self.draw_cursor(&painter, rect, c);
+                self.draw_cursor(&model, rect, c);
                 self.draw_tooltips(&painter, rect, c);
             }
             ui.ctx().set_cursor_icon(icon);
@@ -164,11 +219,12 @@ impl OxidraftApp {
 
     /// Model space through the layout's viewports: each shows the part
     /// around its view center at its scale, without the layers it freezes.
-    fn draw_viewports(&mut self, painter: &Painter, rect: Rect) {
+    fn draw_viewports(&mut self, painter: &Painter, rect: Rect, space: Space, skip: Option<oxidraft_model::EntityId>) {
         let viewports: Vec<(Point, f64, f64, Point, f64, Vec<String>)> = self
             .doc
-            .entities()
-            .filter(|e| self.doc.is_shown(&e.layer))
+            .space_in_draw_order(space)
+            .into_iter()
+            .filter(|e| self.doc.is_shown(&e.layer) && Some(e.id) != skip)
             .filter_map(|e| match &e.geometry {
                 Geometry::Viewport { center, width, height, view_center, view_height, frozen, on: true, .. } => {
                     Some((*center, *width, *height, *view_center, *view_height, frozen.clone()))
@@ -303,12 +359,16 @@ impl OxidraftApp {
     /// Carries out a ZOOM option, a PAN, or a menu's zoom.
     fn apply_view(&mut self, request: ViewRequest, rect: Rect) {
         let before = self.view;
+        // In a viewport (with the sheet around it), zooms fit its frame.
+        let frame = self.active_frame(rect).filter(|(f, _)| !f.locked).map(|(_, r)| r);
+        let fit = frame.unwrap_or_else(|| fit_area(rect));
+        let area = frame.unwrap_or(rect);
         match request {
             ViewRequest::Extents => match self.doc.extents() {
-                Some(b) => self.view.zoom_extents(rect, fit_area(rect), b),
+                Some(b) => self.view.zoom_extents(rect, fit, b),
                 None => self.view = View::default(),
             },
-            ViewRequest::Window(b) => self.view.zoom_extents(rect, fit_area(rect), b),
+            ViewRequest::Window(b) => self.view.zoom_extents(rect, fit, b),
             ViewRequest::Previous => {
                 match self.view_history.pop() {
                     Some(v) => self.view = v,
@@ -316,17 +376,19 @@ impl OxidraftApp {
                 }
                 return;
             }
-            ViewRequest::Magnify(f) => self.view.zoom_at(rect, rect.center(), f),
+            ViewRequest::Magnify(f) => self.view.zoom_at(rect, area.center(), f),
             ViewRequest::OfExtents(f) => {
                 let mut fitted = self.view;
                 if let Some(b) = self.doc.extents() {
-                    fitted.zoom_extents(rect, fit_area(rect), b);
+                    fitted.zoom_extents(rect, fit, b);
                 }
                 self.view.scale = (fitted.scale * f).clamp(1e-6, 1e9);
             }
             ViewRequest::Center { center, height } => {
-                self.view.center = center;
-                self.view.scale = (f64::from(rect.height()) / height.max(1e-9)).clamp(1e-6, 1e9);
+                self.view.scale = (f64::from(area.height()) / height.max(1e-9)).clamp(1e-6, 1e9);
+                let offset = area.center() - rect.center();
+                self.view.center =
+                    center - Point::new(f64::from(offset.x) / self.view.scale, -f64::from(offset.y) / self.view.scale);
             }
             ViewRequest::RealtimeZoom | ViewRequest::RealtimePan => {
                 self.realtime = Some(request);
@@ -453,10 +515,18 @@ impl OxidraftApp {
     }
 
     /// 2D UCS icon: at the origin when it's on screen, else in the lower-left corner.
-    fn draw_ucs_icon(&self, painter: &Painter, rect: Rect) {
+    /// At the origin when it's on screen in `area` (the drawing area, or
+    /// the viewport worked in), else at `area`'s lower left.
+    fn draw_ucs_icon(&self, painter: &Painter, rect: Rect, area: Rect) {
         let o = self.view.to_screen(rect, Point::ORIGIN);
-        let inner = rect.shrink2(vec2(60.0, 60.0));
-        let at = if inner.contains(o) { o } else { pos2(rect.left() + 28.0, rect.bottom() - 70.0) };
+        let inner = area.shrink2(vec2(60.0, 60.0));
+        let at = if inner.contains(o) {
+            o
+        } else if area == rect {
+            pos2(rect.left() + 28.0, rect.bottom() - 70.0)
+        } else {
+            pos2(area.left() + 14.0, area.bottom() - 14.0)
+        };
         let len = 42.0;
         let x_col = Color32::from_rgb(230, 80, 80);
         let y_col = Color32::from_rgb(80, 210, 90);

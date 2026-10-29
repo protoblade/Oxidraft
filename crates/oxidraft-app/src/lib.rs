@@ -18,6 +18,7 @@ pub mod theme;
 mod underlay;
 pub mod update;
 mod view;
+mod viewport;
 mod xref;
 
 pub use app::OxidraftApp;

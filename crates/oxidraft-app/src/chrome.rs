@@ -615,7 +615,7 @@ impl OxidraftApp {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 // Model, then the layouts; a drawing without any shows Layout1,
                 // made when it's first opened.
-                let current = self.doc.space();
+                let current = self.shown_space();
                 let mut tabs: Vec<(Option<oxidraft_model::Space>, String)> =
                     vec![(Some(oxidraft_model::MODEL), "Model".into())];
                 tabs.extend(self.doc.layouts().iter().map(|l| (Some(l.id), l.name.clone())));
@@ -634,7 +634,7 @@ impl OxidraftApp {
                         switch = Some(space);
                     }
                 }
-                if let Some(space) = switch {
+                if let Some(space) = switch.filter(|s| *s != Some(current)) {
                     let space = space.unwrap_or_else(|| self.first_layout());
                     self.switch_space(space);
                 }
@@ -702,8 +702,17 @@ impl OxidraftApp {
                         self.grid = grid;
                         self.log_toggle("Grid", grid);
                     }
+                    // In a layout, switches between its sheet and a viewport (MSPACE, PSPACE).
                     let space = if self.doc.layout(self.doc.space()).is_some() { "PAPER" } else { "MODEL" };
-                    ui.label(egui::RichText::new(space).strong().color(theme::text()));
+                    let label = ui.add(
+                        egui::Label::new(egui::RichText::new(space).strong().color(theme::text()))
+                            .sense(egui::Sense::click()),
+                    );
+                    if self.doc.layout(self.shown_space()).is_some()
+                        && label.on_hover_text("Paper or model space (MSPACE, PSPACE)").clicked()
+                    {
+                        self.run(if self.active_viewport.is_some() { "PSPACE" } else { "MSPACE" });
+                    }
                 });
             });
         });
@@ -868,7 +877,7 @@ fn layout_tab(ui: &mut Ui, name: &str, selected: bool) -> Response {
     }
     let color = if selected { theme::text() } else { theme::text_dim() };
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, name, font, color);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Tab, true, name));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, name));
     response
 }
 

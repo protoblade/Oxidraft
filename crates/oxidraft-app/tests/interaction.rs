@@ -1058,3 +1058,78 @@ fn layout_tabs_switch_spaces_and_drawing_goes_into_the_layout() {
     assert_eq!(doc.space(), oxidraft_model::MODEL);
     assert_eq!(doc.len(), 2, "the two test lines");
 }
+
+fn the_viewport(h: &mut Harness<'_, OxidraftApp>) -> (oxidraft_model::EntityId, Point, f64) {
+    let doc = h.state_mut().document_mut();
+    doc.all_entities()
+        .find_map(|e| match e.geometry {
+            Geometry::Viewport { view_center, view_height, .. } => Some((e.id, view_center, view_height)),
+            _ => None,
+        })
+        .expect("a viewport")
+}
+
+fn type_all(h: &mut Harness<'_, OxidraftApp>, inputs: &[&str]) {
+    for input in inputs {
+        h.state_mut().type_command(input);
+        h.run_steps(1);
+    }
+}
+
+#[test]
+fn working_in_a_viewport_and_back_on_the_sheet() {
+    // 60 frames a second, so two clicks fall within egui's double-click time.
+    let mut h = app_with_line_at(1.0 / 60.0);
+    h.get_by_role_and_label(Role::Tab, "Layout1").click();
+    h.run_steps(30);
+    type_all(&mut h, &["mv", "f"]);
+    let layout = h.state_mut().document_mut().space();
+    let (id, center, height) = the_viewport(&mut h);
+    // The A4 sheet's printable area is 282 x 170; the viewport fills it.
+    let (inside, outside) = (screen(&h, 100.0, 85.0), screen(&h, -3.0, -10.0));
+
+    // Double-clicking inside it: model space, through the viewport.
+    click(&mut h, inside);
+    click(&mut h, inside);
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().space(), oxidraft_model::MODEL);
+    let tab = h.get_by_role_and_label(Role::Tab, "Layout1").accesskit_node().toggled();
+    assert_eq!(tab, Some(eframe::egui::accesskit::Toggled::True), "still on the layout's tab");
+    type_all(&mut h, &["l", "20,30", "80,30", "", "z", "2x"]);
+    {
+        let doc = h.state_mut().document_mut();
+        assert_eq!(doc.len(), 3, "the new line is in model space");
+    }
+
+    // Double-clicking the sheet outside it: back on paper; the viewport
+    // keeps the view it was zoomed to.
+    h.run_steps(30);
+    click(&mut h, outside);
+    click(&mut h, outside);
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().space(), layout);
+    let (_, now_center, now_height) = the_viewport(&mut h);
+    assert!((now_height - height / 2.0).abs() < 1e-6 * height, "{now_height} vs {height}");
+    assert!(now_center.distance(center) < 1e-6 * height);
+
+    // VPMAX fills the drawing area with it; VPMIN goes back.
+    type_all(&mut h, &["vpmax"]);
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().space(), oxidraft_model::MODEL);
+    type_all(&mut h, &["vpmin"]);
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().space(), layout);
+    let (_, after_max, height_after_max) = the_viewport(&mut h);
+    assert!(after_max.distance(now_center) < 1e-6 * height && (height_after_max - now_height).abs() < 1e-6 * height);
+
+    // A locked viewport's view stays as it was.
+    h.state_mut().document_mut().update(id, |e| {
+        if let Geometry::Viewport { locked, .. } = &mut e.geometry {
+            *locked = true;
+        }
+    });
+    type_all(&mut h, &["ms", "z", "2x", "ps"]);
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().space(), layout);
+    assert_eq!(the_viewport(&mut h).2, now_height);
+}

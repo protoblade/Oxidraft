@@ -78,6 +78,9 @@ pub struct OxidraftApp {
     /// Each space's view when it was left: model space and the layouts
     /// keep their own.
     pub(crate) space_views: std::collections::HashMap<oxidraft_model::Space, View>,
+    /// The viewport worked in (MSPACE, VPMAX), and each layout's last one.
+    pub(crate) active_viewport: Option<crate::viewport::ActiveViewport>,
+    pub(crate) last_viewport: std::collections::HashMap<oxidraft_model::Space, oxidraft_model::EntityId>,
     pub(crate) loader: crate::underlay::Loader,
     pub(crate) raster_revision: u64,
     pub(crate) image_attach_dialog: Option<crate::underlay::ImageAttachDialog>,
@@ -184,6 +187,8 @@ impl OxidraftApp {
             detail_generation: 0,
             shown_image_layers: None,
             space_views: Default::default(),
+            active_viewport: None,
+            last_viewport: Default::default(),
             loader: Default::default(),
             raster_revision: 0,
             image_attach_dialog: None,
@@ -225,6 +230,8 @@ impl OxidraftApp {
     /// The Model and layout tabs: draws in `space` from now on, with the
     /// view it had when left (a layout seen first shows its whole sheet).
     pub fn switch_space(&mut self, space: oxidraft_model::Space) {
+        // Out of a viewport first: back on its layout.
+        self.leave_viewport();
         if space == self.doc.space() {
             return;
         }
@@ -274,6 +281,8 @@ impl OxidraftApp {
         self.zoom_extents_pending = true;
         self.shown_image_layers = None;
         self.space_views.clear();
+        self.active_viewport = None;
+        self.last_viewport.clear();
         self.view_history.clear();
     }
 
@@ -335,6 +344,8 @@ impl OxidraftApp {
         self.doc = Document::new();
         self.shown_image_layers = None;
         self.space_views.clear();
+        self.active_viewport = None;
+        self.last_viewport.clear();
         self.saved_revision = 0;
         self.path = None;
         self.dwg_version = None;
@@ -466,6 +477,10 @@ impl OxidraftApp {
             "BCLOSE" => self.close_block_editor(None),
             "BLOCKSPALETTE" => self.open_blocks_palette(),
             "PROPERTIES" | "PR" | "PROPS" | "MO" | "CH" => self.properties_open = true,
+            "MSPACE" | "MS" => self.model_space_command(),
+            "PSPACE" | "PS" => self.paper_space_command(false),
+            "VPMIN" => self.paper_space_command(true),
+            "VPMAX" => return self.maximize_command(),
             _ => return false,
         }
         true
@@ -481,8 +496,9 @@ impl OxidraftApp {
                 text = c.name.to_string();
             }
             self.suggestion = 0;
+            let printed = self.engine.history().len();
             if self.run_app_command(&text) {
-                self.engine.log(format!("Command: {}", text.trim().to_uppercase()));
+                self.engine.log_at(printed, format!("Command: {}", text.trim().to_uppercase()));
                 return;
             }
         }
@@ -500,6 +516,7 @@ impl OxidraftApp {
                     self.edit_attributes(id);
                 }
                 UiRequest::TextWindow => self.history_expanded = true,
+                UiRequest::MaximizeViewport(id) => self.enter_viewport(id, true),
                 UiRequest::SaveXrefEdit => self.prepare_xref_edit_save(),
                 UiRequest::ColorTheme(n) => {
                     let color_theme = if n == 1 { ColorTheme::Light } else { ColorTheme::Dark };
