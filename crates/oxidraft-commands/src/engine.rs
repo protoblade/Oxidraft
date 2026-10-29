@@ -35,7 +35,7 @@ use crate::{
     inquiry::Area,
     inquiry::Dist,
     inquiry::Id,
-    inquiry::{ColorTheme, Ltscale},
+    inquiry::{ColorTheme, Ltscale, Snap},
     layer::LayIso,
     layer::LayMcur,
     layer::LayerPick,
@@ -372,6 +372,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         description: "Show the coordinates of a point",
         make: Some(|| Box::new(Id)),
+    },
+    CommandInfo {
+        name: "SNAP",
+        aliases: &["SN"],
+        description: "Set the snap spacing, or turn snap mode on or off (F9)",
+        make: Some(|| Box::new(Snap::default())),
     },
     CommandInfo {
         name: "LTSCALE",
@@ -2988,7 +2994,7 @@ mod tests {
         let names: Vec<_> = Engine::suggest("co").iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["COPY", "COLORTHEME", "COPYCLIP", "COPYBASE"]);
         let names: Vec<_> = Engine::suggest("s").iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["STRETCH", "SPLINE", "SCALE", "SELECTSIMILAR"]);
+        assert_eq!(names, vec!["STRETCH", "SPLINE", "SCALE", "SNAP", "SELECTSIMILAR"]);
     }
 
     #[test]

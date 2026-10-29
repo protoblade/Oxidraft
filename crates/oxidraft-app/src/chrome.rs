@@ -778,8 +778,12 @@ impl OxidraftApp {
                         self.engine.set_ortho(ortho);
                         self.log_toggle("Ortho", ortho);
                     }
-                    let mut snap = false;
-                    ui.add_enabled_ui(false, |ui| status_toggle(ui, "SNAP", &mut snap, "Snap Mode (F9)"));
+                    let mut snap = self.engine.vars.snap;
+                    let tip = format!("Snap Mode (F9): every {:.4} (SNAP)", self.engine.vars.snap_spacing);
+                    if status_toggle(ui, "SNAP", &mut snap, &tip) {
+                        self.engine.vars.snap = snap;
+                        self.log_toggle("Snap", snap);
+                    }
                     let mut grid = self.grid;
                     if status_toggle(ui, "GRID", &mut grid, "Grid Display (F7)") {
                         self.grid = grid;

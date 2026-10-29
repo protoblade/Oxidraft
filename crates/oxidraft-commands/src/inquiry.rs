@@ -234,6 +234,33 @@ impl Command for Ltscale {
     }
 }
 
+/// SNAP: the snap spacing, which turns snap on, or ON and OFF.
+#[derive(Default)]
+pub struct Snap {
+    spacing: f64,
+}
+
+impl Command for Snap {
+    fn start(&mut self, vars: &crate::Vars) -> Option<String> {
+        self.spacing = vars.snap_spacing;
+        None
+    }
+
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Specify snap spacing").with_keywords(&["ON", "OFF"]).with_default(format!("{:.4}", self.spacing))
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match input {
+            Input::Value(v) if v > 0.0 => (ctx.vars.snap_spacing, ctx.vars.snap) = (v, true),
+            Input::Keyword(k) => ctx.vars.snap = k == "ON",
+            Input::Enter => ctx.vars.snap = true,
+            _ => return Err("Requires a positive number, ON or OFF.".into()),
+        }
+        Ok(Step::Done)
+    }
+}
+
 /// COLORTHEME: the ribbon, palettes and command line dark (0) or light (1).
 #[derive(Default)]
 pub struct ColorTheme {

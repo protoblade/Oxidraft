@@ -443,7 +443,15 @@ impl OxidraftApp {
         if let Some(s) = snap {
             return CursorState { screen, raw, point: s.point, snap: Some(s), tracked: None };
         }
-        let tracked = self.engine.track(raw, tolerance);
+        // Snap mode (F9): to the snap spacing, where no object snap applies.
+        let vars = &self.engine.vars;
+        let on_snap = if vars.snap && vars.snap_spacing > 0.0 {
+            let k = vars.snap_spacing;
+            Point::new((raw.x / k).round() * k, (raw.y / k).round() * k)
+        } else {
+            raw
+        };
+        let tracked = self.engine.track(on_snap, tolerance);
         CursorState { screen, raw, point: tracked.point, snap: None, tracked: Some(tracked) }
     }
 

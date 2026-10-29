@@ -652,13 +652,14 @@ impl OxidraftApp {
             return;
         }
         let empty = self.command_text.is_empty();
-        let (esc, f2, f3, f7, f8, f10, f12) = ctx.input_mut(|i| {
+        let (esc, f2, f3, f7, f8, f9, f10, f12) = ctx.input_mut(|i| {
             (
                 i.consume_key(none, Key::Escape),
                 i.consume_key(none, Key::F2),
                 i.consume_key(none, Key::F3),
                 i.consume_key(none, Key::F7),
                 i.consume_key(none, Key::F8),
+                i.consume_key(none, Key::F9),
                 i.consume_key(none, Key::F10),
                 i.consume_key(none, Key::F12),
             )
@@ -703,6 +704,10 @@ impl OxidraftApp {
         if f8 {
             self.engine.set_ortho(!self.engine.ortho());
             self.log_toggle("Ortho", self.engine.ortho());
+        }
+        if f9 {
+            self.engine.vars.snap = !self.engine.vars.snap;
+            self.log_toggle("Snap", self.engine.vars.snap);
         }
         if f10 {
             self.engine.set_polar(!self.engine.polar());

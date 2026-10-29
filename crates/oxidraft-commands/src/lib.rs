@@ -213,6 +213,10 @@ pub struct Vars {
     pub revcloud_polygonal: bool,
     /// COLORTHEME: 0 dark, 1 light. The app keeps it; it's here for the prompt.
     pub color_theme: u8,
+    /// SNAPMODE (F9) and SNAPUNIT: the cursor jumps to points this far
+    /// apart, from the origin, when no object snap applies.
+    pub snap: bool,
+    pub snap_spacing: f64,
 }
 
 impl Default for Vars {
@@ -243,6 +247,8 @@ impl Default for Vars {
             revcloud_calligraphy: false,
             revcloud_polygonal: false,
             color_theme: 0,
+            snap: false,
+            snap_spacing: 10.0,
         }
     }
 }

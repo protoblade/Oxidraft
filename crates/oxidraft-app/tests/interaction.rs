@@ -1324,3 +1324,26 @@ fn page_setup_changes_a_layouts_paper() {
     let doc = h.state_mut().document_mut();
     assert_eq!(doc.layout(doc.space()).unwrap().paper.width, 297.0);
 }
+
+#[test]
+fn snap_mode_puts_clicked_points_on_the_snap_spacing() {
+    let mut h = app_with_line();
+    // SNAP with a spacing turns it on; F9 turns it off and on.
+    type_all(&mut h, &["snap", "5"]);
+    h.key_press(Key::F9);
+    h.run_steps(1);
+    assert!(!h.state_mut().engine_mut().vars.snap);
+    h.key_press(Key::F9);
+    h.run_steps(1);
+    type_all(&mut h, &["l"]);
+    let (a, b) = (screen(&h, 12.3, 31.6), screen(&h, 27.9, 31.2));
+    click(&mut h, a);
+    click(&mut h, b);
+    type_all(&mut h, &[""]);
+    let doc = h.state_mut().document_mut();
+    let drawn = doc.entities().filter_map(|e| match e.geometry {
+        Geometry::Line { start, end } if start.y > 1.0 && start.y < 59.0 => Some((start, end)),
+        _ => None,
+    });
+    assert_eq!(drawn.collect::<Vec<_>>(), [(Point::new(10.0, 30.0), Point::new(30.0, 30.0))]);
+}
