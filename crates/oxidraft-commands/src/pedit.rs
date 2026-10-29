@@ -2,7 +2,7 @@
 //! their width, straighten their arcs or reverse them; lines and arcs can
 //! be turned into polylines first.
 
-use oxidraft_model::{EntityId, Geometry, snap};
+use oxidraft_model::{EntityId, Geometry};
 
 use crate::{
     Command, Ctx, Input, Prompt, Step,
@@ -181,7 +181,7 @@ impl Command for Pedit {
                 Ok(Step::Continue)
             }
             (Stage::Select, Input::Pick { at, .. }) => {
-                let Some(e) = snap::pick(ctx.doc, at, ctx.pick_tolerance).and_then(|id| ctx.doc.entity(id)) else {
+                let Some(e) = ctx.pick(at).and_then(|id| ctx.doc.entity(id)) else {
                     return Err("No object found.".into());
                 };
                 self.ids = vec![e.id];

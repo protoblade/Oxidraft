@@ -4,7 +4,7 @@ use oxidraft_geom::{
     EPSILON, Point, Segment,
     curve::{ArcSeg, Seg},
 };
-use oxidraft_model::{EntityId, Geometry, snap};
+use oxidraft_model::{EntityId, Geometry};
 
 use crate::{Command, Ctx, Input, Prompt, Step};
 
@@ -105,7 +105,7 @@ impl Command for Break {
     fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
         match (self.stage, input) {
             (Stage::Select, Input::Pick { at, .. }) => {
-                let id = snap::pick(ctx.doc, at, ctx.pick_tolerance).ok_or("No object found.")?;
+                let id = ctx.pick(at).ok_or("No object found.")?;
                 let g = &ctx.doc.entity(id).ok_or("No object found.")?.geometry;
                 if g.segments().is_empty() {
                     return Err(format!("A {} can't be broken.", g.name()));

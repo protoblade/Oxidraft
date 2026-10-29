@@ -1,5 +1,5 @@
 use oxidraft_geom::Point;
-use oxidraft_model::{EntityId, Geometry, snap};
+use oxidraft_model::{EntityId, Geometry};
 
 use crate::{Command, Ctx, Input, Prompt, Step, Vars, edit::offset_toward};
 
@@ -81,7 +81,7 @@ impl Command for Offset {
                 self.stage = Stage::Select;
             }
             (Stage::Distance, Input::Enter) => self.stage = Stage::Select,
-            (Stage::Select, Input::Pick { at, .. }) => match snap::pick(ctx.doc, at, ctx.pick_tolerance) {
+            (Stage::Select, Input::Pick { at, .. }) => match ctx.pick(at) {
                 Some(id) => {
                     let geometry = ctx.doc.entity(id).map(|e| e.geometry.clone()).ok_or("Object not found.")?;
                     self.stage = Stage::Side { id, geometry };

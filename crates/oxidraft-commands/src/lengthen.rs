@@ -2,7 +2,7 @@ use oxidraft_geom::{
     EPSILON, Point,
     curve::{ArcSeg, Seg},
 };
-use oxidraft_model::{EntityId, Geometry, Vertex, snap};
+use oxidraft_model::{EntityId, Geometry, Vertex};
 
 use crate::{Command, Ctx, Input, Prompt, Step};
 
@@ -130,7 +130,7 @@ impl Default for Lengthen {
 
 impl Lengthen {
     fn pick(ctx: &Ctx, at: Point) -> Result<(EntityId, Geometry), String> {
-        let id = snap::pick(ctx.doc, at, ctx.pick_tolerance).ok_or("No object found.")?;
+        let id = ctx.pick(at).ok_or("No object found.")?;
         let g = ctx.doc.entity(id).map(|e| e.geometry.clone()).ok_or("No object found.")?;
         Ok((id, g))
     }

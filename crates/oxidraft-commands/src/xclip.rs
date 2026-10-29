@@ -3,7 +3,7 @@
 //! which clips whatever is picked: a reference, an image or a PDF.
 
 use oxidraft_geom::{Aabb, Point, curve::Seg};
-use oxidraft_model::{Document, EntityId, Geometry, Vertex, XClip, snap};
+use oxidraft_model::{Document, EntityId, Geometry, Vertex, XClip};
 
 use crate::{Command, Ctx, Input, Prompt, Step, underlay::ImageClip};
 
@@ -180,7 +180,7 @@ impl Command for XClipCommand {
                 self.stage = Stage::Opposite { ids, inverted, first }
             }
             (Stage::Polyline { ids, inverted }, Input::Pick { at, .. }) => {
-                let id = snap::pick(ctx.doc, at, ctx.pick_tolerance).ok_or("No object found.")?;
+                let id = ctx.pick(at).ok_or("No object found.")?;
                 let Some(Geometry::Polyline { vertices, .. }) = ctx.doc.entity(id).map(|e| &e.geometry) else {
                     return Err("Select a polyline.".into());
                 };
@@ -277,7 +277,7 @@ impl Command for Clip {
         }
         match input {
             Input::Pick { at, .. } => {
-                let id = snap::pick(ctx.doc, at, ctx.pick_tolerance).ok_or("No object found.")?;
+                let id = ctx.pick(at).ok_or("No object found.")?;
                 self.inner = Some(match ctx.doc.entity(id).map(|e| &e.geometry) {
                     Some(Geometry::Insert { .. }) => Box::new(XClipCommand { stage: Stage::Option(vec![id]) }),
                     Some(Geometry::Image { .. }) => Box::new(ImageClip::picked(id)),

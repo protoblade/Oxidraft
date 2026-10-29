@@ -1,5 +1,5 @@
 use oxidraft_geom::{EPSILON, Point};
-use oxidraft_model::{Geometry, HatchPattern, Vertex, boundary::boundary_at, snap};
+use oxidraft_model::{Geometry, HatchPattern, Vertex, boundary::boundary_at};
 
 use crate::{Command, Ctx, Input, Prompt, Step, Vars};
 
@@ -82,7 +82,7 @@ impl Command for Hatch {
                 None => ctx.messages.push("Valid hatch boundary not found.".into()),
             },
             (Stage::SelectObjects, Input::Pick { at, .. }) => {
-                let picked = snap::pick(ctx.doc, at, ctx.pick_tolerance).and_then(|id| ctx.doc.entity(id));
+                let picked = ctx.pick(at).and_then(|id| ctx.doc.entity(id));
                 match picked.and_then(|e| closed_loop(&e.geometry)) {
                     Some(l) => self.add(vec![l], ctx),
                     None => return Err("Select a circle or a closed polyline.".into()),

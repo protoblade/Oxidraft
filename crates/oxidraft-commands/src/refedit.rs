@@ -38,7 +38,7 @@ impl Command for RefEdit {
                     ctx.messages.push("** A reference is already being edited; end it with REFCLOSE **".into());
                     return Ok(Step::Done);
                 }
-                let id = snap::pick(ctx.doc, at, ctx.pick_tolerance).ok_or("No object found.")?;
+                let id = ctx.pick(at).ok_or("No object found.")?;
                 ctx.messages.extend(open(ctx.doc, id)?);
                 Ok(Step::Done)
             }

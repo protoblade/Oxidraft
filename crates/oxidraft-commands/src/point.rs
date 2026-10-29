@@ -1,7 +1,7 @@
 //! POINT, DIVIDE and MEASURE, and the point style (PDMODE, PDSIZE).
 
 use oxidraft_geom::{EPSILON, Point, curve::Seg};
-use oxidraft_model::{Document, Geometry, Placement, snap};
+use oxidraft_model::{Document, Geometry, Placement};
 
 use crate::{Command, Ctx, Input, Prompt, Step};
 
@@ -202,7 +202,7 @@ impl Command for Marks {
     fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
         match (self.stage.clone(), input) {
             (Stage::Object, Input::Pick { at, .. }) => {
-                let Some(e) = snap::pick(ctx.doc, at, ctx.pick_tolerance).and_then(|id| ctx.doc.entity(id)) else {
+                let Some(e) = ctx.pick(at).and_then(|id| ctx.doc.entity(id)) else {
                     return Err("No object found.".into());
                 };
                 let g = &e.geometry;

@@ -2,7 +2,7 @@
 //! polygon, or made from an existing object.
 
 use oxidraft_geom::{Point, curve::Seg};
-use oxidraft_model::{EntityId, Geometry, Vertex, snap};
+use oxidraft_model::{EntityId, Geometry, Vertex};
 
 use crate::{Command, Ctx, Input, Prompt, Step, Vars};
 
@@ -198,7 +198,7 @@ impl Command for RevCloud {
                 return Ok(Step::Done);
             }
             (Stage::Object, Input::Pick { at, .. }) => {
-                let id = snap::pick(ctx.doc, at, ctx.pick_tolerance).ok_or("No object found.")?;
+                let id = ctx.pick(at).ok_or("No object found.")?;
                 let g = &ctx.doc.entity(id).ok_or("No object found.")?.geometry;
                 if g.segments().is_empty() || g.is_infinite() {
                     return Err(format!("A {} can't become a revision cloud.", g.name()));

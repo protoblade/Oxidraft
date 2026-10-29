@@ -1364,3 +1364,32 @@ fn page_setup_on_the_model_tab_keeps_the_plot_settings() {
     h.run_steps(1);
     assert!(!h.state_mut().plot_settings_mut().unwrap().landscape);
 }
+
+#[test]
+fn the_selection_list_picks_for_one_object_prompts_too() {
+    let mut h = app_with_line();
+    let over = h.state_mut().document_mut().add(Geometry::Polyline {
+        vertices: vec![
+            oxidraft_model::Vertex::at(Point::new(0.0, 0.0)),
+            oxidraft_model::Vertex::at(Point::new(100.0, 0.0)),
+        ],
+        closed: false,
+    });
+    h.run_steps(2);
+    // OFFSET by 5 the polyline, not the line beneath it.
+    type_all(&mut h, &["o", "5"]);
+    let at = screen(&h, 50.0, 0.0);
+    click(&mut h, at);
+    h.run_steps(2);
+    let item = h.get_all_by_label("Polyline").find(|n| n.rect().min.y > at.y).expect("listed");
+    item.click();
+    h.run_steps(2);
+    let side = screen(&h, 50.0, 10.0);
+    click(&mut h, side);
+    type_all(&mut h, &[""]);
+    let doc = h.state_mut().document_mut();
+    let offset: Vec<_> =
+        doc.entities().filter(|e| e.id != over && matches!(e.geometry, Geometry::Polyline { .. })).collect();
+    assert_eq!(offset.len(), 1, "the polyline was offset");
+    assert_eq!(doc.entities().filter(|e| matches!(e.geometry, Geometry::Line { .. })).count(), 2, "the lines weren't");
+}

@@ -7,13 +7,12 @@ use oxidraft_model::{
         BASELINE_SPACING, angle_around, angular_measurement, dimension_text, format_angle, format_measurement,
         measurement, radial_value, two_line_angle,
     },
-    snap,
 };
 
 use crate::{Command, Ctx, Input, Prompt, Step, Vars};
 
 fn picked(ctx: &Ctx, at: Point) -> Result<(EntityId, Geometry), String> {
-    let id = snap::pick(ctx.doc, at, ctx.pick_tolerance).ok_or("No object found.")?;
+    let id = ctx.pick(at).ok_or("No object found.")?;
     let g = ctx.doc.entity(id).map(|e| e.geometry.clone()).ok_or("No object found.")?;
     Ok((id, g))
 }

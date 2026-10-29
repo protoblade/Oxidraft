@@ -1,7 +1,7 @@
 //! XLINE and RAY: construction lines, infinite both ways or one way.
 
 use oxidraft_geom::{Point, curve::Seg};
-use oxidraft_model::{Geometry, snap};
+use oxidraft_model::Geometry;
 
 use crate::{Command, Ctx, Input, Prompt, Step, Vars};
 
@@ -81,7 +81,7 @@ impl ConstructionLine {
 
     /// The straight line picked for Offset: a point on it and its direction.
     fn picked_line(ctx: &Ctx, at: Point) -> Option<(Point, Point)> {
-        let g = &ctx.doc.entity(snap::pick(ctx.doc, at, ctx.pick_tolerance)?)?.geometry;
+        let g = &ctx.doc.entity(ctx.pick(at)?)?.geometry;
         match g {
             Geometry::Line { start, end } => Some((*start, *end - *start)),
             Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => Some((*base, *direction)),

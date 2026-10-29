@@ -39,9 +39,9 @@ impl Command for TrimExtend {
         match input {
             Input::Pick { at, shift } => {
                 let changes = if self.extend != shift {
-                    extend_at(ctx.doc, at, ctx.pick_tolerance)?
+                    extend_at(ctx.doc, at, ctx.pick_tolerance, ctx.chosen)?
                 } else {
-                    trim_at(ctx.doc, at, ctx.pick_tolerance)?
+                    trim_at(ctx.doc, at, ctx.pick_tolerance, ctx.chosen)?
                 };
                 if changes > 0 {
                     self.history.push(changes);

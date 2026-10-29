@@ -514,8 +514,9 @@ impl OxidraftApp {
             let on_grip = !self.engine.is_active()
                 && !shift
                 && self.engine.grips(&self.doc).iter().any(|g| g.distance(c.raw) <= tolerance);
-            if self.selection_cycling && self.engine.is_selecting() && self.engine.window_start().is_none() && !on_grip
-            {
+            // At a selection prompt, or one taking a single object.
+            let selecting = self.engine.is_selecting() && self.engine.window_start().is_none() && !on_grip;
+            if self.selection_cycling && (selecting || self.engine.is_picking()) {
                 let ids = snap::pick_overlapping(&self.doc, c.raw, tolerance, self.view.units(OVERLAP));
                 if ids.len() > 1 {
                     self.cycling = Some(Cycling { screen: c.screen, at: c.raw, shift, ids, hovered: None });

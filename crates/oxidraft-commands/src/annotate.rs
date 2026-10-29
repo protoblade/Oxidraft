@@ -4,7 +4,6 @@ use oxidraft_geom::{EPSILON, Point};
 use oxidraft_model::{
     Attach, Geometry, Vertex,
     annotation::{LINE_SPACING, dimension_text, format_measurement, measurement},
-    snap,
 };
 
 use crate::{Command, Ctx, Input, Prompt, Step, Vars};
@@ -322,7 +321,7 @@ impl Command for Dimension {
             (DimStage::First, Input::Point(p)) => self.stage = DimStage::Second { p1: p },
             (DimStage::First, Input::Enter) => self.stage = DimStage::PickObject,
             (DimStage::PickObject, Input::Pick { at, .. }) => {
-                let picked = snap::pick(ctx.doc, at, ctx.pick_tolerance).and_then(|id| ctx.doc.entity(id));
+                let picked = ctx.pick(at).and_then(|id| ctx.doc.entity(id));
                 let Some(Geometry::Line { start, end }) = picked.map(|e| &e.geometry) else {
                     return Err("Select a line.".into());
                 };

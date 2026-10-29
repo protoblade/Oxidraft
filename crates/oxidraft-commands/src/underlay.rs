@@ -2,7 +2,7 @@
 //! cursor until its corner is picked), and IMAGECLIP.
 
 use oxidraft_geom::{Aabb, Point};
-use oxidraft_model::{Color, Document, EntityId, Geometry, ImageDef, Vertex, image_corners, sanitize_name, snap};
+use oxidraft_model::{Color, Document, EntityId, Geometry, ImageDef, Vertex, image_corners, sanitize_name};
 
 use crate::{Command, Ctx, Input, Prompt, Step};
 
@@ -115,7 +115,7 @@ impl Command for ImageClip {
     fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
         match (self.stage.clone(), input) {
             (Stage::Pick, Input::Pick { at, .. }) => {
-                let id = snap::pick(ctx.doc, at, ctx.pick_tolerance).ok_or("No object found.")?;
+                let id = ctx.pick(at).ok_or("No object found.")?;
                 if !matches!(ctx.doc.entity(id).map(|e| &e.geometry), Some(Geometry::Image { .. })) {
                     return Err("Select an image or PDF underlay.".into());
                 }

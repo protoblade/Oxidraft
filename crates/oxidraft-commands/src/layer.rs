@@ -114,7 +114,7 @@ impl LayerPick {
         let id = if self.action == Action::Unlock {
             snap::pick_locked(ctx.doc, at, ctx.pick_tolerance)
         } else {
-            snap::pick(ctx.doc, at, ctx.pick_tolerance)
+            ctx.pick(at)
         };
         let layer = id.and_then(|id| ctx.doc.entity(id)).and_then(|e| ctx.doc.layer(&e.layer)).cloned();
         let Some(layer) = layer else { return Err("No object found.".into()) };

@@ -271,6 +271,19 @@ pub struct Ctx<'a> {
     pub ui: Option<UiRequest>,
     /// What COPYCLIP and friends copied, for the clipboard.
     pub copied: Option<Document>,
+    /// At a one-object prompt, the object chosen from the Selection list
+    /// of objects on top of each other where it was clicked.
+    pub chosen: Option<EntityId>,
+}
+
+impl Ctx<'_> {
+    /// The object a click at `at` picks: the one chosen from the
+    /// Selection list, or the nearest.
+    pub fn pick(&self, at: Point) -> Option<EntityId> {
+        self.chosen
+            .filter(|id| self.doc.entity(*id).is_some())
+            .or_else(|| oxidraft_model::snap::pick(self.doc, at, self.pick_tolerance))
+    }
 }
 
 pub trait Command {

@@ -1,5 +1,5 @@
 use oxidraft_geom::Point;
-use oxidraft_model::{EntityId, Geometry, snap};
+use oxidraft_model::{EntityId, Geometry};
 
 use crate::{
     Command, Ctx, Input, Prompt, Step, Vars,
@@ -40,7 +40,7 @@ impl Default for Chamfer {
 const ONLY_LINES: &str = "Only lines can be chamfered so far (use the Polyline option for polyline corners).";
 
 fn line_at(ctx: &Ctx, at: Point) -> Result<(EntityId, (Point, Point)), String> {
-    let id = snap::pick(ctx.doc, at, ctx.pick_tolerance).ok_or("No object found.")?;
+    let id = ctx.pick(at).ok_or("No object found.")?;
     match ctx.doc.entity(id).map(|e| &e.geometry) {
         Some(Geometry::Line { start, end }) => Ok((id, (*start, *end))),
         _ => Err(ONLY_LINES.into()),
@@ -125,7 +125,7 @@ impl Command for Chamfer {
                 return Ok(Step::Done);
             }
             (Stage::Polyline, Input::Pick { at, .. }) => {
-                let id = snap::pick(ctx.doc, at, ctx.pick_tolerance).ok_or("No object found.")?;
+                let id = ctx.pick(at).ok_or("No object found.")?;
                 let Some(Geometry::Polyline { vertices, closed }) = ctx.doc.entity(id).map(|e| e.geometry.clone())
                 else {
                     return Err("Object selected is not a 2D polyline.".into());

@@ -705,6 +705,8 @@ pub struct Engine {
     selection: Vec<EntityId>,
     /// Windows used to build `selection` (for STRETCH).
     selection_windows: Vec<Aabb>,
+    /// The object picked from the Selection list, for the next pick.
+    chosen: Option<EntityId>,
     /// Lassos used to build `selection` (for STRETCH too).
     selection_lassos: Vec<Vec<Point>>,
     /// First corner of a selection window in progress.
@@ -744,6 +746,7 @@ impl Engine {
             selection: Vec::new(),
             selection_windows: Vec::new(),
             selection_lassos: Vec::new(),
+            chosen: None,
             window_start: None,
             ortho: false,
             polar: true,
@@ -1242,9 +1245,16 @@ impl Engine {
         self.end_single_selection(doc, at, tolerance);
     }
 
-    /// One object picked at a selection prompt, as clicking it alone would
-    /// (the Selection list of overlapping objects).
+    /// One object picked at a selection prompt, or a one-object prompt,
+    /// as clicking it alone would (the Selection list of overlapping
+    /// objects).
     pub fn select_object(&mut self, id: EntityId, at: Point, shift: bool, doc: &mut Document, tolerance: f64) {
+        if self.is_picking() {
+            self.chosen = Some(id);
+            self.feed(Input::Pick { at, shift }, doc, at, tolerance);
+            self.chosen = None;
+            return;
+        }
         if !self.is_selecting() {
             return;
         }
@@ -1457,6 +1467,7 @@ impl Engine {
             select: None,
             ui: None,
             copied: None,
+            chosen: self.chosen.take(),
         };
         let result = active.cmd.input(input, &mut ctx);
         let messages = std::mem::take(&mut ctx.messages);

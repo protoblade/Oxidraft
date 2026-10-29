@@ -2,7 +2,7 @@
 //! measure; and LTSCALE, which sets a drawing setting.
 
 use oxidraft_geom::{Point, curve::Seg};
-use oxidraft_model::{Document, Geometry, Vertex, hatch, snap};
+use oxidraft_model::{Document, Geometry, Vertex, hatch};
 
 use crate::{Command, Ctx, Input, Prompt, Step};
 
@@ -153,7 +153,7 @@ impl Command for Area {
     fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
         match input {
             Input::Pick { at, .. } if self.object => {
-                let id = snap::pick(ctx.doc, at, ctx.pick_tolerance).ok_or("No object found.")?;
+                let id = ctx.pick(at).ok_or("No object found.")?;
                 let g = ctx.doc.entity(id).map(|e| e.geometry.clone()).ok_or("No object found.")?;
                 let (area, perimeter, word) = object_area(&g).ok_or("Selected object does not have an area.")?;
                 Self::report(ctx, area, perimeter, word);

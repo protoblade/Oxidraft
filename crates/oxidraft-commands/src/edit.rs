@@ -104,8 +104,13 @@ fn check_trimmable(g: &Geometry) -> Result<(), String> {
 
 /// TRIM in Quick mode: every other object is a cutting edge. Returns the
 /// number of document changes (for the command's Undo option).
-pub(crate) fn trim_at(doc: &mut Document, at: Point, tolerance: f64) -> Result<usize, String> {
-    let Some(id) = snap::pick(doc, at, tolerance) else { return Ok(0) };
+pub(crate) fn trim_at(
+    doc: &mut Document,
+    at: Point,
+    tolerance: f64,
+    chosen: Option<EntityId>,
+) -> Result<usize, String> {
+    let Some(id) = chosen.or_else(|| snap::pick(doc, at, tolerance)) else { return Ok(0) };
     let Some(e) = doc.entity(id).cloned() else { return Ok(0) };
     check_trimmable(&e.geometry)?;
     let cuts: Vec<f64> = visible_others(doc, id).iter().flat_map(|o| e.geometry.intersection_params(o)).collect();
@@ -132,8 +137,13 @@ pub(crate) fn trim_at(doc: &mut Document, at: Point, tolerance: f64) -> Result<u
 }
 
 /// EXTEND in Quick mode: every other object is a boundary edge.
-pub(crate) fn extend_at(doc: &mut Document, at: Point, tolerance: f64) -> Result<usize, String> {
-    let Some(id) = snap::pick(doc, at, tolerance) else { return Ok(0) };
+pub(crate) fn extend_at(
+    doc: &mut Document,
+    at: Point,
+    tolerance: f64,
+    chosen: Option<EntityId>,
+) -> Result<usize, String> {
+    let Some(id) = chosen.or_else(|| snap::pick(doc, at, tolerance)) else { return Ok(0) };
     let Some(g) = doc.entity(id).map(|e| e.geometry.clone()) else { return Ok(0) };
     check_trimmable(&g)?;
     let boundaries: Vec<Seg> = visible_others(doc, id).iter().flat_map(Geometry::segments).collect();

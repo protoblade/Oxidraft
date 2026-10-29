@@ -1,4 +1,4 @@
-use oxidraft_model::{Entity, EntityId, snap};
+use oxidraft_model::{Entity, EntityId};
 
 use crate::{Command, Ctx, Input, Prompt, Step};
 
@@ -30,7 +30,7 @@ impl Command for MatchProp {
     fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
         match (&self.stage, input) {
             (Stage::Source, Input::Pick { at, .. }) => {
-                let Some(e) = snap::pick(ctx.doc, at, ctx.pick_tolerance).and_then(|id| ctx.doc.entity(id)) else {
+                let Some(e) = ctx.pick(at).and_then(|id| ctx.doc.entity(id)) else {
                     ctx.messages.push("No object found.".into());
                     return Ok(Step::Continue);
                 };
@@ -39,7 +39,7 @@ impl Command for MatchProp {
                 Ok(Step::Continue)
             }
             (Stage::Destination(source), Input::Pick { at, .. }) => {
-                if let Some(id) = snap::pick(ctx.doc, at, ctx.pick_tolerance) {
+                if let Some(id) = ctx.pick(at) {
                     let source = source.clone();
                     ctx.doc.update(id, |e| {
                         e.layer = source.layer;
