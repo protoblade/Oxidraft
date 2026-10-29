@@ -4,7 +4,7 @@
 //! clipboard as DXF.
 
 use oxidraft_geom::{Aabb, Point};
-use oxidraft_model::{Document, Entity, EntityId, Geometry};
+use oxidraft_model::{BlockEntity, Document, EntityId, Geometry};
 
 use crate::{Command, Ctx, Input, Prompt, Step};
 
@@ -24,13 +24,36 @@ fn blocks_used(doc: &Document, g: &Geometry, out: &mut Vec<String>) {
 /// A drawing holding copies of `ids` and what they need, with `base` as its
 /// INSBASE.
 pub fn clip_of(doc: &Document, ids: &[EntityId], base: Point) -> Document {
-    let entities: Vec<&Entity> = ids.iter().filter_map(|&id| doc.entity(id)).collect();
+    let entities: Vec<BlockEntity> = ids
+        .iter()
+        .filter_map(|&id| doc.entity(id))
+        .map(|e| BlockEntity {
+            layer: e.layer.clone(),
+            color: e.color,
+            linetype: e.linetype.clone(),
+            lineweight: e.lineweight,
+            geometry: e.geometry.clone(),
+        })
+        .collect();
+    excerpt(doc, &entities, base)
+}
+
+/// WBLOCK's Block source: a drawing of the block's contents and what they
+/// need, its base point as INSBASE. `None` if there's no such block.
+pub fn block_drawing(doc: &Document, name: &str) -> Option<Document> {
+    let block = doc.block(name)?;
+    Some(excerpt(doc, &block.entities, block.base))
+}
+
+/// A drawing of `entities` with the layers, linetypes and blocks they use,
+/// in `doc`'s units.
+fn excerpt(doc: &Document, entities: &[BlockEntity], base: Point) -> Document {
     let mut blocks = Vec::new();
-    for e in &entities {
+    for e in entities {
         blocks_used(doc, &e.geometry, &mut blocks);
     }
     let mut layers: Vec<&str> = Vec::new();
-    for e in &entities {
+    for e in entities {
         layers.push(&e.layer);
         if let Geometry::Insert { attributes, .. } = &e.geometry {
             layers.extend(attributes.iter().map(|a| a.layer.as_str()));
@@ -55,6 +78,7 @@ pub fn clip_of(doc: &Document, ids: &[EntityId], base: Point) -> Document {
         clip.add_styled(e.geometry.clone(), &e.layer, e.color, &e.linetype, e.lineweight);
     }
     clip.set_insbase(base);
+    clip.set_units(doc.units());
     clip
 }
 

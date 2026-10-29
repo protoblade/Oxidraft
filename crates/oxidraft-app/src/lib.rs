@@ -29,11 +29,13 @@ mod underlay;
 pub mod update;
 mod view;
 mod viewport;
+mod wblock;
 mod xref;
 
 pub use app::OxidraftApp;
 pub use layers::LAYER_MANAGER;
 pub use settings::Settings;
+pub use wblock::{Afterwards, WblockSource};
 
 /// Opens the main window.
 pub fn run() -> eframe::Result {

@@ -301,3 +301,25 @@ mod tests {
         assert_eq!(red.apply(&d, &[seed, same, door]), vec![same]);
     }
 }
+
+/// SELECT: picks objects and keeps them as the Previous selection set
+/// (for a later command's "P", or a dialog that asked for objects).
+#[derive(Default)]
+pub struct SelectCmd;
+
+impl crate::Command for SelectCmd {
+    fn prompt(&self) -> crate::Prompt {
+        crate::Prompt::new("Select objects")
+    }
+
+    fn input(&mut self, input: crate::Input, _ctx: &mut crate::Ctx) -> Result<crate::Step, String> {
+        match input {
+            crate::Input::Selection(_) | crate::Input::Enter => Ok(crate::Step::Done),
+            _ => Err("Select objects, then press Enter.".into()),
+        }
+    }
+
+    fn wants_selection(&self) -> bool {
+        true
+    }
+}

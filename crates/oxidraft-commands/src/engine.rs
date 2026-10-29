@@ -69,6 +69,7 @@ use crate::{
     revcloud::RevCloud,
     rotate::Rotate,
     scale::Scale,
+    select::SelectCmd,
     select::SelectSimilar,
     spline::SplineCmd,
     splinedit::SplinEdit,
@@ -434,6 +435,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["-REN"],
         description: "Rename a block, layer, linetype or view at the command line",
         make: Some(|| Box::new(Rename::default())),
+    },
+    CommandInfo {
+        name: "SELECT",
+        aliases: &[],
+        description: "Select objects, kept as the Previous selection",
+        make: Some(|| Box::new(SelectCmd)),
+    },
+    CommandInfo {
+        name: "WBLOCK",
+        aliases: &["W"],
+        description: "Write a block, the selected objects or the whole drawing to a drawing file",
+        make: None,
     },
     CommandInfo {
         name: "EXPORTPDF",
@@ -1903,6 +1916,11 @@ impl Engine {
         self.selection.clear();
         self.selection_windows.clear();
         self.selection_lassos.clear();
+    }
+
+    /// The objects last selected for a command ("Previous").
+    pub fn previous_selection(&self) -> &[EntityId] {
+        &self.previous
     }
 
     fn take_selection(&mut self) -> Selection {

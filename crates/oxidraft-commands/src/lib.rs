@@ -74,7 +74,7 @@ mod xref;
 mod zoom;
 
 pub use cleanup::object_key;
-pub use clipboard::{clip_of, paste};
+pub use clipboard::{block_drawing, clip_of, paste};
 pub use engine::{COMMANDS, CommandInfo, Engine, Tracked};
 pub use input::{Input, parse_input};
 pub use mview::{viewport_at, viewport_onto_model};

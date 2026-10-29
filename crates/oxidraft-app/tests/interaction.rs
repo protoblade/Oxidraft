@@ -1881,3 +1881,58 @@ fn rename_dialog_renames_a_layer() {
     h.run_steps(2);
     assert!(h.query_by_label("Rename To:").is_none());
 }
+
+#[test]
+fn write_block_writes_blocks_objects_and_the_drawing() {
+    use oxidraft_app::{Afterwards, WblockSource};
+    let dir = std::env::temp_dir().join(format!("oxidraft-wblock-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let read = |path: &std::path::Path| match oxidraft_io_dwg::is_dwg(path) {
+        true => oxidraft_io_dwg::load_file(path).unwrap().imported.document,
+        false => oxidraft_io_dxf::load_file(path).unwrap().document,
+    };
+    let mut h = app_with_line();
+    let circle = Geometry::Circle { center: Point::new(5.0, 5.0), radius: 2.0 };
+    let block = oxidraft_model::Block {
+        name: "Bolt".into(),
+        base: Point::new(5.0, 5.0),
+        entities: vec![oxidraft_model::BlockEntity::new("0", oxidraft_model::Color::ByLayer, circle)],
+    };
+    h.state_mut().document_mut().define_block(block);
+    // A block: its contents, its base point as the drawing's.
+    let bolt = dir.join("bolt.dwg");
+    let app = h.state_mut();
+    app.write_block(&WblockSource::Block("Bolt".into()), Point::ORIGIN, Afterwards::Retain, 4, &bolt).unwrap();
+    let back = read(&bolt);
+    assert_eq!(back.entities().count(), 1);
+    assert_eq!(back.insbase(), Point::new(5.0, 5.0));
+    assert_eq!(back.units().insertion, 4);
+    // Objects, then made a block of that name in their place.
+    let lines: Vec<_> = h.state_mut().document_mut().entities().map(|e| e.id).collect();
+    let part = dir.join("part.dxf");
+    let source = WblockSource::Objects(lines.clone());
+    h.state_mut().write_block(&source, Point::ORIGIN, Afterwards::ConvertToBlock, 1, &part).unwrap();
+    assert_eq!(read(&part).entities().count(), 2);
+    assert_eq!(read(&part).units().insertion, 1, "inches");
+    let doc = h.state_mut().document_mut();
+    assert!(doc.block("part").is_some() && lines.iter().all(|id| doc.entity(*id).is_none()));
+    assert!(doc.entities().any(|e| matches!(&e.geometry, Geometry::Insert { block, .. } if block == "part")));
+
+    // The dialog: Objects, picked in the drawing with SELECT.
+    h.state_mut().document_mut().undo();
+    h.run_steps(2);
+    type_all(&mut h, &["w"]);
+    h.run_steps(2);
+    h.get_by_label("Objects").click();
+    h.run_steps(2);
+    h.get_by_label("Select objects").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Write Block").is_none(), "out of the way while selecting");
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("SELECT"));
+    let wall = screen(&h, 50.0, 0.0);
+    click(&mut h, wall);
+    type_all(&mut h, &[""]);
+    h.run_steps(2);
+    assert!(h.query_by_label("1 objects selected").is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}
