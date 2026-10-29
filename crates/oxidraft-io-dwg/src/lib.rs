@@ -563,7 +563,7 @@ mod tests {
             text_at: Some(Point::new(30.0, 10.0)),
             text_angle: Some(15.0),
             oblique: Some(60.0),
-            breaks: Vec::new(),
+            ..Default::default()
         };
         doc.add(Geometry::Dimension {
             p1: Point::new(0.0, 0.0),
@@ -585,6 +585,36 @@ mod tests {
             assert_eq!(got.oblique.map(|a| (a * 1e6).round() / 1e6), Some(60.0), "{how}");
             let at = got.text_at.unwrap_or_else(|| panic!("text not where it was put ({how})"));
             assert!((at.x - 30.0).abs() < 1e-6, "{how}: {at:?}");
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        check(&oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
+    fn tolerances_survive() {
+        let mut doc = Document::new();
+        let content = "{\\Fgdt;j}%%v{\\Fgdt;n}0.05{\\Fgdt;m}%%vA%%vB";
+        doc.add(Geometry::Tolerance {
+            position: Point::new(10.0, 5.0),
+            height: 2.5,
+            rotation: 30.0,
+            content: content.into(),
+        });
+        let check = |back: &Document, how: &str| {
+            let got = back.entities().find_map(|e| match &e.geometry {
+                Geometry::Tolerance { position, rotation, content, .. } => {
+                    Some((*position, *rotation, content.clone()))
+                }
+                _ => None,
+            });
+            let (p, r, c) = got.unwrap_or_else(|| panic!("no tolerance ({how})"));
+            assert!(p.approx_eq(Point::new(10.0, 5.0)) && (r - 30.0).abs() < 1e-6, "{how}: {p:?} {r}");
+            assert_eq!(c, content, "{how}");
         };
         let mut ours = Vec::new();
         oxidraft_io_dxf::write(&doc, &mut ours).unwrap();

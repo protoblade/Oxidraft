@@ -480,6 +480,16 @@ impl Exporter {
             // The dxf crate has no VIEWPORT: they're added with their layouts.
             Geometry::Viewport { .. } => Vec::new(),
             Geometry::Wipeout { points } => wipeout_to_dxf(points).into_iter().collect(),
+            Geometry::Tolerance { position, rotation, content, .. } => {
+                let r = rotation.to_radians();
+                vec![EntityType::Tolerance(dxf::entities::Tolerance {
+                    dimension_style_name: "STANDARD".into(),
+                    insertion_point: to_dxf(*position),
+                    display_text: content.clone(),
+                    direction_vector: dxf::Vector::new(r.cos(), r.sin(), 0.0),
+                    ..Default::default()
+                })]
+            }
             Geometry::OrdinateDimension { feature, leader_end, x_datum, text, .. } => {
                 let (block_name, text_mid) = self.dimension_block(g, layer);
                 let mut dimension_base = dxf::entities::DimensionBase {
@@ -1151,7 +1161,7 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
                     text_at: base.is_at_user_defined_location.then(|| from_dxf(&base.text_mid_point)),
                     text_angle: some(base.text_rotation_angle).map(|a| readable + a),
                     oblique: some(d.extension_line_angle),
-                    breaks: Vec::new(),
+                    ..Default::default()
                 }),
                 p1,
                 p2,
@@ -1160,6 +1170,16 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
                 aligned,
                 text: dimension_override(base),
                 scale: 1.0,
+            }
+        }
+        // Its height is the dimension style's text height.
+        EntityType::Tolerance(t) => {
+            let v = &t.direction_vector;
+            Geometry::Tolerance {
+                position: from_dxf(&t.insertion_point),
+                height: oxidraft_model::annotation::dim_style().text_height,
+                rotation: if v.x.hypot(v.y) > 1e-9 { v.y.atan2(v.x).to_degrees() } else { 0.0 },
+                content: t.display_text.clone(),
             }
         }
         EntityType::OrdinateDimension(d) => Geometry::OrdinateDimension {

@@ -875,6 +875,43 @@ fn main() {
     h.run_steps(3);
     save(&mut h, &dir, "44-text-style");
 
+    // A tolerance frame, and dimensions jogged, slanted and with text moved.
+    let mut h = harness();
+    {
+        let doc = h.state_mut().document_mut();
+        doc.add(Geometry::Tolerance {
+            position: Point::new(5.0, 50.0),
+            height: 2.5,
+            rotation: 0.0,
+            content: "{\\Fgdt;j}%%v{\\Fgdt;n}0.05{\\Fgdt;m}%%vA%%vB%%vC^J{\\Fgdt;c}%%v0.02".into(),
+        });
+        let dim = |y: f64, extra: oxidraft_model::annotation::DimExtra| Geometry::Dimension {
+            p1: Point::new(0.0, 0.0),
+            p2: Point::new(60.0, 0.0),
+            line: Point::new(30.0, y),
+            rotation: 0.0,
+            aligned: false,
+            text: None,
+            scale: 1.0,
+            extra: Box::new(extra),
+        };
+        doc.add(dim(
+            -8.0,
+            oxidraft_model::annotation::DimExtra { jog: Some(Point::new(15.0, -8.0)), ..Default::default() },
+        ));
+        doc.add(dim(
+            -16.0,
+            oxidraft_model::annotation::DimExtra {
+                oblique: Some(60.0),
+                text_at: Some(Point::new(48.0, -16.0)),
+                ..Default::default()
+            },
+        ));
+    }
+    h.state_mut().type_command("ze");
+    h.run_steps(3);
+    save(&mut h, &dir, "45-tolerance-dims");
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");

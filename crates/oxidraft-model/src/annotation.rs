@@ -341,6 +341,10 @@ pub fn dimension_primitives(
     scale: f64,
     extra: &DimExtra,
 ) -> Vec<Geometry> {
+    if let Some(style) = extra.style {
+        let plain = DimExtra { style: None, ..extra.clone() };
+        return with_dim_style(style, || dimension_primitives(p1, p2, line, rotation, aligned, text, scale, &plain));
+    }
     let s = &dim_style();
     let r = if aligned { p1.angle_to(p2) } else { rotation };
     let u = Point::ORIGIN.polar(1.0, r);
@@ -371,7 +375,19 @@ pub fn dimension_primitives(
     let text_mid = extra.text_at.map_or(d1.midpoint(d2), |t| d1 + u * (t - d1).dot(u));
     let along = |p: Point| (p - d1).dot(u);
     let (lo, hi) = (along(d1).min(along(d2)).min(along(text_mid)), along(d1).max(along(d2)).max(along(text_mid)));
-    out.push(Geometry::Line { start: d1 + u * lo, end: d1 + u * hi });
+    match extra.jog.map(|j| d1 + u * (j - d1).dot(u)).filter(|j| along(*j) > lo && along(*j) < hi) {
+        // A zigzag across the line where it's jogged.
+        Some(j) => {
+            let (w, n) = (s.text_height * scale * 0.75, Point::ORIGIN.polar(s.text_height * scale * 0.75, r + 90.0));
+            let zig = [j - u * w, j - u * (w * 0.3) + n, j + u * (w * 0.3) - n, j + u * w];
+            out.push(Geometry::Line { start: d1 + u * lo, end: zig[0] });
+            for k in 0..3 {
+                out.push(Geometry::Line { start: zig[k], end: zig[k + 1] });
+            }
+            out.push(Geometry::Line { start: zig[3], end: d1 + u * hi });
+        }
+        None => out.push(Geometry::Line { start: d1 + u * lo, end: d1 + u * hi }),
+    }
     let mut out = cut_breaks(out, &extra.breaks);
     let len = d1.distance(d2);
     if len > EPSILON {
@@ -405,6 +421,10 @@ pub struct DimExtra {
     /// Gaps cut in its lines (DIMBREAK): each from one point to another
     /// on the same line.
     pub breaks: Vec<(Point, Point)>,
+    /// A jog in its dimension line here (DIMJOGLINE).
+    pub jog: Option<Point>,
+    /// Its own style, overriding the drawing's (DIMOVERRIDE).
+    pub style: Option<DimStyle>,
 }
 
 impl DimExtra {
@@ -419,6 +439,8 @@ impl DimExtra {
             text_angle: self.text_angle.map(turn),
             oblique: self.oblique.map(turn),
             breaks: self.breaks.iter().map(|(a, b)| (f(*a), f(*b))).collect(),
+            jog: self.jog.map(f),
+            style: self.style,
         }
     }
 }
@@ -463,6 +485,173 @@ pub fn cut_breaks(lines: Vec<Geometry>, breaks: &[(Point, Point)]) -> Vec<Geomet
         }
     }
     out
+}
+
+/// A feature control frame's pieces (TOLERANCE), as AutoCAD writes them:
+/// rows split by `^J`, boxes by `%%v`, and GD&T symbols as `{\Fgdt;x}`.
+#[derive(Debug, Clone, PartialEq)]
+enum FramePiece {
+    Symbol(char),
+    Text(String),
+}
+
+fn frame_cells(content: &str) -> Vec<Vec<Vec<FramePiece>>> {
+    content
+        .split("^J")
+        .flat_map(|r| r.split('\n'))
+        .map(|row| {
+            row.split("%%v")
+                .map(|cell| {
+                    let mut pieces = Vec::new();
+                    let mut rest = cell;
+                    while !rest.is_empty() {
+                        match rest.find("{\\Fgdt;") {
+                            Some(0) => {
+                                let body = &rest[7..];
+                                let c = body.chars().next().unwrap_or(' ');
+                                pieces.push(FramePiece::Symbol(c.to_ascii_lowercase()));
+                                rest = body.find('}').map_or("", |i| &body[i + 1..]);
+                            }
+                            Some(i) => {
+                                pieces.push(FramePiece::Text(rest[..i].to_string()));
+                                rest = &rest[i..];
+                            }
+                            None => {
+                                pieces.push(FramePiece::Text(rest.to_string()));
+                                rest = "";
+                            }
+                        }
+                    }
+                    pieces
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The GD&T characteristic symbols TOLERANCE offers: their font letter and name.
+pub const GDT_SYMBOLS: &[(char, &str)] = &[
+    ('j', "Position"),
+    ('r', "Concentricity"),
+    ('i', "Symmetry"),
+    ('f', "Parallelism"),
+    ('b', "Perpendicularity"),
+    ('a', "Angularity"),
+    ('g', "Cylindricity"),
+    ('c', "Flatness"),
+    ('e', "Circularity"),
+    ('u', "Straightness"),
+    ('d', "Profile of a surface"),
+    ('k', "Profile of a line"),
+    ('h', "Circular runout"),
+    ('t', "Total runout"),
+];
+
+/// A GD&T symbol drawn about `c`, `k` its size (the text height).
+fn gdt_symbol(sym: char, c: Point, k: f64) -> Vec<Geometry> {
+    let p = |x: f64, y: f64| c + Point::new(x * k, y * k);
+    let line = |a: Point, b: Point| Geometry::Line { start: a, end: b };
+    let circle = |r: f64| Geometry::Circle { center: c, radius: r * k };
+    let arrow = |from: Point, to: Point| {
+        let d = to - from;
+        vec![line(from, to), arrowhead(to, d * (-1.0 / d.length().max(1e-12)), 0.35 * k)]
+    };
+    match sym {
+        'j' => vec![circle(0.5), line(p(-0.75, 0.0), p(0.75, 0.0)), line(p(0.0, -0.75), p(0.0, 0.75))],
+        'r' => vec![circle(0.3), circle(0.6)],
+        'i' => {
+            vec![line(p(-0.4, 0.4), p(0.4, 0.4)), line(p(-0.7, 0.0), p(0.7, 0.0)), line(p(-0.4, -0.4), p(0.4, -0.4))]
+        }
+        'f' => vec![line(p(-0.6, -0.5), p(-0.1, 0.5)), line(p(0.1, -0.5), p(0.6, 0.5))],
+        'b' => vec![line(p(-0.6, -0.5), p(0.6, -0.5)), line(p(0.0, -0.5), p(0.0, 0.6))],
+        'a' => vec![line(p(-0.6, -0.5), p(0.6, -0.5)), line(p(-0.6, -0.5), p(0.5, 0.4))],
+        'g' => vec![circle(0.4), line(p(-0.75, -0.6), p(-0.25, 0.6)), line(p(0.25, -0.6), p(0.75, 0.6))],
+        'c' => {
+            let pts = [p(-0.6, -0.35), p(0.35, -0.35), p(0.6, 0.35), p(-0.35, 0.35)];
+            (0..4).map(|i| line(pts[i], pts[(i + 1) % 4])).collect()
+        }
+        'e' => vec![circle(0.55)],
+        'u' => vec![line(p(-0.7, 0.0), p(0.7, 0.0))],
+        'd' | 'k' => {
+            let mut out =
+                vec![Geometry::Arc { center: p(0.0, -0.35), radius: 0.6 * k, start_angle: 0.0, end_angle: 180.0 }];
+            if sym == 'd' {
+                out.push(line(p(-0.6, -0.35), p(0.6, -0.35)));
+            }
+            out
+        }
+        'h' => arrow(p(-0.4, -0.6), p(0.4, 0.6)),
+        't' => {
+            let mut out = arrow(p(-0.6, -0.6), p(0.0, 0.6));
+            out.extend(arrow(p(0.0, -0.6), p(0.6, 0.6)));
+            out.push(line(p(-0.6, -0.6), p(0.0, -0.6)));
+            out
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// A feature control frame's boxes, symbols and text, its first row's
+/// left middle at `position`.
+pub fn tolerance_primitives(position: Point, height: f64, rotation: f64, content: &str) -> Vec<Geometry> {
+    let k = height;
+    let row_h = 2.0 * k;
+    let mut out = Vec::new();
+    let text_at = |at: Point, s: &str, attach: Attach| Geometry::Text {
+        look: Default::default(),
+        position: at,
+        height: k,
+        rotation: 0.0,
+        width: 0.0,
+        attach,
+        content: s.to_string(),
+    };
+    let text = |at: Point, s: &str| text_at(at, s, Attach::MiddleLeft);
+    for (r, row) in frame_cells(content).iter().enumerate() {
+        let y = -(r as f64) * row_h;
+        let mut x = 0.0;
+        for cell in row.iter().filter(|c| !c.is_empty()) {
+            // A characteristic symbol alone: a square box; else as wide as its contents.
+            let alone = matches!(cell.as_slice(), [FramePiece::Symbol(c)] if GDT_SYMBOLS.iter().any(|s| s.0 == *c));
+            let mut inner = Vec::new();
+            let mut w = 0.4 * k;
+            for piece in cell {
+                match piece {
+                    FramePiece::Symbol(c) if alone => inner.extend(gdt_symbol(*c, Point::new(row_h / 2.0, y), k)),
+                    // Ø, and material conditions circled.
+                    FramePiece::Symbol('n') => {
+                        inner.push(text(Point::new(x + w, y), "Ø"));
+                        w += text_extent("Ø", k, 0.0).0 * 1.25 + 0.15 * k;
+                    }
+                    FramePiece::Symbol(c @ ('m' | 'l' | 's' | 'p')) => {
+                        let letter = c.to_ascii_uppercase().to_string();
+                        let center = Point::new(x + w + 0.25 * k + 0.6 * k, y);
+                        inner.push(Geometry::Circle { center, radius: 0.6 * k });
+                        inner.push(text_at(center, &letter, Attach::MiddleCenter));
+                        w += 1.6 * k;
+                    }
+                    FramePiece::Symbol(_) => {}
+                    FramePiece::Text(t) => {
+                        // Room as the drawing area's type sets it, which runs wider.
+                        inner.push(text(Point::new(x + w, y), t));
+                        w += text_extent(t, k, 0.0).0 * 1.25;
+                    }
+                }
+            }
+            let width = if alone { row_h } else { (w + 0.4 * k).max(row_h) };
+            let corners = [
+                Point::new(x, y - k),
+                Point::new(x + width, y - k),
+                Point::new(x + width, y + k),
+                Point::new(x, y + k),
+            ];
+            out.push(Geometry::Polyline { vertices: corners.iter().map(|p| Vertex::at(*p)).collect(), closed: true });
+            out.extend(inner);
+            x += width;
+        }
+    }
+    // Placed and turned.
+    out.into_iter().map(|g| g.translated(position).rotated(position, rotation)).collect()
 }
 
 /// DIMDLI: spacing between stacked baseline dimensions, at scale 1.

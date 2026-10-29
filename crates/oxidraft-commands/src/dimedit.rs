@@ -390,6 +390,274 @@ impl Command for DimBreak {
     }
 }
 
+/// TOLERANCE (TOL): a feature control frame placed where picked. Its
+/// content comes typed as AutoCAD writes it, or from the app's Geometric
+/// Tolerance dialog.
+#[derive(Default)]
+pub struct Tolerance {
+    content: Option<String>,
+    height: f64,
+}
+
+impl Command for Tolerance {
+    fn start(&mut self, vars: &crate::Vars) -> Option<String> {
+        self.height = oxidraft_model::annotation::dim_style().text_height * vars.dim_scale;
+        None
+    }
+
+    fn prompt(&self) -> Prompt {
+        match self.content {
+            None => Prompt::new("Enter tolerance (as {\\Fgdt;j}%%v0.1%%vA, rows split by ^J)"),
+            Some(_) => Prompt::new("Enter tolerance location"),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (&self.content, input) {
+            (None, Input::Text(t)) if !t.trim().is_empty() => self.content = Some(t),
+            (Some(content), Input::Point(p)) => {
+                ctx.doc.add(Geometry::Tolerance {
+                    position: p,
+                    height: self.height,
+                    rotation: 0.0,
+                    content: content.clone(),
+                });
+                return Ok(Step::Done);
+            }
+            (_, Input::Enter) => return Ok(Step::Done),
+            _ => return Err("Enter the tolerance, then its location.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn preview(&self, cursor: Point) -> Vec<Geometry> {
+        match &self.content {
+            Some(c) => {
+                vec![Geometry::Tolerance { position: cursor, height: self.height, rotation: 0.0, content: c.clone() }]
+            }
+            None => Vec::new(),
+        }
+    }
+
+    fn wants_text(&self) -> bool {
+        self.content.is_none()
+    }
+
+    fn text_with_spaces(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum JogStage {
+    Select,
+    Remove,
+    Location(EntityId),
+}
+
+/// DIMJOGLINE (DJL): a jog in a linear dimension's line, where picked (or
+/// halfway); Remove takes it out.
+pub struct DimJogLine {
+    stage: JogStage,
+}
+
+impl Default for DimJogLine {
+    fn default() -> Self {
+        Self { stage: JogStage::Select }
+    }
+}
+
+impl Command for DimJogLine {
+    fn prompt(&self) -> Prompt {
+        match self.stage {
+            JogStage::Select => Prompt::new("Select dimension to add jog").with_keywords(&["Remove"]),
+            JogStage::Remove => Prompt::new("Select jog to remove"),
+            JogStage::Location(_) => Prompt::new("Specify jog location (or press ENTER)"),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let dimension = |ctx: &Ctx, at: Point| {
+            ctx.pick(at)
+                .filter(|id| matches!(ctx.doc.entity(*id).map(|e| &e.geometry), Some(Geometry::Dimension { .. })))
+        };
+        match (self.stage, input) {
+            (JogStage::Select, Input::Keyword(_)) => self.stage = JogStage::Remove,
+            (JogStage::Select, Input::Pick { at, .. }) => {
+                self.stage = JogStage::Location(dimension(ctx, at).ok_or("Select a linear dimension.")?);
+            }
+            (JogStage::Remove, Input::Pick { at, .. }) => {
+                let id = dimension(ctx, at).ok_or("Select a jogged dimension.")?;
+                change(ctx, id, &|x, _| x.jog = None);
+                return Ok(Step::Done);
+            }
+            (JogStage::Location(id), input @ (Input::Point(_) | Input::Enter)) => {
+                let at = match input {
+                    Input::Point(p) => p,
+                    _ => match ctx.doc.entity(id).map(|e| &e.geometry) {
+                        Some(Geometry::Dimension { p1, p2, line, rotation, aligned, .. }) => {
+                            let r = if *aligned { p1.angle_to(*p2) } else { *rotation };
+                            let u = Point::ORIGIN.polar(1.0, r);
+                            let (d1, d2) = (*line + u * (*p1 - *line).dot(u), *line + u * (*p2 - *line).dot(u));
+                            d1.lerp(d2, 0.25)
+                        }
+                        _ => return Ok(Step::Done),
+                    },
+                };
+                change(ctx, id, &|x, _| x.jog = Some(at));
+                return Ok(Step::Done);
+            }
+            (_, Input::Enter) => return Ok(Step::Done),
+            _ => return Err("Select a dimension.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn wants_pick(&self) -> bool {
+        matches!(self.stage, JogStage::Select | JogStage::Remove)
+    }
+
+    fn highlighted(&self) -> Vec<EntityId> {
+        match self.stage {
+            JogStage::Location(id) => vec![id],
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// The dimension variables DIMOVERRIDE can set on a dimension.
+const OVERRIDABLE: &[&str] = &["DIMTXT", "DIMASZ", "DIMEXO", "DIMEXE", "DIMGAP", "DIMDEC"];
+
+fn set_variable(style: &mut oxidraft_model::annotation::DimStyle, name: &str, v: f64) -> Result<(), String> {
+    match name {
+        "DIMTXT" if v > 0.0 => style.text_height = v,
+        "DIMASZ" if v >= 0.0 => style.arrow_size = v,
+        "DIMEXO" if v >= 0.0 => style.ext_offset = v,
+        "DIMEXE" if v >= 0.0 => style.ext_beyond = v,
+        "DIMGAP" => style.gap = v,
+        "DIMDEC" if (0.0..=8.0).contains(&v) && v.fract() == 0.0 => style.decimals = v as usize,
+        _ => return Err(format!("Invalid value for {name}.")),
+    }
+    Ok(())
+}
+
+fn variable(style: &oxidraft_model::annotation::DimStyle, name: &str) -> String {
+    match name {
+        "DIMTXT" => format!("{:.4}", style.text_height),
+        "DIMASZ" => format!("{:.4}", style.arrow_size),
+        "DIMEXO" => format!("{:.4}", style.ext_offset),
+        "DIMEXE" => format!("{:.4}", style.ext_beyond),
+        "DIMGAP" => format!("{:.4}", style.gap),
+        _ => style.decimals.to_string(),
+    }
+}
+
+#[derive(Clone, PartialEq)]
+enum OverrideStage {
+    Name,
+    Value(String),
+    Select,
+    Clear,
+}
+
+/// DIMOVERRIDE (DOV): dimension variables set on the selected dimensions
+/// alone (DIMTXT, DIMASZ, DIMEXO, DIMEXE, DIMGAP, DIMDEC), or Cleared.
+pub struct DimOverride {
+    stage: OverrideStage,
+    style: oxidraft_model::annotation::DimStyle,
+    changed: bool,
+}
+
+impl Default for DimOverride {
+    fn default() -> Self {
+        Self { stage: OverrideStage::Name, style: oxidraft_model::annotation::DEFAULT_DIM_STYLE, changed: false }
+    }
+}
+
+impl Command for DimOverride {
+    fn prepare(&mut self, doc: &oxidraft_model::Document) -> Option<String> {
+        self.style = doc.dim_style();
+        None
+    }
+
+    fn prompt(&self) -> Prompt {
+        match &self.stage {
+            OverrideStage::Name if self.changed => Prompt::new("Enter dimension variable name to override"),
+            OverrideStage::Name => {
+                Prompt::new("Enter dimension variable name to override").with_keywords(&["Clear overrides"])
+            }
+            OverrideStage::Value(name) => {
+                Prompt::new("Enter new value for dimension variable").with_default(variable(&self.style, name))
+            }
+            OverrideStage::Select | OverrideStage::Clear => Prompt::new("Select objects"),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (self.stage.clone(), input) {
+            (OverrideStage::Name, Input::Keyword(_)) => self.stage = OverrideStage::Clear,
+            (OverrideStage::Name, Input::Text(t)) => {
+                let name = t.trim().to_ascii_uppercase();
+                if !OVERRIDABLE.contains(&name.as_str()) {
+                    return Err(format!("Can override {}.", OVERRIDABLE.join(", ")));
+                }
+                self.stage = OverrideStage::Value(name);
+            }
+            (OverrideStage::Name, Input::Enter) if self.changed => self.stage = OverrideStage::Select,
+            (OverrideStage::Value(name), Input::Value(v)) => {
+                set_variable(&mut self.style, &name, v)?;
+                self.changed = true;
+                self.stage = OverrideStage::Name;
+            }
+            (OverrideStage::Value(_), Input::Enter) => self.stage = OverrideStage::Name,
+            (OverrideStage::Select, Input::Selection(s)) => {
+                let style = self.style;
+                let n = s.ids.iter().filter(|id| change(ctx, **id, &|x, _| x.style = Some(style))).count();
+                ctx.messages.push(format!("{n} dimension(s) overridden."));
+                return Ok(Step::Done);
+            }
+            (OverrideStage::Clear, Input::Selection(s)) => {
+                let n = s.ids.iter().filter(|id| change(ctx, **id, &|x, _| x.style = None)).count();
+                ctx.messages.push(format!("{n} dimension(s) cleared."));
+                return Ok(Step::Done);
+            }
+            (_, Input::Enter) => return Ok(Step::Done),
+            _ => return Err("Invalid input.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn wants_selection(&self) -> bool {
+        matches!(self.stage, OverrideStage::Select | OverrideStage::Clear)
+    }
+
+    fn wants_text(&self) -> bool {
+        self.stage == OverrideStage::Name
+    }
+}
+
+/// DIMUPDATE (-DIMSTYLE Apply): the selected dimensions back to the
+/// drawing's dimension style, their overrides cleared.
+#[derive(Default)]
+pub struct DimUpdate;
+
+impl Command for DimUpdate {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Select objects")
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let Input::Selection(s) = input else { return Ok(Step::Done) };
+        let n = s.ids.iter().filter(|id| change(ctx, **id, &|x, _| x.style = None)).count();
+        ctx.messages.push(format!("{n} dimension(s) updated to the current style."));
+        Ok(Step::Done)
+    }
+
+    fn wants_selection(&self) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Engine;
@@ -453,6 +721,33 @@ mod tests {
         click(&mut e, &mut d, 25.0, 15.0);
         run(&mut e, &mut d, &["h"]);
         assert_eq!(extra(&d).0.text_at, None);
+    }
+
+    #[test]
+    fn tolerance_jog_and_overrides() {
+        let (mut e, mut d) = (Engine::new(), doc());
+        run(&mut e, &mut d, &["tolerance", "{\\Fgdt;j}%%v{\\Fgdt;n}0.1{\\Fgdt;m}%%vA%%vB", "50,50"]);
+        let frame = d.entities().find_map(|x| match &x.geometry {
+            g @ Geometry::Tolerance { .. } => Some(g.clone()),
+            _ => None,
+        });
+        let prims = frame.expect("a frame").primitives().unwrap();
+        let boxes = prims.iter().filter(|p| matches!(p, Geometry::Polyline { closed: true, .. })).count();
+        assert_eq!(boxes, 4, "symbol, tolerance and two datums");
+        assert!(prims.iter().any(|p| matches!(p, Geometry::Text { content, .. } if content == "0.1")));
+        // DIMJOGLINE, then Remove.
+        run(&mut e, &mut d, &["dimjogline"]);
+        click(&mut e, &mut d, 25.0, 10.0);
+        run(&mut e, &mut d, &["10,10"]);
+        assert_eq!(extra(&d).0.jog, Some(Point::new(10.0, 10.0)));
+        run(&mut e, &mut d, &["dimjogline", "r"]);
+        click(&mut e, &mut d, 25.0, 10.0);
+        assert_eq!(extra(&d).0.jog, None);
+        // DIMOVERRIDE: bigger text on this one; DIMUPDATE puts it back.
+        run(&mut e, &mut d, &["dimoverride", "dimtxt", "5", "", "all", ""]);
+        assert_eq!(extra(&d).0.style.map(|s| s.text_height), Some(5.0));
+        run(&mut e, &mut d, &["dimupdate", "all", ""]);
+        assert_eq!(extra(&d).0.style, None);
     }
 
     #[test]

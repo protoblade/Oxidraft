@@ -127,6 +127,7 @@ pub struct OxidraftApp {
     pub(crate) text_style_dialog: Option<crate::text_styles::TextStyleDialog>,
     pub(crate) drafting_settings: Option<crate::drafting::DraftingSettings>,
     pub(crate) point_style: Option<crate::drafting::PointStyle>,
+    pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
     pub(crate) ribbon_space: oxidraft_model::Space,
@@ -279,6 +280,7 @@ impl OxidraftApp {
             text_style_dialog: None,
             drafting_settings: None,
             point_style: None,
+            tolerance_dialog: None,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
@@ -599,6 +601,7 @@ impl OxidraftApp {
             "DSETTINGS" | "DS" | "SE" | "DDRMODES" => self.open_drafting_settings(0),
             "OSNAP" | "OS" | "DDOSNAP" => self.open_drafting_settings(2),
             "PTYPE" | "DDPTYPE" => self.open_point_style(),
+            "TOLERANCE" | "TOL" => self.open_tolerance(),
             "SELECTALL" | "AI_SELALL" => self.engine.select_all(&self.doc),
             "COMPARE" => self.compare_command(),
             "DIMSTYLE" | "D" | "DST" => self.open_dim_style(),
@@ -966,6 +969,7 @@ impl eframe::App for OxidraftApp {
         self.text_style_dialog(&ctx);
         self.drafting_settings_dialog(&ctx);
         self.point_style_dialog(&ctx);
+        self.tolerance_dialog(&ctx);
         self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);

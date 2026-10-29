@@ -29,6 +29,7 @@ mod tables;
 mod text_styles;
 pub mod theme;
 mod tiles;
+mod tolerance;
 mod underlay;
 pub mod update;
 mod view;

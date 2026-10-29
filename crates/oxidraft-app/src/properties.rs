@@ -433,6 +433,12 @@ impl OxidraftApp {
                     ("View center Y", Value::Text(fmt(view_center.y))),
                 ]
             }
+            Geometry::Tolerance { position, height, content, .. } => vec![
+                ("Text", Value::Edit(content.clone())),
+                ("Text height", Value::Number(*height)),
+                ("Position X", Value::Number(position.x)),
+                ("Position Y", Value::Number(position.y)),
+            ],
             Geometry::OrdinateDimension { feature, x_datum, text, scale, .. } => vec![
                 ("Measurement", Value::Text(fmt(if *x_datum { feature.x } else { feature.y }))),
                 ("Datum", Value::Text(if *x_datum { "X" } else { "Y" }.into())),
@@ -677,6 +683,9 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
         (Geometry::Insert { placement, .. }, "Scale") if v > 0.0 => placement.scale = v,
         (Geometry::Insert { placement, .. }, "Rotation") => placement.rotation = v.rem_euclid(360.0),
         (Geometry::Text { height, .. }, "Height") if v > 0.0 => *height = v,
+        (Geometry::Tolerance { height, .. }, "Text height") if v > 0.0 => *height = v,
+        (Geometry::Tolerance { position, .. }, "Position X") => position.x = v,
+        (Geometry::Tolerance { position, .. }, "Position Y") => position.y = v,
         (Geometry::Text { rotation, .. }, "Rotation") => *rotation = v.rem_euclid(360.0),
         (Geometry::Text { width, .. }, "Width") if v >= 0.0 => *width = v,
         (Geometry::Text { look, .. }, "Width factor") if v > 0.0 => look.width_factor = v,
@@ -758,6 +767,7 @@ fn with_text_property(g: &Geometry, label: &str, s: &str) -> Option<Geometry> {
     }
     match (&mut g, label) {
         (Geometry::Text { content, .. } | Geometry::Leader { content, .. }, "Contents") => *content = s.to_string(),
+        (Geometry::Tolerance { content, .. }, "Text") => *content = s.to_string(),
         (
             Geometry::Dimension { text, .. }
             | Geometry::RadialDimension { text, .. }

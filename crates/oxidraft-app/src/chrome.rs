@@ -193,6 +193,10 @@ const ANNOTATE_DIMENSIONS_MORE: &[Tool] = &[
     tool(Icon::Dimension, "Linear", Some("DIMLINEAR"), "Creates a horizontal or vertical dimension (DLI)"),
     tool(Icon::Text, "Edit Dimension", Some("DIMEDIT"), "New text, text angle, or oblique extension lines (DED)"),
     tool(Icon::Move, "Move Dimension Text", Some("DIMTEDIT"), "Moves or turns a dimension's text"),
+    tool(Icon::Dimension, "Jogged Linear", Some("DIMJOGLINE"), "Adds a jog to a linear dimension's line (DJL)"),
+    tool(Icon::Properties, "Override", Some("DIMOVERRIDE"), "Sets dimension variables on selected dimensions (DOV)"),
+    tool(Icon::Undo, "Update", Some("DIMUPDATE"), "Puts dimensions back to the current style"),
+    tool(Icon::Table, "Tolerance", Some("TOLERANCE"), "Places a geometric tolerance frame (TOL)"),
 ];
 const UTILITIES_LARGE: &[Tool] = &[tool(
     Icon::Measure,

@@ -226,6 +226,14 @@ pub enum Geometry {
     },
     /// An ordinate dimension (DIMORDINATE): `feature`'s X (`x_datum`) or Y
     /// by a leader ending at `leader_end`.
+    /// A feature control frame (TOLERANCE): GD&T boxes as AutoCAD writes
+    /// them in `content`, the first row's left middle at `position`.
+    Tolerance {
+        position: Point,
+        height: f64,
+        rotation: f64,
+        content: String,
+    },
     OrdinateDimension {
         feature: Point,
         leader_end: Point,
@@ -430,6 +438,7 @@ impl Geometry {
             Geometry::Table { .. } => "Table",
             Geometry::Wipeout { .. } => "Wipeout",
             Geometry::OrdinateDimension { .. } => "Ordinate Dimension",
+            Geometry::Tolerance { .. } => "Tolerance",
             Geometry::ArcLengthDimension { .. } => "Arc Dimension",
             Geometry::JoggedDimension { .. } => "Radial Dimension Large",
             Geometry::AttributeDefinition { .. } => "Attribute Definition",
@@ -451,6 +460,9 @@ impl Geometry {
             }
             Geometry::Leader { points, content, scale } => Some(annotation::leader_primitives(points, content, *scale)),
             Geometry::Table { .. } => Some(crate::table::primitives(self)),
+            Geometry::Tolerance { position, height, rotation, content } => {
+                Some(annotation::tolerance_primitives(*position, *height, *rotation, content))
+            }
             Geometry::OrdinateDimension { feature, leader_end, x_datum, text, scale } => {
                 Some(annotation::ordinate_primitives(*feature, *leader_end, *x_datum, text.as_deref(), *scale))
             }
@@ -565,6 +577,7 @@ impl Geometry {
             | Geometry::Image { .. }
             | Geometry::AttributeDefinition { .. }
             | Geometry::OrdinateDimension { .. }
+            | Geometry::Tolerance { .. }
             | Geometry::ArcLengthDimension { .. }
             | Geometry::JoggedDimension { .. }
             | Geometry::Insert { .. }
@@ -849,6 +862,12 @@ impl Geometry {
                 clip: clip.iter().map(|p| f(*p)).collect(),
             },
             Geometry::Wipeout { points } => Geometry::Wipeout { points: points.iter().map(|p| f(*p)).collect() },
+            Geometry::Tolerance { position, height, rotation, content } => Geometry::Tolerance {
+                position: f(*position),
+                height: height * length_factor,
+                rotation: mapped_angle(f, *position, *rotation),
+                content: content.clone(),
+            },
             Geometry::OrdinateDimension { feature, leader_end, x_datum, text, scale } => Geometry::OrdinateDimension {
                 feature: f(*feature),
                 leader_end: f(*leader_end),
@@ -1060,6 +1079,7 @@ impl Geometry {
             Geometry::Table { position, .. } => self.translated(shift(*position) - *position),
             Geometry::Wipeout { points } => Geometry::Wipeout { points: points.iter().map(|p| shift(*p)).collect() },
             Geometry::AttributeDefinition { position, .. } => self.translated(shift(*position) - *position),
+            Geometry::Tolerance { position, .. } => self.translated(shift(*position) - *position),
             Geometry::OrdinateDimension { feature, leader_end, x_datum, text, scale } => Geometry::OrdinateDimension {
                 feature: shift(*feature),
                 leader_end: shift(*leader_end),
@@ -1154,6 +1174,7 @@ impl Geometry {
             Geometry::Wipeout { points } => points.clone(),
             Geometry::AttributeDefinition { position, .. } => vec![*position],
             Geometry::OrdinateDimension { feature, leader_end, .. } => vec![*feature, *leader_end],
+            Geometry::Tolerance { position, .. } => vec![*position],
             Geometry::ArcLengthDimension { center, dim_radius, start_angle, end_angle, .. } => {
                 let mid = start_angle + (end_angle - start_angle).rem_euclid(360.0) / 2.0;
                 vec![*center, center.polar(*dim_radius, mid)]
@@ -1274,6 +1295,7 @@ impl Geometry {
             (Geometry::Hatch { .. }, _) => self.translated(to - self.bounds().center()),
             (Geometry::Table { position, .. }, _) => self.translated(to - *position),
             (Geometry::AttributeDefinition { position, .. }, _) => self.translated(to - *position),
+            (Geometry::Tolerance { position, .. }, _) => self.translated(to - *position),
             (Geometry::OrdinateDimension { feature, .. }, 0) => self.translated(to - *feature),
             (Geometry::OrdinateDimension { feature, x_datum, text, scale, .. }, _) => Geometry::OrdinateDimension {
                 feature: *feature,

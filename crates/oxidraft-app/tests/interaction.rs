@@ -2081,3 +2081,32 @@ fn drafting_settings_and_point_style() {
     type_all(&mut h, &["selectall"]);
     assert_eq!(h.state_mut().engine_mut().selection().len(), 2);
 }
+
+#[test]
+fn geometric_tolerance_dialog_places_a_frame() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["tol"]);
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::ComboBox, "Symbol 1").click();
+    h.run_steps(2);
+    h.get_by_label("Position").click();
+    h.run_steps(1);
+    for (field, text) in [("Tolerance 1 row 1", "0.05"), ("Datum 1 row 1", "A")] {
+        let at = h.get_by_role_and_label(Role::TextInput, field).rect().center();
+        click(&mut h, at);
+        h.get_by_role_and_label(Role::TextInput, field).type_text(text);
+        h.run_steps(1);
+    }
+    let ok = h.get_by_label("OK").rect().center();
+    click(&mut h, ok);
+    h.run_steps(2);
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("TOLERANCE"));
+    let at = screen(&h, 40.0, 30.0);
+    click(&mut h, at);
+    h.run_steps(2);
+    let content = h.state_mut().document_mut().entities().find_map(|e| match &e.geometry {
+        Geometry::Tolerance { content, .. } => Some(content.clone()),
+        _ => None,
+    });
+    assert_eq!(content.as_deref(), Some("{\\Fgdt;j}%%v0.05%%v%%vA"));
+}

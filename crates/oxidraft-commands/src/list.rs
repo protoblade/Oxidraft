@@ -139,6 +139,10 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
             out.push(at("View center:", *view_center));
             out.push(value("Scale:", format!("1:{}", plain(view_height / height.max(1e-12)).trim())));
         }
+        Geometry::Tolerance { position, content, .. } => {
+            out.push(at("Insertion point", *position));
+            out.push(value("Text:", content.replace("%%v", " | ").replace("^J", " / ")));
+        }
         Geometry::OrdinateDimension { feature, leader_end, x_datum, .. } => {
             out.push(at("Feature location:", *feature));
             out.push(at("Leader endpoint:", *leader_end));
