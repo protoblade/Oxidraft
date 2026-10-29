@@ -8,6 +8,7 @@ pub mod pdf;
 pub mod setup;
 pub mod sheet;
 pub mod shx;
+pub mod slide;
 pub mod wmf;
 pub mod zip;
 

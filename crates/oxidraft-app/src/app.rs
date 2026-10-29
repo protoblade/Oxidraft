@@ -131,6 +131,10 @@ pub struct OxidraftApp {
     pub(crate) log_file: Option<(std::path::PathBuf, usize)>,
     /// PLOTSTAMP.
     pub(crate) plot_stamp: bool,
+    /// FONTMAP's font mapping file.
+    pub(crate) font_map: String,
+    /// VSLIDE's slide, shown until REDRAW.
+    pub(crate) slide: Option<oxidraft_plot::slide::Slide>,
     /// QVLAYOUT's list open.
     pub(crate) qv_layouts: bool,
     /// APERTURE: how far object snaps reach, in screen points.
@@ -356,6 +360,8 @@ impl OxidraftApp {
             hidden_palettes: None,
             log_file: None,
             plot_stamp: false,
+            font_map: String::new(),
+            slide: None,
             qv_layouts: false,
             aperture: crate::canvas::APERTURE,
             save_time: 10,
@@ -690,6 +696,13 @@ impl OxidraftApp {
 
     /// Commands about files and the view, which the engine doesn't know about.
     fn run_app_command(&mut self, name: &str) -> bool {
+        // A slide shows until the drawing is drawn again.
+        if matches!(
+            name.trim().to_ascii_uppercase().as_str(),
+            "REDRAW" | "REDRAWALL" | "REGEN" | "REGENALL" | "R" | "RA"
+        ) {
+            self.slide = None;
+        }
         match name.trim().to_ascii_uppercase().as_str() {
             "ZE" => self.pending_views.push(ViewRequest::Extents),
             "PASTECLIP" => self.paste_command(false),
@@ -810,6 +823,8 @@ impl OxidraftApp {
                 self.log_toggle("Hyperlink tooltips", !self.hyperlink_tips_off);
             }
             "MARKUPCLOSE" => self.markup_close(),
+            "MSLIDE" => self.make_slide(),
+            "VSLIDE" => self.view_slide_file(),
             "DRAWINGRECOVERY" | "DRM" => self.recovery_open = true,
             "DRAWINGRECOVERYHIDE" => self.recovery_open = false,
             "GETENV" => self.engine.log(
@@ -1082,6 +1097,9 @@ impl OxidraftApp {
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         // Your own shortcuts (CUI) come first.
         self.custom_shortcuts(ctx);
+        if self.slide.is_some() && ctx.input(|i| i.key_pressed(Key::Escape)) {
+            self.slide = None;
+        }
         let cmd = Modifiers::COMMAND;
         let none = Modifiers::NONE;
         // Space while dragging a lasso cycles Window, Crossing and Fence,

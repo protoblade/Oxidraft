@@ -3112,3 +3112,18 @@ fn automatic_saves_and_drawing_recovery() {
     assert!(h.get_all_by_label_contains(&name).next().is_some(), "the autosave is listed");
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn slides_made_and_shown() {
+    let mut h = app_with_line();
+    let slide = h.state().view_slide();
+    assert!(slide.vectors.len() >= 2, "the two lines");
+    let path = std::env::temp_dir().join(format!("oxidraft-{}.sld", std::process::id()));
+    std::fs::write(&path, oxidraft_plot::slide::write_sld(&slide)).unwrap();
+    h.state_mut().show_slide(&path).unwrap();
+    h.run_steps(1);
+    assert!(h.state().showing_slide());
+    type_all(&mut h, &["redraw"]);
+    assert!(!h.state().showing_slide(), "REDRAW puts the drawing back");
+    std::fs::remove_file(&path).ok();
+}

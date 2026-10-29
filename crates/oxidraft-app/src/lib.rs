@@ -46,6 +46,7 @@ mod settings;
 mod share;
 mod sheet_set;
 mod shortcut_menu;
+mod slides;
 mod spell;
 mod status;
 mod styles;

@@ -245,6 +245,10 @@ impl OxidraftApp {
         if !capturing {
             self.draw_grips(&model, rect, cursor.as_ref());
         }
+        // VSLIDE: the slide over the view, until REDRAW.
+        if let Some(slide) = &self.slide {
+            crate::slides::paint_slide(&model, rect, slide);
+        }
         if let Some(c) = &cursor {
             let dragging = response.dragged_by(PointerButton::Primary);
             let icon = match self.realtime {

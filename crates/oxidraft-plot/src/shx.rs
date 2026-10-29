@@ -422,6 +422,7 @@ static FOUND: LazyLock<Mutex<HashMap<String, Option<&'static ShxFont>>>> = LazyL
 /// The SHX font a style names, if it's one and it's found; one that isn't
 /// is drawn in simplex.shx when that is (as AutoCAD's FONTALT does).
 pub fn shx_font(font: &str) -> Option<&'static ShxFont> {
+    let font = &crate::font::mapped(font);
     let key = Path::new(font.trim()).file_name()?.to_string_lossy().to_ascii_lowercase();
     if !key.ends_with(".shx") {
         return None;
@@ -433,11 +434,38 @@ pub fn shx_font(font: &str) -> Option<&'static ShxFont> {
         let data = std::fs::read(crate::font::find(name)?).ok()?;
         ShxFont::parse(&data).map(|f| &*Box::leak(Box::new(f)))
     };
-    let loaded = read(&key).or_else(|| if key == "simplex.shx" { None } else { shx_font("simplex.shx") });
+    let alt = font_alt();
+    let loaded = read(&key).or_else(|| if key == alt { None } else { shx_font(&alt) });
     if let Ok(mut found) = FOUND.lock() {
         found.insert(key, loaded);
     }
     loaded
+}
+
+/// FONTALT: the SHX font a missing one is drawn in.
+static FONT_ALT: Mutex<String> = Mutex::new(String::new());
+
+pub fn font_alt() -> String {
+    FONT_ALT.lock().ok().map(|a| a.clone()).filter(|a| !a.is_empty()).unwrap_or_else(|| "simplex.shx".into())
+}
+
+/// Sets FONTALT (empty: simplex.shx); fonts are looked for again.
+pub fn set_font_alt(name: &str) {
+    let mut name = name.trim().to_ascii_lowercase();
+    if !name.is_empty() && !name.ends_with(".shx") {
+        name.push_str(".shx");
+    }
+    if let Ok(mut a) = FONT_ALT.lock() {
+        *a = name;
+    }
+    forget_all();
+}
+
+/// Forgets every font found (FONTMAP changed).
+pub(crate) fn forget_all() {
+    if let Ok(mut found) = FOUND.lock() {
+        found.clear();
+    }
 }
 
 /// Forgets fonts not found, to look for them again (a new folder to look in).

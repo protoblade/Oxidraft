@@ -133,6 +133,50 @@ const ALSO: &[(&str, &[&str])] = &[
     ("segoeui.ttf", &["SF-Pro.ttf", "DejaVuSans.ttf"]),
 ];
 
+/// FONTMAP: fonts drawn in others, from a font mapping file's lines
+/// ("romans.shx;arial.ttf"), by the first's name (lower case).
+static FONT_MAP: LazyLock<Mutex<Vec<(String, String)>>> = LazyLock::new(Default::default);
+
+/// Uses the font mapping file at `path` (none: no mapping); how many
+/// fonts it maps.
+pub fn set_font_map(path: Option<&Path>) -> std::io::Result<usize> {
+    let pairs: Vec<(String, String)> = match path {
+        Some(p) => std::fs::read_to_string(p)?
+            .lines()
+            .filter_map(|l| {
+                let (from, to) = l.split_once(';')?;
+                let (from, to) = (from.trim(), to.trim());
+                (!from.is_empty() && !to.is_empty()).then(|| (from.to_ascii_lowercase(), to.to_string()))
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    let n = pairs.len();
+    if let Ok(mut m) = FONT_MAP.lock() {
+        *m = pairs;
+    }
+    if let Ok(mut found) = FOUND.lock() {
+        found.clear();
+    }
+    crate::shx::forget_all();
+    Ok(n)
+}
+
+/// The font `font` is drawn in: as FONTMAP maps it, else itself.
+pub fn mapped(font: &str) -> String {
+    let name = Path::new(font.trim())
+        .file_name()
+        .map_or_else(|| font.trim().to_string(), |n| n.to_string_lossy().into_owned());
+    let key = name.to_ascii_lowercase();
+    FONT_MAP
+        .lock()
+        .ok()
+        .and_then(|m| {
+            m.iter().find(|(from, _)| *from == key || from.trim_end_matches(".shx") == key).map(|(_, to)| to.clone())
+        })
+        .unwrap_or_else(|| font.to_string())
+}
+
 /// Folders to look in besides the system's (the drawing's own).
 static EXTRA: LazyLock<Mutex<Vec<PathBuf>>> = LazyLock::new(Default::default);
 
@@ -247,6 +291,7 @@ fn from_collection(data: &[u8], index: u32) -> Option<Vec<u8>> {
 /// The typeface for a style's font: the file it names when it's a
 /// TrueType or OpenType font that can be found, else the default.
 pub fn typeface(font: &str) -> &'static Typeface {
+    let font = &mapped(font);
     let key = font.trim().to_ascii_lowercase();
     if key.is_empty() || key.ends_with(".shx") {
         return &FONT;
@@ -326,6 +371,12 @@ mod tests {
         assert!(std::ptr::eq(typeface("PLOTTER.TTF"), t), "found once");
         assert!(typeface("nowhere-to-be-found.ttf").is_default());
         assert!(typeface("romans.shx").is_default());
+        // FONTMAP: a font drawn in another.
+        let map = dir.join("test.fmp");
+        std::fs::write(&map, "special.ttf;plotter.ttf\n").unwrap();
+        assert_eq!(set_font_map(Some(&map)).unwrap(), 1);
+        assert_eq!(typeface("special.ttf").key(), "plotter.ttf");
+        set_font_map(None).unwrap();
         // A collection's first font, made a font file of its own.
         let mut ttc = b"ttcf\x00\x01\x00\x00\x00\x00\x00\x01\x00\x00\x00\x10".to_vec();
         let font = epaint_default_fonts::UBUNTU_LIGHT;

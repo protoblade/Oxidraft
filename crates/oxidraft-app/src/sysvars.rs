@@ -261,6 +261,17 @@ fn vars() -> Vec<Var> {
             a.doc.set_fill(parse_flag(v)?);
             Ok(())
         }),
+        var!("FONTALT", |_| oxidraft_plot::shx::font_alt(), |_, v| {
+            oxidraft_plot::shx::set_font_alt(v);
+            Ok(())
+        }),
+        var!("FONTMAP", |a| a.font_map.clone(), |a, v| {
+            let path = v.trim();
+            let file = (!path.is_empty() && path != ".").then(|| std::path::PathBuf::from(path));
+            oxidraft_plot::font::set_font_map(file.as_deref()).map_err(|e| format!("{path}: {e}"))?;
+            a.font_map = path.to_string();
+            Ok(())
+        }),
         var!("GRIDMODE", |a| flag(a.grid), |a, v| {
             a.grid = parse_flag(v)?;
             Ok(())

@@ -1120,6 +1120,8 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: None,
     },
     CommandInfo { name: "GETENV", aliases: &[], description: "Oxidraft's environment settings", make: None },
+    CommandInfo { name: "MSLIDE", aliases: &[], description: "Save the view as a slide (.sld)", make: None },
+    CommandInfo { name: "VSLIDE", aliases: &[], description: "Show a slide (.sld) until REDRAW", make: None },
     CommandInfo { name: "CASCADE", aliases: &[], description: "Show the open drawings cascaded", make: None },
     CommandInfo { name: "TILE", aliases: &[], description: "Show the open drawings side by side", make: None },
     CommandInfo {
