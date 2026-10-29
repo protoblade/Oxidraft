@@ -55,6 +55,7 @@ mod stretch;
 mod table;
 mod trim_extend;
 mod underlay;
+mod views;
 mod xclip;
 mod xline;
 mod xref;
@@ -65,6 +66,7 @@ pub use engine::{COMMANDS, CommandInfo, Engine, Tracked};
 pub use input::{Input, parse_input};
 pub use mview::{viewport_at, viewport_onto_model};
 pub use select::{QuickOperator, QuickProperty, QuickSelect, SimilarMode, color_label, object_type, select_similar};
+pub use views::Tiling;
 
 use oxidraft_geom::{Aabb, Point};
 use oxidraft_model::{Document, EntityId, Geometry};
@@ -159,6 +161,8 @@ pub enum UiRequest {
     MaximizeViewport(EntityId),
     /// A table to fill in or edit (after TABLE places it, or TABLEDIT).
     EditTable(EntityId),
+    /// VPORTS: model space split into panes.
+    Tiling(Tiling),
 }
 
 /// Result of feeding one input to a command.
@@ -220,6 +224,12 @@ pub struct Vars {
     /// apart, from the origin, when no object snap applies.
     pub snap: bool,
     pub snap_spacing: f64,
+    /// The drawing area's width over its height, kept up to date by the
+    /// app (a view saved by -VIEW is as wide as what shows).
+    pub view_aspect: f64,
+    /// UCSICON and NAVBAR: the UCS icon and the navigation bar show.
+    pub ucs_icon: bool,
+    pub nav_bar: bool,
 }
 
 impl Default for Vars {
@@ -252,6 +262,9 @@ impl Default for Vars {
             color_theme: 0,
             snap: false,
             snap_spacing: 10.0,
+            view_aspect: 1.5,
+            ucs_icon: true,
+            nav_bar: true,
         }
     }
 }

@@ -111,7 +111,7 @@ impl OxidraftApp {
         let Some(grab) = self.properties_grab else { return };
         let (pointer, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.primary_down()));
         let Some(pointer) = pointer else { return };
-        let area = self.canvas_rect;
+        let area = self.drawing_rect;
         let side = if pointer.x <= area.left() + DOCK_ZONE {
             Some(Dock::Left)
         } else if pointer.x >= area.right() - DOCK_ZONE {

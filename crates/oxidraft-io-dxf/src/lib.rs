@@ -583,6 +583,15 @@ fn build(doc: &Document) -> Built {
             ..Default::default()
         });
     }
+    for v in doc.views().iter().filter(|v| v.space == oxidraft_model::MODEL) {
+        drawing.add_view(dxf::tables::View {
+            name: v.name.clone(),
+            view_center_point: DxfPoint::new(v.center.x, v.center.y, 0.0),
+            view_height: v.height,
+            view_width: v.width,
+            ..Default::default()
+        });
+    }
     let mut ex = Exporter { images: underlay_dxf::add_definitions(&mut drawing, doc), ..Default::default() };
     let mut blocks = Vec::new();
     // Clipped references in blocks: (block, index), for their filters once
@@ -959,6 +968,17 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         AttributeVisibility::Normal => AttributeDisplay::Normal,
         AttributeVisibility::All => AttributeDisplay::On,
     });
+    // Named views (model space's: the dxf crate doesn't say which space).
+    for v in drawing.views() {
+        let view = oxidraft_model::NamedView {
+            name: v.name.clone(),
+            center: Point::new(v.view_center_point.x, v.view_center_point.y),
+            height: v.view_height,
+            width: v.view_width,
+            space: oxidraft_model::MODEL,
+        };
+        let _ = doc.save_view(view);
+    }
     for l in drawing.layers() {
         let color = l.color.index().filter(|&i| i > 0).unwrap_or(7);
         let mut layer = Layer::new(l.name.clone(), color);
@@ -1701,6 +1721,28 @@ mod tests {
                 _ => assert_eq!(b, g),
             }
         }
+    }
+
+    #[test]
+    fn roundtrip_named_views_and_tables_as_lines_and_text() {
+        let mut doc = Document::new();
+        let view = oxidraft_model::NamedView {
+            name: "Kitchen".into(),
+            center: Point::new(12.0, 34.0),
+            height: 50.0,
+            width: 80.0,
+            space: oxidraft_model::MODEL,
+        };
+        doc.save_view(view.clone()).unwrap();
+        doc.add(oxidraft_model::table::new_table(Point::new(0.0, 0.0), 2, 1, 10.0, 5.0, 2.5));
+        let mut buf = Vec::new();
+        write(&doc, &mut buf).unwrap();
+        let back = read(&mut buf.as_slice()).unwrap().document;
+        assert_eq!(back.views(), &[view]);
+        // Three rows: four lines across, three down; and the title.
+        let lines = back.entities().filter(|e| matches!(e.geometry, Geometry::Line { .. })).count();
+        let texts = back.entities().filter(|e| matches!(e.geometry, Geometry::Text { .. })).count();
+        assert_eq!((lines, texts), (7, 1));
     }
 
     #[test]

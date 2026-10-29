@@ -91,6 +91,12 @@ pub enum Icon {
     DimDiameter,
     DimContinue,
     DimBaseline,
+    Ucs,
+    NavigationBar,
+    ViewportConfig,
+    ViewManager,
+    FileTabs,
+    LayoutTabs,
 }
 
 /// Accent colors used inside icons, as in AutoCAD's icon set.
@@ -378,6 +384,37 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
                 pen.line(&[(0.1, 0.55), (0.5, 0.55)], blue);
                 pen.line(&[(0.1, 0.35), (0.9, 0.35)], yellow);
             }
+        }
+        // The X and Y arrows at the origin.
+        Icon::Ucs => {
+            pen.arrow((0.2, 0.8), (0.85, 0.8), red);
+            pen.arrow((0.2, 0.8), (0.2, 0.15), green);
+            pen.closed(&[(0.14, 0.74), (0.26, 0.74), (0.26, 0.86), (0.14, 0.86)], c);
+        }
+        // A strip of buttons down the right.
+        Icon::NavigationBar => {
+            pen.closed(&[(0.1, 0.12), (0.9, 0.12), (0.9, 0.88), (0.1, 0.88)], c);
+            pen.filled(&[(0.66, 0.2), (0.82, 0.2), (0.82, 0.8), (0.66, 0.8)], blue);
+        }
+        // The drawing area split in four.
+        Icon::ViewportConfig => {
+            pen.closed(&[(0.1, 0.15), (0.9, 0.15), (0.9, 0.85), (0.1, 0.85)], c);
+            pen.line(&[(0.5, 0.15), (0.5, 0.85)], c);
+            pen.line(&[(0.1, 0.5), (0.9, 0.5)], c);
+            pen.closed(&[(0.12, 0.17), (0.48, 0.17), (0.48, 0.48), (0.12, 0.48)], blue);
+        }
+        // A camera.
+        Icon::ViewManager => {
+            pen.closed(&[(0.1, 0.32), (0.75, 0.32), (0.75, 0.78), (0.1, 0.78)], c);
+            pen.closed(&[(0.75, 0.45), (0.92, 0.35), (0.92, 0.75), (0.75, 0.65)], c);
+            pen.circle((0.42, 0.55), 0.12, blue);
+        }
+        // Tabs along the top, or along the bottom.
+        Icon::FileTabs | Icon::LayoutTabs => {
+            let (y0, y1) = if icon == Icon::FileTabs { (0.15, 0.32) } else { (0.68, 0.85) };
+            pen.closed(&[(0.1, 0.15), (0.9, 0.15), (0.9, 0.85), (0.1, 0.85)], c);
+            pen.filled(&[(0.14, y0), (0.4, y0), (0.4, y1), (0.14, y1)], blue);
+            pen.closed(&[(0.42, y0), (0.68, y0), (0.68, y1), (0.42, y1)], c);
         }
         Icon::Leader => {
             pen.arrow((0.55, 0.45), (0.12, 0.88), c);

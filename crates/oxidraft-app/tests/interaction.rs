@@ -1525,3 +1525,66 @@ fn table_is_inserted_then_filled_in_and_edited_again() {
     assert!(h.query_by_label("Edit Table").is_none());
     assert!(h.state_mut().document_mut().entity(table).is_some());
 }
+
+#[test]
+fn model_viewports_split_the_drawing_area_and_each_keeps_its_view() {
+    let mut h = app_with_line();
+    let whole = h.state().screen_pos(Point::new(50.0, 30.0));
+    type_all(&mut h, &["vports", "2", "v"]);
+    h.run_steps(2);
+    // The left pane is current: the same point now shows further left.
+    let left = h.state().screen_pos(Point::new(50.0, 30.0));
+    assert!(left.x < whole.x - 100.0, "{left:?} vs {whole:?}");
+    // Zooming changes the current pane only; clicking the other makes it current.
+    type_all(&mut h, &["z", "2x"]);
+    let zoomed = h.state().screen_pos(Point::new(60.0, 30.0)) - h.state().screen_pos(Point::new(50.0, 30.0));
+    let other = Pos2::new(1100.0, 400.0);
+    click(&mut h, other);
+    h.run_steps(2);
+    let there = h.state().screen_pos(Point::new(60.0, 30.0)) - h.state().screen_pos(Point::new(50.0, 30.0));
+    assert!((zoomed.x - 2.0 * there.x).abs() < 1.0, "the right pane kept its own scale: {zoomed:?} vs {there:?}");
+    assert!(h.state().screen_pos(Point::new(50.0, 30.0)).x > 600.0, "now the right one is current");
+    // Ctrl+R goes back; SIngle joins them.
+    h.key_press_modifiers(Modifiers::CTRL, Key::R);
+    h.run_steps(1);
+    assert!(h.state().screen_pos(Point::new(50.0, 30.0)).x < 600.0);
+    type_all(&mut h, &["vports", "si"]);
+    h.run_steps(2);
+    assert!(h.state().screen_pos(Point::new(50.0, 30.0)).x > 400.0);
+}
+
+#[test]
+fn named_views_are_saved_and_restored() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["-view", "s", "Whole"]);
+    let whole = h.state().screen_pos(Point::new(50.0, 30.0));
+    type_all(&mut h, &["z", "c", "0,0", "10"]);
+    h.run_steps(1);
+    assert!(h.state().screen_pos(Point::new(50.0, 30.0)).distance(whole) > 100.0);
+    // The View Manager restores it.
+    type_all(&mut h, &["view"]);
+    h.run_steps(2);
+    assert!(h.query_by_label("View Manager").is_some());
+    let row = h.get_all_by_label_contains("Whole").next().expect("listed");
+    row.click();
+    h.run_steps(1);
+    h.get_by_label("Set Current").click();
+    h.run_steps(3);
+    assert!(h.state().screen_pos(Point::new(50.0, 30.0)).distance(whole) < 1.0);
+    // -VIEW Delete.
+    type_all(&mut h, &["-view", "d", "whole"]);
+    assert!(h.state_mut().document_mut().views().is_empty());
+}
+
+#[test]
+fn ucs_icon_navigation_bar_and_file_tabs_can_be_hidden() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["ucsicon", "off", "navbar", "off", "filetabclose"]);
+    h.run_steps(2);
+    let vars = &h.state_mut().engine_mut().vars;
+    assert!(!vars.ucs_icon && !vars.nav_bar);
+    assert!(h.query_by_label("Pan (P)").is_none(), "no navigation bar");
+    type_all(&mut h, &["filetab", "navbar", "on"]);
+    h.run_steps(2);
+    assert!(h.state_mut().engine_mut().vars.nav_bar);
+}

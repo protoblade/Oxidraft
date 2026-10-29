@@ -87,7 +87,7 @@ pub(crate) struct Cycling {
 const OVERLAP: f32 = 2.0;
 
 /// What the cursor resolves to this frame.
-struct CursorState {
+pub(crate) struct CursorState {
     screen: Pos2,
     /// Bare cursor position in drawing units.
     raw: Point,
@@ -98,8 +98,9 @@ struct CursorState {
 }
 
 impl OxidraftApp {
-    pub(crate) fn canvas(&mut self, ui: &mut Ui) {
-        let rect = ui.available_rect_before_wrap();
+    /// The drawing area, or model space's current pane: drawing and
+    /// working in it.
+    pub(crate) fn canvas_pane(&mut self, ui: &mut Ui, rect: Rect) {
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         self.canvas_rect = rect;
         let painter = ui.painter_at(rect);
@@ -145,6 +146,7 @@ impl OxidraftApp {
         // VIEWSIZE and VIEWCTR, for ZOOM Center's default.
         self.engine.vars.view_size = f64::from(rect.height()) / self.view.scale;
         self.engine.vars.view_center = self.view.center;
+        self.engine.vars.view_aspect = f64::from(rect.width() / rect.height().max(1.0));
 
         // While dragging a grip the pointer may leave the hover state; keep tracking it.
         let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos());
@@ -194,7 +196,9 @@ impl OxidraftApp {
             Some((f, r)) => (painter.with_clip_rect(r.intersect(rect)), *r, f.frozen.clone()),
             None => (painter.clone(), rect, Vec::new()),
         };
-        self.draw_ucs_icon(&model, rect, area);
+        if self.engine.vars.ucs_icon {
+            self.draw_ucs_icon(&model, rect, area);
+        }
         self.sheet_scale = self.active_viewport.filter(|_| active.is_some()).map(|a| a.page.scale);
         self.draw_entities(&model, rect, cursor.as_ref(), self.doc.space(), &frozen);
         self.sheet_scale = None;
@@ -251,7 +255,9 @@ impl OxidraftApp {
             FontId::proportional(12.0),
             theme::label(),
         );
-        self.navigation_bar(ui, rect);
+        if self.engine.vars.nav_bar {
+            self.navigation_bar(ui, rect);
+        }
         self.selection_list(ui.ctx());
         theme::set_paper(false);
     }
@@ -586,7 +592,7 @@ impl OxidraftApp {
     // ---- drawing ----------------------------------------------------------------
 
     /// Adaptive grid: minor lines with a major line every 5 (GRIDMAJOR).
-    fn draw_grid(&self, painter: &Painter, rect: Rect) {
+    pub(crate) fn draw_grid(&self, painter: &Painter, rect: Rect) {
         let (minor, major) = self.view.grid_step(10.0);
         let min = self.view.to_world(rect, rect.left_bottom());
         let max = self.view.to_world(rect, rect.right_top());
@@ -624,7 +630,7 @@ impl OxidraftApp {
     /// 2D UCS icon: at the origin when it's on screen, else in the lower-left corner.
     /// At the origin when it's on screen in `area` (the drawing area, or
     /// the viewport worked in), else at `area`'s lower left.
-    fn draw_ucs_icon(&self, painter: &Painter, rect: Rect, area: Rect) {
+    pub(crate) fn draw_ucs_icon(&self, painter: &Painter, rect: Rect, area: Rect) {
         let o = self.view.to_screen(rect, Point::ORIGIN);
         let inner = area.shrink2(vec2(60.0, 60.0));
         let at = if inner.contains(o) {
@@ -650,7 +656,7 @@ impl OxidraftApp {
     }
 
     /// Draws `space`'s objects (but those on `frozen` layers).
-    fn draw_entities(
+    pub(crate) fn draw_entities(
         &self,
         painter: &Painter,
         rect: Rect,

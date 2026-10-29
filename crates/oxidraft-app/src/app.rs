@@ -95,6 +95,12 @@ pub struct OxidraftApp {
     pub(crate) insert_table: Option<crate::tables::InsertTable>,
     pub(crate) table_settings: crate::tables::InsertTable,
     pub(crate) table_editor: Option<crate::tables::TableEditor>,
+    /// VPORTS: model space's panes; VIEW's View Manager; whether the file
+    /// tabs and the layout tabs show.
+    pub(crate) tiles: crate::tiles::Tiles,
+    pub(crate) view_manager: Option<crate::named_views::ViewManager>,
+    pub(crate) show_file_tabs: bool,
+    pub(crate) show_layout_tabs: bool,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
     pub(crate) ribbon_space: oxidraft_model::Space,
@@ -120,6 +126,9 @@ pub struct OxidraftApp {
     pub(crate) cursor: Option<Point>,
     /// Drawing area from the last frame.
     pub(crate) canvas_rect: Rect,
+    /// The whole drawing area, all model viewports together: where the
+    /// command line floats.
+    pub(crate) drawing_rect: Rect,
     /// Drawing model space through a viewport: the sheet's screen points
     /// per paper unit, which linetypes go by there (PSLTSCALE 1).
     pub(crate) sheet_scale: Option<f64>,
@@ -221,6 +230,10 @@ impl OxidraftApp {
             insert_table: None,
             table_settings: Default::default(),
             table_editor: None,
+            tiles: Default::default(),
+            view_manager: None,
+            show_file_tabs: true,
+            show_layout_tabs: true,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
@@ -239,6 +252,7 @@ impl OxidraftApp {
             title: String::new(),
             cursor: None,
             canvas_rect: Rect::NOTHING,
+            drawing_rect: Rect::NOTHING,
             sheet_scale: None,
             command_line_top: f32::INFINITY,
             ribbon_tab: 0,
@@ -305,6 +319,7 @@ impl OxidraftApp {
         self.space_views.clear();
         self.active_viewport = None;
         self.last_viewport.clear();
+        self.tiles = Default::default();
         self.view_space = self.doc.space();
         self.view_history.clear();
     }
@@ -369,6 +384,7 @@ impl OxidraftApp {
         self.space_views.clear();
         self.active_viewport = None;
         self.last_viewport.clear();
+        self.tiles = Default::default();
         self.view_space = oxidraft_model::MODEL;
         self.saved_revision = 0;
         self.path = None;
@@ -515,6 +531,9 @@ impl OxidraftApp {
             "VPMAX" => return self.maximize_command(),
             "PAGESETUP" => self.page_setup_command(),
             "TABLE" | "TB" => self.open_insert_table(),
+            "VIEW" | "V" => self.open_view_manager(),
+            "FILETAB" => self.show_file_tabs = true,
+            "FILETABCLOSE" => self.show_file_tabs = false,
             // Viewports and layouts are made on the sheets: out of the
             // viewport worked in first.
             "MVIEW" | "MV" | "LAYOUT" | "LO" => {
@@ -558,6 +577,7 @@ impl OxidraftApp {
                 UiRequest::TextWindow => self.history_expanded = true,
                 UiRequest::MaximizeViewport(id) => self.enter_viewport(id, true),
                 UiRequest::EditTable(id) => self.open_table_editor(id),
+                UiRequest::Tiling(tiling) => self.set_tiling(tiling),
                 UiRequest::SaveXrefEdit => self.prepare_xref_edit_save(),
                 UiRequest::ColorTheme(n) => {
                     let color_theme = if n == 1 { ColorTheme::Light } else { ColorTheme::Dark };
@@ -600,6 +620,7 @@ impl OxidraftApp {
             || self.move_or_copy.is_some()
             || self.insert_table.is_some()
             || self.table_editor.is_some()
+            || self.view_manager.is_some()
             || self.from_template.is_some()
             || self.cycling.is_some();
         if !open || !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -617,6 +638,7 @@ impl OxidraftApp {
             && self.move_or_copy.take().is_none()
             && self.insert_table.take().is_none()
             && self.table_editor.take().is_none()
+            && self.view_manager.take().is_none()
             && self.from_template.take().is_none()
             && self.cycling.take().is_none()
         {
@@ -653,6 +675,10 @@ impl OxidraftApp {
             })
         {
             *mode = Some(mode.unwrap_or(crate::canvas::LassoMode::Window).next());
+        }
+        // Ctrl+R: the next model viewport is current.
+        if ctx.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::R)) {
+            self.next_pane();
         }
         // Ctrl+W, as in AutoCAD (Cmd+W is left to the window).
         if ctx.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::W)) {
@@ -805,7 +831,9 @@ impl eframe::App for OxidraftApp {
         self.top_bar(ui);
         self.ribbon(ui);
         self.status_bar(ui);
-        self.file_tabs(ui);
+        if self.show_file_tabs {
+            self.file_tabs(ui);
+        }
         self.properties_palette(ui);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::model_bg())).show(ui, |ui| {
             self.canvas(ui);
@@ -824,6 +852,7 @@ impl eframe::App for OxidraftApp {
         self.move_or_copy_dialog(&ctx);
         self.insert_table_dialog(&ctx);
         self.table_editor_dialog(&ctx);
+        self.view_manager_dialog(&ctx);
         self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);

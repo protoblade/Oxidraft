@@ -10,7 +10,7 @@ use crate::{app::OxidraftApp, theme};
 
 impl OxidraftApp {
     pub(crate) fn command_line(&mut self, ctx: &egui::Context) {
-        let canvas = self.canvas_rect;
+        let canvas = self.drawing_rect;
         if !canvas.is_positive() {
             return;
         }

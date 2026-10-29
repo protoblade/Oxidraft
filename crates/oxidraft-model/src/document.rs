@@ -185,6 +185,10 @@ enum Change {
         before: Vec<crate::layout::Layout>,
         after: Vec<crate::layout::Layout>,
     },
+    Views {
+        before: Vec<NamedView>,
+        after: Vec<NamedView>,
+    },
     /// REFEDIT's session: started, its working set changed, or ended.
     RefEdit {
         before: Option<Box<RefEdit>>,
@@ -240,6 +244,19 @@ pub struct Document {
     /// them. [`Document::entities`] and what's added are that space's.
     layouts: Vec<crate::layout::Layout>,
     space: crate::layout::Space,
+    /// Named views (VIEW), by name.
+    views: Vec<NamedView>,
+}
+
+/// A view saved by name (VIEW): what's shown, `height` tall and `width`
+/// wide around `center`, in model space or a layout.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NamedView {
+    pub name: String,
+    pub center: Point,
+    pub height: f64,
+    pub width: f64,
+    pub space: crate::layout::Space,
 }
 
 impl Default for Document {
@@ -272,6 +289,7 @@ impl Document {
             refedit: None,
             layouts: Vec::new(),
             space: crate::layout::MODEL,
+            views: Vec::new(),
         }
     }
 
@@ -323,6 +341,36 @@ impl Document {
         after.push(layout);
         self.set_layouts(after);
         id
+    }
+
+    /// The named views, by name.
+    pub fn views(&self) -> &[NamedView] {
+        &self.views
+    }
+
+    /// Saves a named view, replacing one with its name (ignoring case).
+    pub fn save_view(&mut self, view: NamedView) -> Result<(), String> {
+        check_name(&view.name)?;
+        let mut after: Vec<NamedView> =
+            self.views.iter().filter(|v| !v.name.eq_ignore_ascii_case(view.name.trim())).cloned().collect();
+        after.push(NamedView { name: view.name.trim().into(), ..view });
+        after.sort_by_key(|v| v.name.to_lowercase());
+        self.set_views(after);
+        Ok(())
+    }
+
+    pub fn delete_view(&mut self, name: &str) -> bool {
+        let after: Vec<NamedView> = self.views.iter().filter(|v| !v.name.eq_ignore_ascii_case(name)).cloned().collect();
+        let found = after.len() != self.views.len();
+        self.set_views(after);
+        found
+    }
+
+    fn set_views(&mut self, views: Vec<NamedView>) {
+        let before = std::mem::replace(&mut self.views, views.clone());
+        if before != views {
+            self.record(Change::Views { before, after: views });
+        }
     }
 
     /// A name for a new layout: the first of Layout1, Layout2, … not taken.
@@ -1308,6 +1356,7 @@ impl Document {
                     Change::Order { .. } => "Draw order",
                     Change::RefEdit { .. } => "Reference edit",
                     Change::Layouts { .. } => "Layout",
+                    Change::Views { .. } => "View",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -1359,6 +1408,7 @@ impl Document {
             Change::RefEdit { before, after } => {
                 self.refedit = if forward { after } else { before }.as_deref().cloned()
             }
+            Change::Views { before, after } => self.views = if forward { after } else { before }.clone(),
             Change::Layouts { before, after } => {
                 self.layouts = if forward { after } else { before }.clone();
                 // Undoing a new layout while drawing in it: back to model space.

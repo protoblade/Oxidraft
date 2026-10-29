@@ -20,7 +20,9 @@ mod xref;
 
 pub use annotation::Attach;
 pub use clip::clip_to_convex;
-pub use document::{AttributeDisplay, Block, BlockEntity, Document, Layer, Styled, check_name, sanitize_name};
+pub use document::{
+    AttributeDisplay, Block, BlockEntity, Document, Layer, NamedView, Styled, check_name, sanitize_name,
+};
 pub use entity::{
     Attribute, Color, Entity, EntityId, FAR, Geometry, Placement, Vertex, XClip, constant_width, viewport_corners,
 };

@@ -767,6 +767,18 @@ fn main() {
     h.run_steps(3);
     save(&mut h, &dir, "41-annotate-table");
 
+    // Four model viewports, one zoomed in, and the View tab.
+    let mut h = harness();
+    for input in ["vports", "4", "z", "c", "20,20", "25"] {
+        h.state_mut().type_command(input);
+        h.run_steps(1);
+    }
+    h.key_press_modifiers(eframe::egui::Modifiers::CTRL, eframe::egui::Key::R);
+    h.run_steps(2);
+    h.get_by_role_and_label(eframe::egui::accesskit::Role::Tab, "View").click();
+    h.run_steps(3);
+    save(&mut h, &dir, "42-model-viewports");
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");

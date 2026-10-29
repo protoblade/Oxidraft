@@ -271,6 +271,8 @@ impl OxidraftApp {
                     self.home_tab(ui);
                 } else if self.ribbon_tab == LAYOUT_TAB {
                     self.layout_ribbon(ui);
+                } else if RIBBON_TABS[self.ribbon_tab] == "View" {
+                    self.view_tab(ui);
                 } else if RIBBON_TABS[self.ribbon_tab] == "Annotate" {
                     self.annotate_tab(ui);
                 } else if RIBBON_TABS[self.ribbon_tab] == "Insert" {
@@ -350,6 +352,120 @@ impl OxidraftApp {
                 );
             });
         });
+    }
+
+    /// A large button that shows a setting on (highlighted) or off; returns
+    /// true when clicked.
+    fn toggle_tool(&mut self, ui: &mut Ui, icon: Icon, label: &'static str, on: bool, tip: &str) -> bool {
+        let response = paint_large(ui, &tool(icon, label, None, ""), true);
+        if on {
+            ui.painter().rect_stroke(
+                response.rect.shrink(2.0),
+                2.0,
+                Stroke::new(1.0, theme::accent()),
+                egui::StrokeKind::Inside,
+            );
+        }
+        response.on_hover_text(format!("{tip} ({})", if on { "on" } else { "off" })).clicked()
+    }
+
+    /// The View tab: the UCS icon and navigation bar, model viewports,
+    /// named views, the palettes, and the file and layout tabs.
+    fn view_tab(&mut self, ui: &mut Ui) {
+        ribbon_panel(ui, "Viewport Tools", |ui| {
+            let vars = &self.engine.vars;
+            let (ucs, nav) = (vars.ucs_icon, vars.nav_bar);
+            if self.toggle_tool(ui, Icon::Ucs, "UCS\nIcon", ucs, "Shows the UCS icon (UCSICON)") {
+                self.engine.vars.ucs_icon = !ucs;
+            }
+            if self.toggle_tool(ui, Icon::NavigationBar, "Navigation\nBar", nav, "Shows the navigation bar (NAVBAR)") {
+                self.engine.vars.nav_bar = !nav;
+            }
+        });
+        let viewports = ribbon_panel_more(ui, "Model Viewports", |ui| {
+            let config = tool(
+                Icon::ViewportConfig,
+                "Viewport\nConfiguration",
+                Some("VPORTS"),
+                "Splits model space into viewports (VPORTS); Ctrl+R makes the next one current",
+            );
+            let response = paint_large(ui, &config, true).on_hover_text(config.tip);
+            egui::Popup::menu(&response).show(|ui| self.tiling_items(ui));
+        });
+        egui::Popup::menu(&viewports).show(|ui| self.tiling_items(ui));
+        ribbon_panel(ui, "Named Views", |ui| {
+            self.large_tool(
+                ui,
+                &tool(Icon::ViewManager, "View\nManager", Some("VIEW"), "Saves, restores and deletes named views (V)"),
+            );
+            ui.vertical(|ui| {
+                let views: Vec<oxidraft_model::NamedView> = self.doc.views().to_vec();
+                egui::ComboBox::from_id_salt("named_views").width(130.0).selected_text("Restore view").show_ui(
+                    ui,
+                    |ui| {
+                        if views.is_empty() {
+                            ui.colored_label(theme::text_dim(), "No named views");
+                        }
+                        for v in &views {
+                            if ui.selectable_label(false, &v.name).clicked() {
+                                self.restore_view(v);
+                            }
+                        }
+                    },
+                );
+            });
+        });
+        ribbon_panel(ui, "Palettes", |ui| {
+            for t in [
+                tool(Icon::Properties, "Properties", Some("PROPERTIES"), "Shows the Properties palette (Cmd+1)"),
+                tool(
+                    Icon::LayerProperties,
+                    "Layer\nProperties",
+                    Some("LAYER"),
+                    "Opens the Layer Properties Manager (LA)",
+                ),
+                tool(
+                    Icon::ExternalReferences,
+                    "External\nReferences",
+                    Some("XR"),
+                    "Opens the External References palette",
+                ),
+                tool(Icon::InsertBlock, "Blocks", Some("BLOCKSPALETTE"), "Opens the Blocks palette"),
+            ] {
+                self.large_tool(ui, &t);
+            }
+        });
+        ribbon_panel(ui, "Interface", |ui| {
+            let (files, layouts) = (self.show_file_tabs, self.show_layout_tabs);
+            if self.toggle_tool(ui, Icon::FileTabs, "File\nTabs", files, "Shows the file tabs (FILETAB, FILETABCLOSE)")
+            {
+                self.show_file_tabs = !files;
+            }
+            if self.toggle_tool(ui, Icon::LayoutTabs, "Layout\nTabs", layouts, "Shows the Model and layout tabs") {
+                self.show_layout_tabs = !layouts;
+            }
+        });
+    }
+
+    /// The model viewport configurations, as VPORTS makes them.
+    fn tiling_items(&mut self, ui: &mut Ui) {
+        use oxidraft_commands::Tiling;
+        for (tiling, label) in [
+            (Tiling::Single, "Single"),
+            (Tiling::TwoVertical, "Two: Vertical"),
+            (Tiling::TwoHorizontal, "Two: Horizontal"),
+            (Tiling::ThreeRight, "Three: Right"),
+            (Tiling::ThreeLeft, "Three: Left"),
+            (Tiling::FourEqual, "Four: Equal"),
+        ] {
+            if ui.selectable_label(self.tiles.tiling == tiling, label).clicked() {
+                if self.doc.space() != oxidraft_model::MODEL || self.active_viewport.is_some() {
+                    self.engine.log("Model viewports are for model space: switch to the Model tab.");
+                } else {
+                    self.set_tiling(tiling);
+                }
+            }
+        }
     }
 
     /// The Annotate tab: text, dimensions, leaders, tables and markup.
@@ -734,6 +850,8 @@ impl OxidraftApp {
                     tabs.push((None, "Layout1".into()));
                 }
                 let (mut switch, mut action) = (None, None);
+                // The View tab's Layout Tabs can hide them.
+                let tabs = if self.show_layout_tabs { tabs } else { Vec::new() };
                 for (space, name) in tabs {
                     // Double-clicking a layout's tab (or its menu's Rename) renames it in place.
                     if space.is_some() && self.renaming_layout.as_ref().map(|r| r.space) == space {
@@ -896,7 +1014,14 @@ impl OxidraftApp {
 
 /// A large ribbon button: its icon above its label.
 fn paint_large(ui: &mut Ui, t: &Tool, enabled: bool) -> Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(58.0, 76.0), Sense::click());
+    // As wide as its longest line of label needs.
+    let font = FontId::proportional(11.5);
+    let widest = t
+        .label
+        .lines()
+        .map(|l| ui.painter().layout_no_wrap(l.to_string(), font.clone(), theme::text()).size().x)
+        .fold(0.0, f32::max);
+    let (rect, response) = ui.allocate_exact_size(vec2((widest + 10.0).max(58.0), 76.0), Sense::click());
     paint_hover(ui, rect, &response, enabled);
     let color = if enabled { theme::text() } else { theme::text_disabled() };
     let icon = Rect::from_center_size(pos2(rect.center().x, rect.top() + 22.0), vec2(30.0, 30.0));
