@@ -468,6 +468,35 @@ fn main() {
     hover(&mut h, Point::new(150.0, 45.0));
     save(&mut h, &dir, "26-refedit");
 
+    // A large orthophoto zoomed in: the part on screen read again at the
+    // screen's resolution (fine lines a pixel wide stay crisp).
+    let ortho = dir.join("ortho-large.tif");
+    image::RgbImage::from_fn(6000, 4000, |x, y| {
+        let line = x % 50 == 0 || y % 50 == 0 || (x + y) % 97 == 0;
+        let field = (90.0 + 40.0 * ((f64::from(x) / 300.0).sin() + (f64::from(y) / 210.0).cos())) as u8;
+        if line { image::Rgb([240, 240, 230]) } else { image::Rgb([field / 2, field, field / 3]) }
+    })
+    .save(&ortho)
+    .expect("save the orthophoto");
+    std::fs::write(dir.join("ortho-large.tfw"), "0.05\n0\n0\n-0.05\n-49.975\n109.975\n").expect("its world file");
+    let mut h = harness();
+    h.state_mut().attach_images_unloaded(&[ortho]);
+    h.run_steps(2);
+    h.state_mut().load_image("ortho-large");
+    for input in ["z", "20,20", "35,30"] {
+        h.state_mut().type_command(input);
+        h.run_steps(1);
+    }
+    for _ in 0..300 {
+        h.run_steps(1);
+        if !h.state().pictures_loading() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    h.run_steps(2);
+    save(&mut h, &dir, "27-image-detail");
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");

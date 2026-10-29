@@ -1,6 +1,9 @@
 //! Raster and PDF underlays: where an image belongs in the drawing (from
 //! GeoTIFF tags or a world file), and its pixels, scaled down to what the
-//! screen and plots need. A PDF page is rendered to pixels the same way.
+//! screen and plots need: the whole image, or the part of it in view. A
+//! PDF page is rendered to pixels the same way. TIFFs are read a strip or
+//! tile at a time, only those a part covers, so large orthophotos never
+//! have to be decoded whole.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -36,6 +39,31 @@ pub struct Info {
     pub pages: usize,
     /// Where the file says it belongs (GeoTIFF tags or a world file).
     pub georef: Option<Placement>,
+}
+
+/// A part of an image: pixel columns `x0..x1` and rows `y0..y1`, from the
+/// top left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Region {
+    pub x0: u32,
+    pub y0: u32,
+    pub x1: u32,
+    pub y1: u32,
+}
+
+impl Region {
+    pub fn width(&self) -> u32 {
+        self.x1.saturating_sub(self.x0)
+    }
+
+    pub fn height(&self) -> u32 {
+        self.y1.saturating_sub(self.y0)
+    }
+
+    /// True if `other` lies inside this one.
+    pub fn covers(&self, other: &Region) -> bool {
+        self.x0 <= other.x0 && self.y0 <= other.y0 && self.x1 >= other.x1 && self.y1 >= other.y1
+    }
 }
 
 /// Decoded pixels, RGBA, rows top to bottom.
@@ -123,7 +151,7 @@ pub fn probe(path: &Path, page: usize) -> Result<Info, String> {
         let (width, height, pages) = pdf_page_size(std::fs::read(path).map_err(|e| e.to_string())?, page)?;
         return Ok(Info { width, height, pages, georef: None });
     }
-    let (w, h) = image::image_dimensions(path).map_err(|e| format!("not a readable image ({e})"))?;
+    let (w, h) = dimensions(path)?;
     let (width, height) = (f64::from(w), f64::from(h));
     let georef = is_tiff(path).then(|| read_geotiff(path)).flatten().or_else(|| read_world_file(path, width, height));
     Ok(Info { width, height, pages: 0, georef })
@@ -135,12 +163,175 @@ pub fn decode(path: &Path, page: usize, max_side: u32) -> Result<Pixels, String>
     if is_pdf(path) {
         return render_pdf(path, page, max_side);
     }
-    let mut reader = image::ImageReader::open(path).map_err(|e| e.to_string())?;
-    reader.no_limits();
-    let image = reader.with_guessed_format().map_err(|e| e.to_string())?.decode().map_err(|e| e.to_string())?;
+    if is_tiff(path)
+        && let Ok((w, h)) = dimensions(path)
+    {
+        let scale = (f64::from(max_side) / f64::from(w.max(h))).min(1.0);
+        let out = |n: u32| ((f64::from(n) * scale).round() as u32).max(1);
+        if let Ok(px) = read_tiff(path, Region { x0: 0, y0: 0, x1: w, y1: h }, out(w), out(h)) {
+            return Ok(px);
+        }
+    }
+    let image = open_image(path)?;
     let image = if image.width().max(image.height()) > max_side { image.thumbnail(max_side, max_side) } else { image };
     let rgba = image.to_rgba8();
     Ok(Pixels { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
+}
+
+/// `region` of an image (not a PDF), scaled to `width` × `height` pixels.
+pub fn decode_region(path: &Path, region: Region, width: u32, height: u32) -> Result<Pixels, String> {
+    if region.width() == 0 || region.height() == 0 || width == 0 || height == 0 {
+        return Err("nothing to read".into());
+    }
+    if is_tiff(path)
+        && let Ok(px) = read_tiff(path, region, width, height)
+    {
+        return Ok(px);
+    }
+    // Other formats are decoded whole, then cut.
+    let image = open_image(path)?;
+    let (x1, y1) = (region.x1.min(image.width()), region.y1.min(image.height()));
+    if region.x0 >= x1 || region.y0 >= y1 {
+        return Err("outside the image".into());
+    }
+    let part = image.crop_imm(region.x0, region.y0, x1 - region.x0, y1 - region.y0);
+    let rgba = part.resize_exact(width, height, image::imageops::FilterType::Triangle).to_rgba8();
+    Ok(Pixels { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
+}
+
+/// Pixels across and down. TIFFs are asked directly: the image crate can't
+/// open every kind (JPEG-compressed YCbCr, palettes).
+fn dimensions(path: &Path) -> Result<(u32, u32), String> {
+    if is_tiff(path)
+        && let Ok(file) = File::open(path)
+        && let Ok(mut d) = tiff::decoder::Decoder::new(BufReader::new(file))
+        && let Ok(dims) = d.dimensions()
+    {
+        return Ok(dims);
+    }
+    image::image_dimensions(path).map_err(|e| format!("not a readable image ({e})"))
+}
+
+fn open_image(path: &Path) -> Result<image::DynamicImage, String> {
+    let mut reader = image::ImageReader::open(path).map_err(|e| e.to_string())?;
+    reader.no_limits();
+    reader.with_guessed_format().map_err(|e| e.to_string())?.decode().map_err(|e| e.to_string())
+}
+
+/// One pixel of a TIFF's samples as RGBA, by its color type.
+fn tiff_rgba(color: tiff::ColorType, palette: &[u16], s: &[u8]) -> [u8; 4] {
+    use tiff::ColorType;
+    match color {
+        ColorType::Gray(_) | ColorType::Multiband { .. } if s.len() < 3 => [s[0], s[0], s[0], 255],
+        ColorType::GrayA(_) => [s[0], s[0], s[0], s[1]],
+        ColorType::RGBA(_) => [s[0], s[1], s[2], s[3]],
+        ColorType::YCbCr(_) => {
+            // JPEG-compressed orthophotos keep YCbCr (JFIF's conversion).
+            let (y, cb, cr) = (f32::from(s[0]), f32::from(s[1]) - 128.0, f32::from(s[2]) - 128.0);
+            let c = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+            [c(y + 1.402 * cr), c(y - 0.344_136 * cb - 0.714_136 * cr), c(y + 1.772 * cb), 255]
+        }
+        ColorType::Palette(_) => {
+            let n = palette.len() / 3;
+            let i = usize::from(s[0]);
+            let at = |k: usize| palette.get(k * n + i).map_or(0, |v| (v >> 8) as u8);
+            [at(0), at(1), at(2), 255]
+        }
+        ColorType::CMYK(_) | ColorType::CMYKA(_) => {
+            let k = 255 - u16::from(s[3]);
+            let c = |v: u8| ((255 - u16::from(v)) * k / 255) as u8;
+            [c(s[0]), c(s[1]), c(s[2]), 255]
+        }
+        // RGB, and the first three bands of anything else.
+        _ => [s[0], s[1], s[2], 255],
+    }
+}
+
+/// Reads `region` of a TIFF a chunk (strip or tile) at a time, only the
+/// chunks it covers, into `width` × `height` pixels. Shrinking averages
+/// four samples a pixel.
+fn read_tiff(path: &Path, region: Region, width: u32, height: u32) -> Result<Pixels, String> {
+    use tiff::ColorType;
+    use tiff::decoder::{ChunkType, Decoder, DecodingResult, Limits};
+    use tiff::tags::Tag;
+    let err = |e: tiff::TiffError| e.to_string();
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let mut d = Decoder::new(BufReader::new(file)).map_err(err)?.with_limits(Limits::unlimited());
+    let (w, h) = d.dimensions().map_err(err)?;
+    let color = d.colortype().map_err(err)?;
+    let samples = match color {
+        ColorType::Gray(_) | ColorType::Palette(_) => 1,
+        ColorType::GrayA(_) => 2,
+        ColorType::RGB(_) | ColorType::YCbCr(_) => 3,
+        ColorType::RGBA(_) | ColorType::CMYK(_) => 4,
+        ColorType::CMYKA(_) => 5,
+        ColorType::Multiband { num_samples, .. } => usize::from(num_samples),
+        _ => return Err("unsupported color type".into()),
+    };
+    // Separate planes of samples are left to the general decoder.
+    if !matches!(color.bit_depth(), 8 | 16) || d.get_tag_u32(Tag::PlanarConfiguration).is_ok_and(|p| p == 2) {
+        return Err("unsupported sample layout".into());
+    }
+    let palette = match color {
+        ColorType::Palette(_) => d.get_tag_u16_vec(Tag::ColorMap).map_err(err)?,
+        _ => Vec::new(),
+    };
+    let r = Region { x0: region.x0, y0: region.y0, x1: region.x1.min(w), y1: region.y1.min(h) };
+    if r.width() == 0 || r.height() == 0 {
+        return Err("outside the image".into());
+    }
+    let (cw, ch) = d.chunk_dimensions();
+    let across = match d.get_chunk_type() {
+        ChunkType::Strip => 1,
+        ChunkType::Tile => w.div_ceil(cw),
+    };
+    // Where each output pixel samples the image: once, or twice each way
+    // when shrinking. Both lists run in order.
+    let per = if r.width() >= 2 * width || r.height() >= 2 * height { 2 } else { 1 };
+    let positions = |from: u32, len: u32, out: u32| -> Vec<(u32, usize)> {
+        let step = f64::from(len) / f64::from(out * per);
+        (0..out * per)
+            .map(|i| ((from + ((f64::from(i) + 0.5) * step) as u32).min(from + len - 1), (i / per) as usize))
+            .collect()
+    };
+    let (xs, ys) = (positions(r.x0, r.width(), width), positions(r.y0, r.height(), height));
+    let mut sums = vec![[0u16; 4]; (width * height) as usize];
+    let within = |list: &[(u32, usize)], lo: u32, hi: u32| {
+        list.partition_point(|p| p.0 < lo)..list.partition_point(|p| p.0 < hi)
+    };
+    for ty in r.y0 / ch..=(r.y1 - 1) / ch {
+        let rows = within(&ys, ty * ch, (ty + 1) * ch);
+        if rows.is_empty() {
+            continue;
+        }
+        for tx in r.x0 / cw..=(r.x1 - 1) / cw {
+            let cols = within(&xs, tx * cw, (tx + 1) * cw);
+            if cols.is_empty() {
+                continue;
+            }
+            let index = ty * across + tx;
+            let data: Vec<u8> = match d.read_chunk(index).map_err(err)? {
+                DecodingResult::U8(v) => v,
+                DecodingResult::U16(v) => v.into_iter().map(|x| (x >> 8) as u8).collect(),
+                _ => return Err("unsupported sample format".into()),
+            };
+            let row_len = d.chunk_data_dimensions(index).0 as usize * samples;
+            for &(sy, oy) in &ys[rows.clone()] {
+                let row = (sy - ty * ch) as usize * row_len;
+                for &(sx, ox) in &xs[cols.clone()] {
+                    let at = row + (sx - tx * cw) as usize * samples;
+                    let Some(px) = data.get(at..at + samples) else { continue };
+                    let sum = &mut sums[oy * width as usize + ox];
+                    for (s, v) in sum.iter_mut().zip(tiff_rgba(color, &palette, px)) {
+                        *s += u16::from(v);
+                    }
+                }
+            }
+        }
+    }
+    let n = (per * per) as u16;
+    let rgba = sums.into_iter().flat_map(|s| s.map(|v| (v / n) as u8)).collect();
+    Ok(Pixels { width, height, rgba })
 }
 
 fn render_pdf(path: &Path, page: usize, max_side: u32) -> Result<Pixels, String> {
@@ -197,6 +388,98 @@ mod tests {
         assert!(g.origin.approx_eq(Point::new(500_000.0, 4_700_000.0)), "{g:?}");
         assert!(g.u.approx_eq(Point::new(60.0, 0.0)) && g.v.approx_eq(Point::new(0.0, 20.0)));
         assert_eq!(decode(&path, 0, 4096).unwrap().width, 30);
+    }
+
+    #[test]
+    fn parts_of_tiled_and_striped_tiffs_read_only_what_they_cover() {
+        use tiff::{encoder::TiffEncoder, encoder::colortype};
+        // A 300 x 200 gradient: red across, green down.
+        let pixel = |x: u32, y: u32| [(x * 255 / 299) as u8, (y * 255 / 199) as u8, 77];
+        let data: Vec<u8> = (0..200).flat_map(|y| (0..300).flat_map(move |x| pixel(x, y))).collect();
+        let striped = temp("striped.tif");
+        let mut enc = TiffEncoder::new(File::create(&striped).unwrap()).unwrap();
+        let mut img = enc.new_image::<colortype::RGB8>(300, 200).unwrap();
+        img.rows_per_strip(7).unwrap();
+        img.write_data(&data).unwrap();
+        let region = Region { x0: 100, y0: 50, x1: 160, y1: 90 };
+        // At full resolution the part is the image's own pixels.
+        let px = decode_region(&striped, region, 60, 40).unwrap();
+        assert_eq!((px.width, px.height), (60, 40));
+        let at = |px: &Pixels, x: u32, y: u32| px.rgba[((y * px.width + x) * 4) as usize..][..4].to_vec();
+        assert_eq!(at(&px, 0, 0), [pixel(100, 50).as_slice(), &[255]].concat());
+        assert_eq!(at(&px, 59, 39), [pixel(159, 89).as_slice(), &[255]].concat());
+        // Shrunk, each pixel averages its share.
+        let small = decode_region(&striped, region, 15, 10).unwrap();
+        let p = at(&small, 7, 5);
+        assert!((i32::from(p[0]) - i32::from(pixel(130, 70)[0])).abs() <= 2, "{p:?}");
+        // The whole image, as the screen's overview.
+        let whole = decode(&striped, 0, 150).unwrap();
+        assert_eq!((whole.width, whole.height), (150, 100));
+        assert!(decode_region(&striped, Region { x0: 400, y0: 0, x1: 500, y1: 10 }, 10, 1).is_err());
+
+        // The same image in 64 x 64 tiles; a part across four of them.
+        let tiled = temp("tiled.tif");
+        std::fs::write(&tiled, tiled_rgb(300, 200, 64, &pixel)).unwrap();
+        let region = Region { x0: 50, y0: 40, x1: 140, y1: 100 };
+        let px = decode_region(&tiled, region, 90, 60).unwrap();
+        for (x, y) in [(0, 0), (13, 23), (14, 24), (89, 59), (45, 30)] {
+            assert_eq!(at(&px, x, y), [pixel(50 + x, 40 + y).as_slice(), &[255]].concat(), "({x}, {y})");
+        }
+        let whole = decode(&tiled, 0, 300).unwrap();
+        assert_eq!(at(&whole, 299, 199), [pixel(299, 199).as_slice(), &[255]].concat(), "the padded edge tiles");
+    }
+
+    /// An uncompressed RGB TIFF in `tile` x `tile` tiles (the tiff crate
+    /// writes only strips).
+    fn tiled_rgb(w: u32, h: u32, tile: u32, pixel: &dyn Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
+        let (across, down) = (w.div_ceil(tile), h.div_ceil(tile));
+        let mut out = b"II*\0\0\0\0\0".to_vec();
+        let mut offsets = Vec::new();
+        for ty in 0..down {
+            for tx in 0..across {
+                offsets.push(out.len() as u32);
+                for y in ty * tile..(ty + 1) * tile {
+                    for x in tx * tile..(tx + 1) * tile {
+                        out.extend(if x < w && y < h { pixel(x, y) } else { [0; 3] });
+                    }
+                }
+            }
+        }
+        let bits = out.len() as u32;
+        out.extend([8u8, 0, 8, 0, 8, 0]);
+        let offsets_at = out.len() as u32;
+        offsets.iter().for_each(|o| out.extend(o.to_le_bytes()));
+        let counts_at = out.len() as u32;
+        offsets.iter().for_each(|_| out.extend((tile * tile * 3).to_le_bytes()));
+        let ifd = out.len() as u32;
+        out[4..8].copy_from_slice(&ifd.to_le_bytes());
+        let n = offsets.len() as u32;
+        // (tag, type: 3 short / 4 long, count, value or offset)
+        let entries: [(u16, u16, u32, u32); 11] = [
+            (256, 4, 1, w),
+            (257, 4, 1, h),
+            (258, 3, 3, bits),
+            (259, 3, 1, 1),
+            (262, 3, 1, 2),
+            (277, 3, 1, 3),
+            (284, 3, 1, 1),
+            (322, 4, 1, tile),
+            (323, 4, 1, tile),
+            (324, 4, n, offsets_at),
+            (325, 4, n, counts_at),
+        ];
+        out.extend((entries.len() as u16).to_le_bytes());
+        for (tag, kind, count, value) in entries {
+            out.extend(tag.to_le_bytes());
+            out.extend(kind.to_le_bytes());
+            out.extend(count.to_le_bytes());
+            match (kind, count) {
+                (3, 1) => out.extend([(value as u16).to_le_bytes(), [0, 0]].concat()),
+                _ => out.extend(value.to_le_bytes()),
+            }
+        }
+        out.extend(0u32.to_le_bytes());
+        out
     }
 
     #[test]

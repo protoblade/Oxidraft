@@ -674,3 +674,48 @@ fn edit_an_xref_in_place_and_save_it_to_its_file() {
     assert!(dir.join("site.bak").is_file());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn zooming_into_a_large_image_reads_the_part_on_screen_sharper() {
+    let dir = std::env::temp_dir().join(format!("oxidraft-detail-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // 6000 x 4000 pixels at a tenth of a unit each: 600 x 400 units.
+    let tif = dir.join("ortho.tif");
+    image::RgbImage::from_fn(6000, 4000, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])).save(&tif).unwrap();
+    std::fs::write(dir.join("ortho.tfw"), "0.1\n0\n0\n-0.1\n0.05\n399.95\n").unwrap();
+    let mut h = app_with_line();
+    h.state_mut().attach_images_unloaded(&[tif]);
+    h.run_steps(2);
+    h.state_mut().load_image("ortho");
+    let settle = |h: &mut Harness<'_, OxidraftApp>| {
+        for _ in 0..300 {
+            h.run_steps(1);
+            if !h.state().pictures_loading() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    };
+    settle(&mut h);
+    // The whole picture in view: its overview is enough.
+    assert!(h.state().picture_details().is_empty());
+    // Zoomed to a 30-unit window, 300 of its pixels across: read sharper.
+    for input in ["z", "100,100", "130,120"] {
+        h.state_mut().type_command(input);
+        h.run_steps(1);
+    }
+    settle(&mut h);
+    h.run_steps(2);
+    let details = h.state().picture_details();
+    assert_eq!(details.len(), 1, "{details:?}");
+    let (region, scale) = details[0];
+    assert!(scale > 0.9, "read at the screen's resolution: {scale}");
+    // Around the window: x 1000..1300, rows 2800..3000 from the top.
+    assert!(region.x0 <= 1000 && region.x1 >= 1300 && region.y0 <= 2800 && region.y1 >= 3000, "{region:?}");
+    assert!(region.width() < 1000, "only around the view: {region:?}");
+    // Zoomed back out, it's let go.
+    h.state_mut().type_command("ze");
+    h.run_steps(3);
+    assert!(h.state().picture_details().is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}

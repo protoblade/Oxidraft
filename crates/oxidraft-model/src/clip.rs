@@ -52,6 +52,11 @@ fn clip_ring(ring: &[Point], clip: &[Point]) -> Vec<Point> {
     out
 }
 
+/// The part of `ring` inside the convex polygon `convex` (either way round).
+pub fn clip_to_convex(ring: &[Point], convex: &[Point]) -> Vec<Point> {
+    clip_ring(ring, &ccw(convex.to_vec()))
+}
+
 /// The pieces of a curve on the kept side, or `None` if all of it is kept
 /// (or it has no curves).
 fn cut_curve(g: &Geometry, edges: &[Seg], keep: &dyn Fn(Point) -> bool) -> Option<Vec<Geometry>> {

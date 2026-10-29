@@ -50,6 +50,12 @@ pub struct OxidraftApp {
     /// Images and PDF pages: their pixels as read so far, the reader, and
     /// a count that changes whenever pictures come or go.
     pub(crate) rasters: std::collections::HashMap<String, crate::underlay::Raster>,
+    /// The parts of pictures on screen read sharper than their overviews,
+    /// what drawing found it wants this frame, and a count to tell the
+    /// latest request from older ones.
+    pub(crate) details: std::collections::HashMap<String, crate::underlay::Detail>,
+    pub(crate) detail_wants: std::cell::RefCell<Vec<crate::underlay::DetailWant>>,
+    pub(crate) detail_generation: u64,
     pub(crate) loader: crate::underlay::Loader,
     pub(crate) raster_revision: u64,
     pub(crate) image_attach_dialog: Option<crate::underlay::ImageAttachDialog>,
@@ -134,6 +140,9 @@ impl OxidraftApp {
             nested_xrefs: Default::default(),
             xref_edit_save: None,
             rasters: Default::default(),
+            details: Default::default(),
+            detail_wants: Default::default(),
+            detail_generation: 0,
             loader: Default::default(),
             raster_revision: 0,
             image_attach_dialog: None,

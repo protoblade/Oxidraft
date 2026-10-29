@@ -96,6 +96,7 @@ impl OxidraftApp {
         }
         self.draw_ucs_icon(&painter, rect);
         self.draw_entities(&painter, rect, cursor.as_ref());
+        self.request_details();
         if let Some(c) = &cursor {
             for g in self.engine.preview(c.point) {
                 self.draw_geometry(&painter, rect, &g, Stroke::new(1.0, theme::PREVIEW));
@@ -487,7 +488,7 @@ impl OxidraftApp {
     }
 
     /// The part of the drawing the canvas shows.
-    fn world_rect(&self, rect: Rect) -> Aabb {
+    pub(crate) fn world_rect(&self, rect: Rect) -> Aabb {
         Aabb::from_points(self.view.to_world(rect, rect.left_bottom()), self.view.to_world(rect, rect.right_top()))
     }
 
