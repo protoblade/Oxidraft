@@ -135,6 +135,11 @@ pub struct OxidraftApp {
     pub(crate) qv_layouts: bool,
     /// APERTURE: how far object snaps reach, in screen points.
     pub(crate) aperture: f32,
+    /// SAVETIME (minutes between automatic saves; 0 none), the last one,
+    /// and DRAWINGRECOVERY's window.
+    pub(crate) save_time: u32,
+    pub(crate) last_autosave: std::time::Instant,
+    pub(crate) recovery_open: bool,
     /// AUTOCOMPLETE off, and HYPERLINKOPTIONS' tooltips off.
     pub(crate) autocomplete_off: bool,
     pub(crate) hyperlink_tips_off: bool,
@@ -353,6 +358,9 @@ impl OxidraftApp {
             plot_stamp: false,
             qv_layouts: false,
             aperture: crate::canvas::APERTURE,
+            save_time: 10,
+            last_autosave: std::time::Instant::now(),
+            recovery_open: false,
             autocomplete_off: false,
             hyperlink_tips_off: false,
             publish: None,
@@ -652,6 +660,7 @@ impl OxidraftApp {
             Ok(version) => {
                 let format = version.map_or(String::new(), |v| format!(" as {} DWG", v.name()));
                 self.engine.log(format!("Saved {}{format}", path.display()));
+                self.drop_autosave();
                 self.just_saved();
                 self.path = Some(path);
                 self.dwg_version = version;
@@ -801,6 +810,19 @@ impl OxidraftApp {
                 self.log_toggle("Hyperlink tooltips", !self.hyperlink_tips_off);
             }
             "MARKUPCLOSE" => self.markup_close(),
+            "DRAWINGRECOVERY" | "DRM" => self.recovery_open = true,
+            "DRAWINGRECOVERYHIDE" => self.recovery_open = false,
+            "GETENV" => self.engine.log(
+                std::env::vars()
+                    .filter(|(k, _)| k.starts_with("OXIDRAFT"))
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            "TABLET" | "TOOLBAR" | "TASKBAR" | "MENU" | "GRAPHICSCONFIG" | "SECURITYOPTIONS" | "REINIT"
+            | "UPDATETHUMBSNOW" | "BLOCKICON" | "PARTIALOPEN" | "OLELINKS" | "OLESCALE" | "PLOTSTYLE"
+            | "CONVERTCTB" | "CONVERTPSTYLES" | "EXPORTSETTINGS" | "WMFOPTS" | "IMAGEQUALITY" | "TPNAVIGATE"
+            | "TARGETPOINT" => self.engine.log(not_applicable(name)),
             "EXPORTTOAUTOCAD" | "AECTOACAD" => self.export(false),
             "SHEETSET" | "SSM" => self.toggle_sheet_set(),
             "SHEETSETHIDE" => self.sheet_set = None,
@@ -1306,6 +1328,8 @@ impl eframe::App for OxidraftApp {
         self.cui_dialog(&ctx);
         self.sheet_set_palette(&ctx);
         self.quick_view_layouts(&ctx);
+        self.drawing_recovery(&ctx);
+        self.autosave_tick();
         self.publish_dialog(&ctx);
         self.units_dialog(&ctx);
         self.rename_dialog(&ctx);
@@ -1476,4 +1500,27 @@ impl OxidraftApp {
             self.update_dialog = false;
         }
     }
+}
+
+/// What a command with nothing to do in Oxidraft says, and what to use.
+fn not_applicable(name: &str) -> String {
+    let why = match name.trim().to_ascii_uppercase().as_str() {
+        "TABLET" => "digitizing tablets aren't supported",
+        "TOOLBAR" | "MENU" => "Oxidraft has the ribbon; CUI adds shortcuts and Quick Access Toolbar commands",
+        "TASKBAR" => "each drawing has a file tab (Ctrl+Tab goes between them)",
+        "GRAPHICSCONFIG" => "drawing is always hardware accelerated",
+        "SECURITYOPTIONS" => "drawings aren't password protected",
+        "REINIT" | "UPDATETHUMBSNOW" | "BLOCKICON" => "there's nothing to refresh",
+        "PARTIALOPEN" => "OPEN reads the whole drawing",
+        "OLELINKS" | "OLESCALE" => "INSERTOBJ links files rather than embedding OLE objects",
+        "PLOTSTYLE" | "CONVERTCTB" | "CONVERTPSTYLES" => {
+            "plot styles are color-dependent (.ctb); STYLESMANAGER edits them"
+        }
+        "EXPORTSETTINGS" | "WMFOPTS" => "EXPORTDWFX and WMFOUT need no settings",
+        "IMAGEQUALITY" => "images always show at full quality",
+        "TPNAVIGATE" => "TOOLPALETTES opens the palettes, with their tabs",
+        "TARGETPOINT" => "there are no lights in 2D drafting",
+        _ => "it has no use here",
+    };
+    format!("{}: {why}.", name.trim().to_ascii_uppercase())
 }

@@ -104,7 +104,9 @@ impl OxidraftApp {
     pub(crate) fn keep_settings(&mut self, settings: Settings) {
         self.engine.vars.color_theme = u8::from(settings.color_theme == ColorTheme::Light);
         self.engine.aliases = settings.aliases.clone();
-        oxidraft_plot::set_custom_papers(&settings.papers);
+        if settings.papers != self.settings.papers {
+            oxidraft_plot::set_custom_papers(&settings.papers);
+        }
         if settings != self.settings
             && let Some(path) = &self.settings_path
             && let Err(e) = settings.save(path)

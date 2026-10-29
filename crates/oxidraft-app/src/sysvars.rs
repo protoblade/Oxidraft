@@ -391,6 +391,10 @@ fn vars() -> Vec<Var> {
             a.engine.vars.regen_mode = parse_flag(v)?;
             Ok(())
         }),
+        var!("SAVETIME", |a| a.save_time.to_string(), |a, v| {
+            a.save_time = parse_int(v, 0, 600)? as u32;
+            Ok(())
+        }),
         var!("SNAPMODE", |a| flag(a.engine.vars.snap), |a, v| {
             a.engine.vars.snap = parse_flag(v)?;
             Ok(())

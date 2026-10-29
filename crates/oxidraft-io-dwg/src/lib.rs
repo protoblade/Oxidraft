@@ -75,7 +75,8 @@ pub struct Opened {
 
 /// True for a path ending in `.dwg`, any case.
 pub fn is_dwg(path: impl AsRef<Path>) -> bool {
-    path.as_ref().extension().is_some_and(|e| e.eq_ignore_ascii_case("dwg"))
+    // Autosaves (.sv$) are DWG data too.
+    path.as_ref().extension().is_some_and(|e| ["dwg", "sv$"].iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
 /// Reads a DWG file's bytes. Damaged files are read as far as they go, as

@@ -3099,3 +3099,16 @@ fn urls_views_web_pages_and_customization_files() {
     assert!(h.query_by_label("line").is_some(), "LINE on the Quick Access Toolbar");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn automatic_saves_and_drawing_recovery() {
+    let mut h = app_with_line();
+    let path = h.state_mut().autosave_now().expect("an automatic save");
+    assert!(path.is_file() && path.extension().is_some_and(|e| e == "sv$"));
+    type_all(&mut h, &["drawingrecovery"]);
+    h.run_steps(2);
+    assert!(h.query_by_label("Drawing Recovery Manager").is_some());
+    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(h.get_all_by_label_contains(&name).next().is_some(), "the autosave is listed");
+    std::fs::remove_file(&path).ok();
+}

@@ -1107,6 +1107,19 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "HYPERLINKOPTIONS", aliases: &[], description: "Hyperlink tooltips on or off", make: None },
     CommandInfo { name: "MARKUPCLOSE", aliases: &[], description: "Hide the markups (layer MARKUP off)", make: None },
     CommandInfo { name: "EXPORTTOAUTOCAD", aliases: &["AECTOACAD"], description: "Save a copy as a DWG", make: None },
+    CommandInfo {
+        name: "DRAWINGRECOVERY",
+        aliases: &["DRM"],
+        description: "The automatic saves left by a crash, to open",
+        make: None,
+    },
+    CommandInfo {
+        name: "DRAWINGRECOVERYHIDE",
+        aliases: &[],
+        description: "Close the Drawing Recovery Manager",
+        make: None,
+    },
+    CommandInfo { name: "GETENV", aliases: &[], description: "Oxidraft's environment settings", make: None },
     CommandInfo { name: "CASCADE", aliases: &[], description: "Show the open drawings cascaded", make: None },
     CommandInfo { name: "TILE", aliases: &[], description: "Show the open drawings side by side", make: None },
     CommandInfo {
