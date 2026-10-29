@@ -30,13 +30,33 @@ const CURSOR_SIZE: f32 = 5.0;
 const GRIP_SIZE: f32 = 5.0;
 
 /// A primary-button drag in progress.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Drag {
-    /// Press-drag on empty space: a selection window.
-    Window,
+    /// Press-drag on empty space: a lasso through these points (drawing
+    /// units), as in AutoCAD. Dragged off to the right it's a window lasso
+    /// (objects inside it), to the left a crossing one (inside or
+    /// crossing it); `crossing` is set once the drag has gone either way.
+    Lasso { points: Vec<Point>, crossing: Option<bool> },
     /// Press-drag on a grip: stretch it and drop it where the button is released.
     Grip,
 }
+
+/// Selection cycling: a click on objects lying on top of each other lists
+/// them, to pick the one meant (AutoCAD's Selection list).
+pub(crate) struct Cycling {
+    /// Where it was clicked, on screen and in the drawing, and whether
+    /// Shift was down (to take the object out of the selection).
+    screen: Pos2,
+    at: Point,
+    shift: bool,
+    ids: Vec<oxidraft_model::EntityId>,
+    /// The listed object the pointer is over, highlighted in the drawing.
+    hovered: Option<oxidraft_model::EntityId>,
+}
+
+/// How far apart, in screen points, objects can be and still count as
+/// lying on top of each other.
+const OVERLAP: f32 = 2.0;
 
 /// What the cursor resolves to this frame.
 struct CursorState {
@@ -204,6 +224,7 @@ impl OxidraftApp {
             theme::label(),
         );
         self.navigation_bar(ui, rect);
+        self.selection_list(ui.ctx());
         theme::set_paper(false);
     }
 
@@ -431,7 +452,14 @@ impl OxidraftApp {
         let tolerance = self.pick_tolerance();
         let shift = ui.input(|i| i.modifiers.shift);
 
-        // Press-drag on a grip stretches it; on empty space it draws a selection window.
+        // While the Selection list is open, a click in the drawing closes it.
+        if self.cycling.is_some() {
+            if response.clicked() || response.drag_started() {
+                self.cycling = None;
+            }
+            return;
+        }
+        // Press-drag on a grip stretches it; on empty space it draws a lasso.
         if response.drag_started_by(PointerButton::Primary)
             && self.engine.is_selecting()
             && self.engine.window_start().is_none()
@@ -445,13 +473,28 @@ impl OxidraftApp {
                 self.engine.click(start, start, false, &mut self.doc, tolerance);
                 self.drag = Some(Drag::Grip);
             } else if snap::pick(&self.doc, start, tolerance).is_none() {
-                self.engine.click(start, start, shift, &mut self.doc, tolerance);
-                self.drag = Some(Drag::Window);
+                self.drag = Some(Drag::Lasso { points: vec![start], crossing: None });
+            }
+        }
+        // The lasso follows the pointer: a point every few screen points.
+        if let Some(Drag::Lasso { points, crossing }) = &mut self.drag
+            && let Some(&last) = points.last()
+        {
+            let (view, rect) = (self.view, self.canvas_rect);
+            if view.to_screen(rect, last).distance(c.screen) >= 3.0 {
+                points.push(c.raw);
+            }
+            let dx = c.screen.x - view.to_screen(rect, points[0]).x;
+            if crossing.is_none() && dx.abs() >= 4.0 {
+                *crossing = Some(dx < 0.0);
             }
         }
         if response.drag_stopped_by(PointerButton::Primary) {
             match self.drag.take() {
-                Some(Drag::Window) => self.engine.click(c.raw, c.raw, shift, &mut self.doc, tolerance),
+                Some(Drag::Lasso { mut points, crossing }) => {
+                    points.push(c.raw);
+                    self.engine.select_lasso(points, crossing.unwrap_or(false), shift, &mut self.doc, tolerance);
+                }
                 // Dropped with snaps and tracking applied, like a second click.
                 Some(Drag::Grip) => self.engine.click(c.point, c.raw, false, &mut self.doc, tolerance),
                 None => {}
@@ -459,6 +502,18 @@ impl OxidraftApp {
         }
         let picking_point = !self.picks_objects();
         if response.clicked_by(PointerButton::Primary) {
+            // Objects on top of each other: a list to pick the one meant.
+            let on_grip = !self.engine.is_active()
+                && !shift
+                && self.engine.grips(&self.doc).iter().any(|g| g.distance(c.raw) <= tolerance);
+            if self.selection_cycling && self.engine.is_selecting() && self.engine.window_start().is_none() && !on_grip
+            {
+                let ids = snap::pick_overlapping(&self.doc, c.raw, tolerance, self.view.units(OVERLAP));
+                if ids.len() > 1 {
+                    self.cycling = Some(Cycling { screen: c.screen, at: c.raw, shift, ids, hovered: None });
+                    return;
+                }
+            }
             self.engine.click(c.point, c.raw, shift, &mut self.doc, tolerance);
             // A one-shot snap override is used up by the point it picked.
             if picking_point {
@@ -563,13 +618,19 @@ impl OxidraftApp {
         // Rollover highlighting: the object under the pickbox gets thicker, and
         // so does everything a selection window in progress would select
         // (AutoCAD's selection preview).
-        let hovered: Vec<_> = match (cursor, self.engine.window_start()) {
-            (Some(c), Some(first)) => snap::window_select(&self.doc, first, c.raw),
-            (Some(c), None) if self.picks_objects() => {
+        let mut hovered: Vec<_> = match (cursor, self.engine.window_start(), &self.drag) {
+            (Some(c), _, Some(Drag::Lasso { points, crossing })) => {
+                let ring: Vec<Point> = points.iter().copied().chain([c.raw]).collect();
+                snap::polygon_select(&self.doc, &ring, crossing.unwrap_or(false))
+            }
+            (Some(c), Some(first), _) => snap::window_select(&self.doc, first, c.raw),
+            (Some(c), None, _) if self.picks_objects() => {
                 snap::pick(&self.doc, c.raw, self.pick_tolerance()).into_iter().collect()
             }
             _ => Vec::new(),
         };
+        // The object pointed at in the Selection list.
+        hovered.extend(self.cycling.as_ref().and_then(|c| c.hovered));
         let view = self.world_rect(rect);
         // Dash patterns in screen pixels by linetype name, looked up once a frame.
         let mut patterns: HashMap<String, Option<Vec<f64>>> = HashMap::new();
@@ -884,6 +945,10 @@ impl OxidraftApp {
     /// Selection window: blue solid for a window (left to right),
     /// green dashed for a crossing window (right to left).
     fn draw_window(&self, painter: &Painter, rect: Rect, c: &CursorState) {
+        if let Some(Drag::Lasso { points, crossing }) = &self.drag {
+            self.draw_lasso(painter, rect, points, c, crossing.unwrap_or(false));
+            return;
+        }
         let Some(first) = self.engine.window_start() else { return };
         let a = self.view.to_screen(rect, first);
         let r = Rect::from_two_pos(a, c.screen);
@@ -893,6 +958,71 @@ impl OxidraftApp {
             painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, theme::crossing_edge()), 6.0, 4.0));
         } else {
             painter.rect(r, 0.0, theme::window_fill(), Stroke::new(1.0, theme::window_edge()), StrokeKind::Middle);
+        }
+    }
+
+    /// A lasso being dragged: blue and solid as a window, green and dashed
+    /// when crossing, as the selection windows are.
+    fn draw_lasso(&self, painter: &Painter, rect: Rect, points: &[Point], c: &CursorState, crossing: bool) {
+        let ring: Vec<Point> = points.iter().copied().chain([c.raw]).collect();
+        let fill = if crossing { theme::crossing_fill() } else { theme::window_fill() };
+        let mut mesh = egui::Mesh::default();
+        for t in oxidraft_model::hatch::triangles(std::slice::from_ref(&ring)) {
+            let i = mesh.vertices.len() as u32;
+            for p in t {
+                mesh.colored_vertex(self.view.to_screen(rect, p), fill);
+            }
+            mesh.add_triangle(i, i + 1, i + 2);
+        }
+        painter.add(Shape::mesh(mesh));
+        let mut outline: Vec<Pos2> = ring.iter().map(|p| self.view.to_screen(rect, *p)).collect();
+        outline.push(outline[0]);
+        if crossing {
+            painter.extend(Shape::dashed_line(&outline, Stroke::new(1.0, theme::crossing_edge()), 6.0, 4.0));
+        } else {
+            painter.add(Shape::line(outline, Stroke::new(1.0, theme::window_edge())));
+        }
+    }
+
+    /// The Selection list of objects on top of each other where it was
+    /// clicked: pointing at one highlights it, clicking it selects it.
+    pub(crate) fn selection_list(&mut self, ctx: &egui::Context) {
+        let Some(cycling) = &mut self.cycling else { return };
+        let mut chosen = None;
+        let doc = &self.doc;
+        cycling.hovered = None;
+        egui::Area::new(egui::Id::unique("selection_cycling"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(cycling.screen + vec2(14.0, 14.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(egui::RichText::new("Selection").strong());
+                    ui.separator();
+                    for &id in &cycling.ids {
+                        let Some(e) = doc.entity(id) else { continue };
+                        let color = theme::swatch(doc.display_color(e));
+                        let row = ui.horizontal(|ui| {
+                            let (swatch, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+                            ui.painter().rect_filled(swatch, 1.0, color);
+                            let item = ui.selectable_label(false, e.geometry.name());
+                            ui.colored_label(theme::text_dim(), &e.layer);
+                            item
+                        });
+                        let item = row.inner;
+                        if item.hovered() || row.response.hovered() {
+                            cycling.hovered = Some(id);
+                        }
+                        if item.clicked() {
+                            chosen = Some(id);
+                        }
+                    }
+                });
+            });
+        if let Some(id) = chosen {
+            let (at, shift) = (cycling.at, cycling.shift);
+            self.cycling = None;
+            let tolerance = self.pick_tolerance();
+            self.engine.select_object(id, at, shift, &mut self.doc, tolerance);
         }
     }
 

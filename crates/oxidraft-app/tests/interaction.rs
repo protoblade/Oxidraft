@@ -133,10 +133,76 @@ fn click_click_grip_editing_still_works() {
 }
 
 #[test]
-fn dragging_on_empty_space_selects_with_a_window() {
+fn clicking_two_corners_selects_with_a_window() {
     let mut h = app_with_line();
     let (from, to) = (screen(&h, -10.0, 5.0), screen(&h, 110.0, -3.0));
-    drag(&mut h, from, to);
+    click(&mut h, from);
+    click(&mut h, to);
+    assert_eq!(h.state_mut().engine_mut().selection().len(), 1);
+}
+
+/// Presses at the first point, drags through the others, and lets go at the last.
+fn drag_through(h: &mut Harness<'_, OxidraftApp>, path: &[(f64, f64)]) {
+    let points: Vec<Pos2> = path.iter().map(|&(x, y)| screen(h, x, y)).collect();
+    h.hover_at(points[0]);
+    h.run_steps(1);
+    button(h, points[0], true);
+    for pair in points.windows(2) {
+        for i in 1..=6 {
+            h.hover_at(pair[0] + (pair[1] - pair[0]) * (i as f32 / 6.0));
+            h.run_steps(1);
+        }
+    }
+    button(h, *points.last().unwrap(), false);
+}
+
+#[test]
+fn dragging_on_empty_space_draws_a_lasso() {
+    let mut h = app_with_line();
+    // Off to the right first: a window lasso, round the lower line only.
+    drag_through(&mut h, &[(-10.0, 10.0), (110.0, 10.0), (110.0, -10.0), (-10.0, -10.0), (-10.0, 8.0)]);
+    let lower = h.state_mut().engine_mut().selection().to_vec();
+    assert_eq!(lower.len(), 1);
+    // Off to the left first: a crossing lasso, which only has to cut the upper line.
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    drag_through(&mut h, &[(70.0, 50.0), (30.0, 50.0), (30.0, 62.0), (70.0, 62.0), (70.0, 52.0)]);
+    let upper = h.state_mut().engine_mut().selection().to_vec();
+    assert_eq!(upper.len(), 1);
+    assert_ne!(upper, lower);
+}
+
+#[test]
+fn clicking_objects_on_top_of_each_other_lists_them_to_choose_from() {
+    let mut h = app_with_line();
+    // A polyline right over the lower line.
+    let over = h.state_mut().document_mut().add(Geometry::Polyline {
+        vertices: vec![
+            oxidraft_model::Vertex::at(Point::new(0.0, 0.0)),
+            oxidraft_model::Vertex::at(Point::new(100.0, 0.0)),
+        ],
+        closed: false,
+    });
+    h.run_steps(2);
+    let at = screen(&h, 50.0, 0.0);
+    click(&mut h, at);
+    h.run_steps(2);
+    assert!(h.query_by_label("Selection").is_some(), "the list is up");
+    assert!(h.state_mut().engine_mut().selection().is_empty(), "nothing picked yet");
+    // The list's Polyline, not the ribbon's: the one below where it was clicked.
+    let item = h.get_all_by_label("Polyline").find(|n| n.rect().min.y > at.y).expect("listed");
+    item.click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().engine_mut().selection(), &[over]);
+    assert!(h.query_by_label("Selection").is_none(), "the list closed");
+    // With selection cycling off (Ctrl+W), a click picks one straight away.
+    h.key_press(Key::Escape);
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::CTRL, Key::W);
+    h.run_steps(1);
+    click(&mut h, at);
+    h.run_steps(2);
+    assert!(h.query_by_label("Selection").is_none());
     assert_eq!(h.state_mut().engine_mut().selection().len(), 1);
 }
 

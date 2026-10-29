@@ -127,6 +127,10 @@ pub struct OxidraftApp {
     pub(crate) recall: Option<usize>,
     /// What a primary-button drag in the drawing area is doing.
     pub(crate) drag: Option<crate::canvas::Drag>,
+    /// SELECTIONCYCLING: a click on objects on top of each other lists
+    /// them to choose from (Ctrl+W), and the list while it's open.
+    pub(crate) selection_cycling: bool,
+    pub(crate) cycling: Option<crate::canvas::Cycling>,
     pub(crate) updater: Updater,
     pub(crate) update_dialog: bool,
     pub(crate) layer_manager_open: bool,
@@ -230,6 +234,8 @@ impl OxidraftApp {
             suggestion: 0,
             recall: None,
             drag: None,
+            selection_cycling: true,
+            cycling: None,
             updater: Updater::default(),
             update_dialog: false,
             layer_manager_open: false,
@@ -576,7 +582,8 @@ impl OxidraftApp {
             || self.quick_select.is_some()
             || self.attach_dialog.is_some()
             || self.image_attach_dialog.is_some()
-            || self.delete_layout_prompt.is_some();
+            || self.delete_layout_prompt.is_some()
+            || self.cycling.is_some();
         if !open || !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             return false;
         }
@@ -589,6 +596,7 @@ impl OxidraftApp {
             && self.quick_select.take().is_none()
             && self.attach_dialog.take().is_none()
             && self.delete_layout_prompt.take().is_none()
+            && self.cycling.take().is_none()
         {
             self.image_attach_dialog = None;
         }
@@ -607,6 +615,11 @@ impl OxidraftApp {
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         let cmd = Modifiers::COMMAND;
         let none = Modifiers::NONE;
+        // Ctrl+W, as in AutoCAD (Cmd+W is left to the window).
+        if ctx.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::W)) {
+            self.selection_cycling = !self.selection_cycling;
+            self.log_toggle("Selection cycling", self.selection_cycling);
+        }
         if ctx.input_mut(|i| i.consume_key(cmd, Key::Num1)) {
             self.properties_open = !self.properties_open;
         }

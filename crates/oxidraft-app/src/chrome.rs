@@ -722,6 +722,16 @@ impl OxidraftApp {
                     self.update_badge(ui);
                     ui.label(egui::RichText::new("1:1").color(theme::text_dim()));
                     ui.add_space(6.0);
+                    let mut cycling = self.selection_cycling;
+                    if status_toggle(
+                        ui,
+                        "SELCYCLE",
+                        &mut cycling,
+                        "Selection Cycling: choose among objects on top of each other (Ctrl+W)",
+                    ) {
+                        self.selection_cycling = cycling;
+                        self.log_toggle("Selection cycling", cycling);
+                    }
                     let mut lwt = self.show_lineweights;
                     if status_toggle(ui, "LWT", &mut lwt, "Show/Hide Lineweight") {
                         self.show_lineweights = lwt;

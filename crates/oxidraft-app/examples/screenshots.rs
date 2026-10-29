@@ -695,6 +695,54 @@ fn main() {
     h.run_steps(4);
     save(&mut h, &dir, "38-page-setup");
 
+    // A crossing lasso being dragged round the columns, leftwards.
+    let mut h = harness();
+    let path = [
+        (48.0, 12.0),
+        (30.0, 10.0),
+        (12.0, 14.0),
+        (10.0, 32.0),
+        (16.0, 48.0),
+        (34.0, 50.0),
+        (46.0, 36.0),
+        (44.0, 22.0),
+    ];
+    let at = |h: &Harness<'_, OxidraftApp>, (x, y): (f64, f64)| h.state().screen_pos(Point::new(x, y));
+    let start = at(&h, path[0]);
+    h.hover_at(start);
+    h.run_steps(1);
+    h.event(Event::PointerButton {
+        pos: start,
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.run_steps(1);
+    for pair in path.windows(2) {
+        let (a, b) = (at(&h, pair[0]), at(&h, pair[1]));
+        for i in 1..=5 {
+            h.hover_at(a + (b - a) * (i as f32 / 5.0));
+            h.run_steps(1);
+        }
+    }
+    save(&mut h, &dir, "39-lasso");
+
+    // Selection cycling: a polyline drawn over a wall, clicked where they overlap.
+    let mut h = harness();
+    h.state_mut().document_mut().add_on_layer(
+        Geometry::Polyline {
+            vertices: vec![Vertex::at(Point::new(60.0, 0.0)), Vertex::at(Point::new(60.0, 60.0))],
+            closed: false,
+        },
+        "Doors",
+        Color::ByLayer,
+    );
+    h.run_steps(2);
+    click(&mut h, Point::new(60.0, 30.0));
+    h.run_steps(2);
+    hover(&mut h, Point::new(64.0, 27.0));
+    save(&mut h, &dir, "40-selection-cycling");
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");
