@@ -117,6 +117,10 @@ impl OxidraftApp {
                     self.engine.log(e);
                 }
             }
+            TabAction::PageSetup(MODEL) => {
+                self.switch_space(MODEL);
+                self.open_model_page_setup();
+            }
             TabAction::PageSetup(space) => self.open_page_setup(space),
             TabAction::Plot(space) => {
                 self.switch_space(space);
@@ -197,7 +201,7 @@ impl OxidraftApp {
     pub(crate) fn page_setup_command(&mut self) {
         let space = self.shown_space();
         if space == MODEL {
-            self.engine.log("Model space plots with the Plot dialog's settings (PLOT); page setups are for layouts.");
+            self.open_model_page_setup();
             return;
         }
         self.open_page_setup(space);

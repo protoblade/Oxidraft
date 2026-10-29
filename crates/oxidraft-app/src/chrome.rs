@@ -702,6 +702,10 @@ impl OxidraftApp {
                             item("Page Setup...", TabAction::PageSetup(s));
                             item("Plot...", TabAction::Plot(s));
                         }
+                        if model {
+                            item("Page Setup...", TabAction::PageSetup(oxidraft_model::MODEL));
+                            item("Plot...", TabAction::Plot(oxidraft_model::MODEL));
+                        }
                     });
                 }
                 if let Some(space) = switch.filter(|s| *s != Some(current)) {

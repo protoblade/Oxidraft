@@ -24,6 +24,9 @@ pub(crate) struct PlotDialog {
     pub(crate) preview: bool,
     /// Opened for PREVIEW: closing the preview closes everything.
     preview_only: bool,
+    /// PAGESETUP on the Model tab: OK keeps the settings for the next
+    /// plot instead of plotting.
+    setup_only: bool,
     /// The sheet as last laid out, with the settings and drawing revision
     /// it was laid out for.
     sheet: Option<(PlotSettings, u64, Option<Sheet>)>,
@@ -204,7 +207,16 @@ impl OxidraftApp {
         if space != MODEL {
             settings.area = PlotArea::Layout;
         }
-        self.plot = Some(PlotDialog { settings, picking: false, preview, preview_only: preview, sheet: None, space });
+        let setup_only = false;
+        self.plot = Some(PlotDialog {
+            settings,
+            picking: false,
+            preview,
+            preview_only: preview,
+            setup_only,
+            sheet: None,
+            space,
+        });
     }
 
     /// The Plot dialog's settings, while it's open.
@@ -304,7 +316,7 @@ impl OxidraftApp {
         let (space, layout) = (dialog.space, dialog.settings.area == PlotArea::Layout);
         let title = self.doc.layout(space).map_or("Model".into(), |l| l.name.clone());
         let paper_name = dialog.settings.paper_name(&self.doc, space);
-        egui::Window::new(format!("Plot - {title}"))
+        egui::Window::new(format!("{} - {title}", if dialog.setup_only { "Page Setup" } else { "Plot" }))
             .id(egui::Id::unique("plot_dialog"))
             .open(&mut open)
             .collapsible(false)
@@ -527,9 +539,23 @@ impl OxidraftApp {
             self.engine.pick_plot_window(&mut self.doc);
         }
         dialog.preview |= preview && dialog.sheet().is_some();
+        if ok && dialog.setup_only {
+            self.plot_settings = dialog.settings;
+            self.engine.log("Page setup kept for the model's plots.");
+            return;
+        }
         self.plot = Some(dialog);
         if ok {
             self.plot_with_dialog();
+        }
+    }
+
+    /// PAGESETUP on the Model tab: the Plot dialog's settings, kept for
+    /// plotting model space.
+    pub(crate) fn open_model_page_setup(&mut self) {
+        self.open_plot(false);
+        if let Some(d) = &mut self.plot {
+            d.setup_only = true;
         }
     }
 

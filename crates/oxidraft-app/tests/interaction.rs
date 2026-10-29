@@ -1347,3 +1347,20 @@ fn snap_mode_puts_clicked_points_on_the_snap_spacing() {
     });
     assert_eq!(drawn.collect::<Vec<_>>(), [(Point::new(10.0, 30.0), Point::new(30.0, 30.0))]);
 }
+
+#[test]
+fn page_setup_on_the_model_tab_keeps_the_plot_settings() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["pagesetup"]);
+    h.run_steps(2);
+    assert!(h.query_by_label("Page Setup - Model").is_some());
+    h.state_mut().plot_settings_mut().unwrap().landscape = false;
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Page Setup - Model").is_none(), "closed without plotting");
+    // The next plot starts from it.
+    type_all(&mut h, &["plot"]);
+    h.run_steps(1);
+    assert!(!h.state_mut().plot_settings_mut().unwrap().landscape);
+}
