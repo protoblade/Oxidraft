@@ -1491,6 +1491,8 @@ pub struct Entity {
     pub hyperlink: Option<Box<Hyperlink>>,
     /// The annotation scales it supports, when it's annotative.
     pub annotative: Option<Box<Annotative>>,
+    /// Its layout, when it's an associative array (a block reference).
+    pub array: Option<Box<crate::assoc_array::AssocArray>>,
     pub geometry: Geometry,
 }
 

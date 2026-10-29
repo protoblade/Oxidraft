@@ -10,6 +10,7 @@ use crate::{
     annotate::SingleText,
     arc::Arc,
     array::Array,
+    array::ArrayEdit,
     array::ArrayKind,
     attdef::{AttDef, AttSync},
     attribute::AttDisp,
@@ -293,6 +294,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         description: "Copy objects around a center point",
         make: Some(|| Box::new(Array::new(Some(ArrayKind::Polar)))),
+    },
+    CommandInfo {
+        name: "-ARRAY",
+        aliases: &["-AR"],
+        description: "Copy objects in rows and columns or around a center, as plain copies",
+        make: Some(|| Box::new(Array::classic())),
+    },
+    CommandInfo {
+        name: "ARRAYEDIT",
+        aliases: &[],
+        description: "Change an associative array's rows, columns or items",
+        make: Some(|| Box::new(ArrayEdit::default())),
     },
     CommandInfo {
         name: "EXPLODE",
@@ -3373,7 +3386,8 @@ mod tests {
     fn array_rectangular_and_polar() {
         let (mut e, mut d) = (engine(), Document::new());
         type_all(&mut e, &mut d, &["c", "0,0", "1"]);
-        type_all(&mut e, &mut d, &["ar"]);
+        // -ARRAY makes plain copies.
+        type_all(&mut e, &mut d, &["-ar"]);
         click(&mut e, &mut d, 1.0, 0.0);
         type_all(&mut e, &mut d, &["", "r", "2", "3", "10", "20"]);
         assert!(!e.is_active());
@@ -3385,7 +3399,7 @@ mod tests {
         // Four items around (0,10): the circle at (0,0) and three copies a quarter turn apart.
         type_all(&mut e, &mut d, &["arraypolar"]);
         click(&mut e, &mut d, 1.0, 0.0);
-        type_all(&mut e, &mut d, &["", "0,10", "4", "", ""]);
+        type_all(&mut e, &mut d, &["", "as", "n", "0,10", "4", "", ""]);
         let mut centers: Vec<Point> = d
             .entities()
             .filter_map(|x| if let Geometry::Circle { center, .. } = x.geometry { Some(center) } else { None })
@@ -3396,6 +3410,62 @@ mod tests {
         for (c, (x, y)) in centers.iter().zip(expected) {
             assert!(c.approx_eq(Point::new(x, y)), "{centers:?}");
         }
+    }
+
+    #[test]
+    fn associative_arrays_edit_and_explode() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["c", "0,0", "1"]);
+        type_all(&mut e, &mut d, &["arrayrect"]);
+        click(&mut e, &mut d, 1.0, 0.0);
+        type_all(&mut e, &mut d, &["", "2", "3", "10", "20"]);
+        assert_eq!(d.len(), 1, "one object");
+        let array = d.entities().next().unwrap().id;
+        let circles = |d: &Document| {
+            let e = d.entities().next().unwrap();
+            d.expanded(e).iter().filter(|g| matches!(g, Geometry::Circle { .. })).count()
+        };
+        assert_eq!(circles(&d), 6);
+        // ARRAYEDIT: 4 columns 5 apart, then 1 row.
+        type_all(&mut e, &mut d, &["arrayedit"]);
+        click(&mut e, &mut d, 1.0, 0.0);
+        type_all(&mut e, &mut d, &["col", "4", "5", "r", "1", "", ""]);
+        assert!(!e.is_active());
+        assert_eq!(circles(&d), 4);
+        assert!(matches!(
+            d.array(array).map(|a| &a.layout),
+            Some(oxidraft_model::assoc_array::ArrayLayout::Rect { rows: 1, columns: 4, column_spacing, .. })
+                if *column_spacing == 5.0
+        ));
+        type_all(&mut e, &mut d, &["u"]);
+        assert_eq!(circles(&d), 6, "the edits undo as one");
+        e.set_selection(vec![array]);
+        type_all(&mut e, &mut d, &["explode"]);
+        assert_eq!(d.len(), 6);
+        assert_eq!(d.blocks().count(), 0, "its blocks went with it");
+        assert!(d.entities().any(|x| x.geometry == Geometry::Circle { center: Point::new(40.0, 10.0), radius: 1.0 }));
+
+        // Polar, then its items and fill changed.
+        type_all(&mut e, &mut d, &["erase", "all", ""]);
+        type_all(&mut e, &mut d, &["c", "0,0", "1"]);
+        type_all(&mut e, &mut d, &["arraypolar"]);
+        click(&mut e, &mut d, 1.0, 0.0);
+        type_all(&mut e, &mut d, &["", "0,10", "4", "", ""]);
+        assert_eq!((d.len(), circles(&d)), (1, 4));
+        type_all(&mut e, &mut d, &["arrayedit"]);
+        click(&mut e, &mut d, 1.0, 0.0);
+        type_all(&mut e, &mut d, &["it", "3", "f", "180", "x"]);
+        let e0 = d.entities().next().unwrap();
+        let mut at: Vec<(i64, i64)> = d
+            .expanded(e0)
+            .iter()
+            .filter_map(|g| match g {
+                Geometry::Circle { center, .. } => Some((center.x.round() as i64, center.y.round() as i64)),
+                _ => None,
+            })
+            .collect();
+        at.sort();
+        assert_eq!(at, [(0, 0), (0, 20), (10, 10)]);
     }
 
     #[test]

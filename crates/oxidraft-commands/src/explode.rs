@@ -26,6 +26,18 @@ impl Command for Explode {
                         ctx.doc.add_like(Geometry::from_seg(&seg), &e);
                     }
                 }
+                // An array's items become plain objects.
+                Geometry::Insert { .. } if e.array.is_some() => {
+                    ctx.doc.remove(e.id);
+                    for (be, g) in ctx.doc.array_objects(&e) {
+                        let layer = if be.layer == "0" { &e.layer } else { &be.layer };
+                        ctx.doc.add_styled(g, layer, be.color, &be.linetype, be.lineweight);
+                    }
+                    if let (Geometry::Insert { block, .. }, Some(a)) = (&e.geometry, e.array.as_deref()) {
+                        ctx.doc.remove_unused_block(block);
+                        ctx.doc.remove_unused_block(&a.item);
+                    }
+                }
                 // One level, as in AutoCAD: nested references stay references.
                 // Attribute values become plain text (like AutoCAD's BURST).
                 // AutoCAD won't explode an attached drawing: bind it first.

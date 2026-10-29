@@ -3,6 +3,7 @@
 
 use eframe::egui::{self, Align, CursorIcon, Frame, Id, Layout, Margin, RichText, Sense, Stroke, Ui, vec2};
 use oxidraft_geom::{Point, curve::ArcSeg};
+use oxidraft_model::assoc_array::{ArrayLayout, MAX_ITEMS};
 use oxidraft_model::{
     Color, CurrentProps, Entity, EntityId, Geometry, HatchPattern, Lineweight, Transparency,
     annotation::{angular_measurement, format_angle, format_measurement, measurement, radial_value},
@@ -577,6 +578,33 @@ impl OxidraftApp {
                 ("Basepoint Y", Value::Number(base.y)),
                 ("Angle", Value::Angle(Point::ORIGIN.angle_to(*direction))),
             ],
+            Geometry::Insert { placement, .. } if e.array.is_some() => {
+                let layout = e.array.as_deref().map(|a| &a.layout);
+                let mut rows = vec![
+                    ("Position X", Value::Number(placement.position.x)),
+                    ("Position Y", Value::Number(placement.position.y)),
+                    ("Scale", Value::Number(placement.scale)),
+                    ("Rotation", Value::Angle(placement.rotation)),
+                ];
+                match layout {
+                    Some(ArrayLayout::Rect { rows: r, columns, row_spacing, column_spacing }) => rows.extend([
+                        ("Columns", Value::Number(*columns as f64)),
+                        ("Column spacing", Value::Number(*column_spacing)),
+                        ("Rows", Value::Number(*r as f64)),
+                        ("Row spacing", Value::Number(*row_spacing)),
+                    ]),
+                    Some(ArrayLayout::Polar { items, fill, rotate, .. }) => rows.extend([
+                        ("Items", Value::Number(*items as f64)),
+                        ("Fill angle", Value::Number(*fill)),
+                        ("Rotate items", yes_no(*rotate)),
+                    ]),
+                    Some(ArrayLayout::Path { items, align, .. }) => {
+                        rows.extend([("Items", Value::Number(*items as f64)), ("Align items", yes_no(*align))]);
+                    }
+                    None => {}
+                }
+                rows
+            }
             Geometry::Insert { block, placement, attributes, .. } => {
                 let mut rows = vec![
                     ("Name", Value::Text(block.clone())),
@@ -668,7 +696,21 @@ impl OxidraftApp {
                                 }
                             });
                         shown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, label));
-                        if let Some(g) = picked.and_then(|o| with_text_property(&e.geometry, label, o)) {
+                        let yes = picked == Some("Yes");
+                        let array = e.array.as_deref().filter(|_| picked.is_some()).and_then(|a| {
+                            let mut layout = a.layout.clone();
+                            match (&mut layout, label) {
+                                (ArrayLayout::Polar { rotate: on, .. }, "Rotate items")
+                                | (ArrayLayout::Path { align: on, .. }, "Align items") => *on = yes,
+                                _ => return None,
+                            }
+                            Some(layout)
+                        });
+                        if let Some(layout) = array {
+                            self.doc.begin("PROPERTIES");
+                            self.doc.set_array_layout(e.id, layout);
+                            self.doc.commit();
+                        } else if let Some(g) = picked.and_then(|o| with_text_property(&e.geometry, label, o)) {
                             self.edit([e.id], |x| x.geometry = g.clone());
                         }
                         None
@@ -683,7 +725,12 @@ impl OxidraftApp {
                         None
                     }
                 };
-                if let Some(v) = changed {
+                let array = changed.and_then(|v| with_array_property(&e.array.as_deref()?.layout, label, v));
+                if let Some(layout) = array {
+                    self.doc.begin("PROPERTIES");
+                    self.doc.set_array_layout(e.id, layout);
+                    self.doc.commit();
+                } else if let Some(v) = changed {
                     let g = with_property(&e.geometry, label, v);
                     match g {
                         Some(g) => self.edit([e.id], |x| x.geometry = g.clone()),
@@ -745,6 +792,24 @@ impl OxidraftApp {
         }
         self.doc.commit();
     }
+}
+
+/// An array's layout with one property changed, or `None` if it isn't
+/// one of its or the value is invalid.
+fn with_array_property(layout: &ArrayLayout, label: &str, v: f64) -> Option<ArrayLayout> {
+    let mut layout = layout.clone();
+    let count = (v >= 1.0 && v.fract() == 0.0 && v <= MAX_ITEMS as f64).then_some(v as usize);
+    match (&mut layout, label) {
+        (ArrayLayout::Rect { columns, .. }, "Columns") => *columns = count?,
+        (ArrayLayout::Rect { rows, .. }, "Rows") => *rows = count?,
+        (ArrayLayout::Rect { column_spacing, .. }, "Column spacing") => *column_spacing = v,
+        (ArrayLayout::Rect { row_spacing, .. }, "Row spacing") => *row_spacing = v,
+        (ArrayLayout::Polar { items, .. }, "Items") => *items = count.filter(|n| *n >= 2)?,
+        (ArrayLayout::Path { items, .. }, "Items") => *items = count?,
+        (ArrayLayout::Polar { fill, .. }, "Fill angle") if v != 0.0 && v.abs() <= 360.0 => *fill = v,
+        _ => return None,
+    }
+    (layout.count() <= MAX_ITEMS).then_some(layout)
 }
 
 /// The geometry with one property changed, or `None` if the value is invalid.
@@ -912,7 +977,15 @@ fn with_text_property(g: &Geometry, label: &str, s: &str) -> Option<Geometry> {
 
 /// "No selection", "Line (1)", or "All (3)" for mixed types.
 fn selection_title(selected: &[Entity]) -> String {
-    match common(selected.iter().map(|e| e.geometry.name())) {
+    let name = |e: &Entity| match e.array.as_deref() {
+        Some(a) => match a.layout {
+            ArrayLayout::Rect { .. } => "Array (Rectangular)",
+            ArrayLayout::Polar { .. } => "Array (Polar)",
+            ArrayLayout::Path { .. } => "Array (Path)",
+        },
+        None => e.geometry.name(),
+    };
+    match common(selected.iter().map(name)) {
         _ if selected.is_empty() => "No selection".into(),
         Some(name) => format!("{name} ({})", selected.len()),
         None => format!("All ({})", selected.len()),

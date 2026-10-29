@@ -155,20 +155,22 @@ enum PathStage {
     Select,
     Path,
     Count(EntityId),
+    Associative(EntityId),
     Turn(EntityId, usize),
 }
 
 /// ARRAYPATH: copies of the objects spaced evenly along a path curve, the
 /// first at its start (where the objects themselves go), turned with the
-/// path or not.
+/// path or not; one associative array while ARRAYASSOCIATIVITY is on.
 pub struct ArrayPath {
     stage: PathStage,
     ids: Vec<EntityId>,
+    associative: Option<bool>,
 }
 
 impl Default for ArrayPath {
     fn default() -> Self {
-        Self { stage: PathStage::Select, ids: Vec::new() }
+        Self { stage: PathStage::Select, ids: Vec::new(), associative: None }
     }
 }
 
@@ -179,6 +181,12 @@ impl ArrayPath {
         let length: f64 = segs.iter().map(|s| s.length()).sum();
         if length <= EPSILON {
             return Err("The path has no length.".into());
+        }
+        if self.associative.unwrap_or(ctx.vars.array_assoc) {
+            let layout =
+                oxidraft_model::assoc_array::ArrayLayout::Path { path: Box::new(curve), items: count, align: turn };
+            ctx.doc.make_array(&self.ids, layout);
+            return Ok(Step::Done);
         }
         let gaps = if curve.is_closed() { count } else { count - 1 };
         let step = length / gaps.max(1) as f64;
@@ -211,7 +219,12 @@ impl Command for ArrayPath {
         match self.stage {
             PathStage::Select => Prompt::new("Select objects"),
             PathStage::Path => Prompt::new("Select path curve"),
-            PathStage::Count(_) => Prompt::new("Enter number of items along path").with_default("6"),
+            PathStage::Count(_) => {
+                Prompt::new("Enter number of items along path").with_keywords(&["ASsociative"]).with_default("6")
+            }
+            PathStage::Associative(_) => Prompt::new("Create associative array")
+                .with_keywords(&["Yes", "No"])
+                .with_default(if self.associative == Some(false) { "No" } else { "Yes" }),
             PathStage::Turn(..) => {
                 Prompt::new("Align items to the path?").with_keywords(&["Yes", "No"]).with_default("Yes")
             }
@@ -238,6 +251,11 @@ impl Command for ArrayPath {
                 self.stage = PathStage::Turn(path, v as usize);
             }
             (PathStage::Count(path), Input::Enter) => self.stage = PathStage::Turn(path, 6),
+            (PathStage::Count(path), Input::Keyword("ASsociative")) => self.stage = PathStage::Associative(path),
+            (PathStage::Associative(path), input @ (Input::Keyword(_) | Input::Enter)) => {
+                self.associative = Some(input != Input::Keyword("No"));
+                self.stage = PathStage::Count(path);
+            }
             (PathStage::Count(_), _) => return Err("Requires a whole number of 1 or more.".into()),
             (PathStage::Turn(path, count), input) => {
                 return self.array(ctx, path, count, input != Input::Keyword("No"));
@@ -336,6 +354,7 @@ mod tests {
         let path = d.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(30.0, 0.0) });
         let circle = d.entities().find(|x| x.id != path).unwrap().id;
         e.set_selection(vec![circle]);
+        e.vars.array_assoc = false;
         run(&mut e, &mut d, &["arraypath"]);
         let on_path = Point::new(15.0, 0.0);
         e.click(on_path, on_path, false, &mut d, 0.5);

@@ -1,0 +1,106 @@
+//! An associative array's layout, kept as XDATA on its block reference
+//! (other programs see the reference and its nested items): the kind, the
+//! item block, then the numbers. A path is kept as a polyline.
+
+use dxf::{XData, XDataItem};
+use oxidraft_geom::Point;
+use oxidraft_model::assoc_array::{ArrayLayout, AssocArray, MAX_ITEMS};
+use oxidraft_model::{Document, Entity, EntityId, Geometry, Vertex};
+
+pub const APP: &str = "OXIDRAFT_ARRAY";
+
+fn long(n: usize) -> XDataItem {
+    XDataItem::Long(i32::try_from(n).unwrap_or(i32::MAX))
+}
+
+pub fn xdata(e: &Entity) -> Option<XData> {
+    let a = e.array.as_deref()?;
+    let mut items = vec![XDataItem::Str(String::new()), XDataItem::Str(a.item.clone())];
+    let kind = match &a.layout {
+        ArrayLayout::Rect { rows, columns, row_spacing, column_spacing } => {
+            items.extend([
+                long(*rows),
+                long(*columns),
+                XDataItem::Real(*row_spacing),
+                XDataItem::Real(*column_spacing),
+            ]);
+            "RECT"
+        }
+        ArrayLayout::Polar { center, items: n, fill, rotate } => {
+            items.extend([XDataItem::Real(center.x), XDataItem::Real(center.y), long(*n), XDataItem::Real(*fill)]);
+            items.push(XDataItem::Integer(i16::from(*rotate)));
+            "POLAR"
+        }
+        ArrayLayout::Path { path, items: n, align } => {
+            let Geometry::Polyline { vertices, closed } =
+                Geometry::polyline_from_segs(&path.segments(), path.is_closed())
+            else {
+                return None;
+            };
+            items.extend([long(*n), XDataItem::Integer(i16::from(*align)), XDataItem::Integer(i16::from(closed))]);
+            for v in vertices {
+                items.extend([XDataItem::Real(v.point.x), XDataItem::Real(v.point.y), XDataItem::Real(v.bulge)]);
+            }
+            "PATH"
+        }
+    };
+    items[0] = XDataItem::Str(kind.into());
+    Some(XData { application_name: APP.into(), items })
+}
+
+/// The array the reference `id` is, from its XDATA. The item block is
+/// the one its block refers to: blocks may be renamed on the way.
+pub fn read(x_data: &[XData], doc: &Document, id: EntityId) -> Option<Box<AssocArray>> {
+    let x = x_data.iter().find(|x| x.application_name == APP)?;
+    let mut strings = x.items.iter().filter_map(|i| if let XDataItem::Str(s) = i { Some(s.as_str()) } else { None });
+    let kind = strings.next()?;
+    let Geometry::Insert { block, .. } = &doc.entity(id)?.geometry else { return None };
+    let item = doc.block(block)?.entities.iter().find_map(|be| match &be.geometry {
+        Geometry::Insert { block, .. } => Some(block.clone()),
+        _ => None,
+    })?;
+    let reals: Vec<f64> =
+        x.items.iter().filter_map(|i| if let XDataItem::Real(v) = i { Some(*v) } else { None }).collect();
+    let counts: Vec<usize> = x
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            XDataItem::Long(n) => usize::try_from(*n).ok(),
+            _ => None,
+        })
+        .filter(|n| (1..=MAX_ITEMS).contains(n))
+        .collect();
+    let flags: Vec<bool> =
+        x.items.iter().filter_map(|i| if let XDataItem::Integer(n) = i { Some(*n != 0) } else { None }).collect();
+    let layout = match kind {
+        "RECT" => match (counts.as_slice(), reals.as_slice()) {
+            ([rows, columns], [row_spacing, column_spacing]) => ArrayLayout::Rect {
+                rows: *rows,
+                columns: *columns,
+                row_spacing: *row_spacing,
+                column_spacing: *column_spacing,
+            },
+            _ => return None,
+        },
+        "POLAR" => match (counts.as_slice(), reals.as_slice()) {
+            ([items], [x, y, fill]) => ArrayLayout::Polar {
+                center: Point::new(*x, *y),
+                items: *items,
+                fill: *fill,
+                rotate: flags.first().copied().unwrap_or(true),
+            },
+            _ => return None,
+        },
+        "PATH" => {
+            let (&[items], &[align, closed]) = (counts.as_slice(), flags.as_slice()) else { return None };
+            let (vertices, _) = reals.as_chunks::<3>();
+            if vertices.len() < 2 {
+                return None;
+            }
+            let vertices = vertices.iter().map(|[x, y, b]| Vertex::new(Point::new(*x, *y), *b)).collect();
+            ArrayLayout::Path { path: Box::new(Geometry::Polyline { vertices, closed }), items, align }
+        }
+        _ => return None,
+    };
+    reals.iter().all(|v| v.is_finite()).then(|| Box::new(AssocArray { layout, item }))
+}

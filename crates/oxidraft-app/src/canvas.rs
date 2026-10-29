@@ -626,8 +626,10 @@ impl OxidraftApp {
             && !self.edit_attributes(id)
         {
             // A block (not an xref) opens in Edit Block Definition, as in AutoCAD.
+            // An array opens its properties.
+            let array = self.doc.array(id).is_some();
             match self.doc.entity(id).map(|e| &e.geometry) {
-                Some(Geometry::Insert { block, .. }) if self.doc.xref(block).is_none() => {
+                Some(Geometry::Insert { block, .. }) if self.doc.xref(block).is_none() && !array => {
                     let block = block.clone();
                     self.open_block_edit_dialog(Some(block));
                 }

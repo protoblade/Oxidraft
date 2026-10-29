@@ -121,6 +121,10 @@ fn vars() -> Vec<Var> {
             a.anno_autoscale = parse_int(v, -4, 4)? > 0;
             Ok(())
         }),
+        var!("ARRAYASSOCIATIVITY", |a| flag(a.engine.vars.array_assoc), |a, v| {
+            a.engine.vars.array_assoc = parse_flag(v)?;
+            Ok(())
+        }),
         var!(
             "AUNITS",
             |a| ANGLE_TYPES.iter().position(|t| *t == a.doc.units().angle).unwrap_or(0).to_string(),

@@ -157,6 +157,7 @@ impl NCopy {
             lineweight: part.lineweight,
             transparency: e.transparency,
             hyperlink: None,
+            array: None,
             geometry: part.geometry,
         })
     }

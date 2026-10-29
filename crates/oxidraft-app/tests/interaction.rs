@@ -2792,3 +2792,27 @@ fn underlay_layers_hide_from_view_and_import() {
     assert_eq!(back.pdf_layers_off("plan"), ["Doors".to_string()]);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn an_associative_array_shows_and_changes_in_properties() {
+    use oxidraft_model::assoc_array::ArrayLayout;
+    let mut h = app_with_line();
+    let wall = screen(&h, 50.0, 0.0);
+    click(&mut h, wall);
+    type_all(&mut h, &["arrayrect", "2", "3", "10", "200"]);
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.len(), 2, "the array and the other line");
+    let id = doc.entities().find(|e| e.array.is_some()).unwrap().id;
+    click(&mut h, wall);
+    h.state_mut().type_command("pr");
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("Array (Rectangular) (1)").is_some());
+    h.get_by_role_and_label(Role::TextInput, "Columns").focus();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_role_and_label(Role::TextInput, "Columns").type_text("5");
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    let layout = h.state_mut().document_mut().array(id).map(|a| a.layout.clone());
+    assert!(matches!(layout, Some(ArrayLayout::Rect { rows: 2, columns: 5, .. })), "{layout:?}");
+}

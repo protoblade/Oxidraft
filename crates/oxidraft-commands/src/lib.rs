@@ -322,6 +322,8 @@ pub struct Vars {
     pub grid_spacing: f64,
     /// DIMASSOC: 2 associates new dimensions with what they measure.
     pub dim_assoc: u8,
+    /// ARRAYASSOCIATIVITY: new arrays are one associative object.
+    pub array_assoc: bool,
     /// How far the view is turned (VIEWTWIST), kept by the app.
     pub view_rotation: f64,
     /// The last area AREA or MEASUREGEOM measured (for Volume).
@@ -373,6 +375,7 @@ impl Default for Vars {
             viewport: None,
             grid_spacing: 0.0,
             dim_assoc: 2,
+            array_assoc: true,
             view_rotation: 0.0,
             erased: Vec::new(),
             last_area: 0.0,

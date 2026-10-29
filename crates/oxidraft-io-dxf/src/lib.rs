@@ -18,6 +18,7 @@ use oxidraft_model::{
     constant_width, hatch, is_dependent, linetype,
 };
 
+mod array_xdata;
 mod clip_dxf;
 mod dim_xdata;
 mod hatch_dxf;
@@ -233,11 +234,17 @@ struct Exporter {
     hatches: Vec<Vec<(i32, String)>>,
     /// The image and PDF definitions' handles, for their references.
     images: underlay_dxf::Handles,
+    /// Block names in use (upper case), which new ones avoid.
+    taken: std::collections::HashSet<String>,
 }
 
 impl Exporter {
     fn anonymous_block(&mut self, prefix: char, entities: Vec<EntityType>, layer: &str) -> String {
-        let name = format!("*{prefix}{}", self.blocks.len() + 1);
+        let name = (self.blocks.len() + 1..)
+            .map(|i| format!("*{prefix}{i}"))
+            .find(|n| !self.taken.contains(&n.to_ascii_uppercase()))
+            .unwrap_or_default();
+        self.taken.insert(name.to_ascii_uppercase());
         self.blocks.push(dxf::Block {
             name: name.clone(),
             entities: entities
@@ -1057,6 +1064,9 @@ fn build(doc: &Document) -> Built {
     if doc.all_entities().any(|e| e.annotative.is_some()) {
         apps.push(ANNO_APP);
     }
+    if doc.all_entities().any(|e| e.array.is_some()) {
+        apps.push(array_xdata::APP);
+    }
     let dims: Vec<_> = doc.all_entities().flat_map(|e| dim_xdata::xdata(&e.geometry)).collect();
     for x in &dims {
         if !apps.contains(&x.application_name.as_str()) {
@@ -1144,7 +1154,11 @@ fn build(doc: &Document) -> Built {
             ..Default::default()
         });
     }
-    let mut ex = Exporter { images: underlay_dxf::add_definitions(&mut drawing, doc), ..Default::default() };
+    let mut ex = Exporter {
+        images: underlay_dxf::add_definitions(&mut drawing, doc),
+        taken: doc.blocks().map(|b| b.name.to_ascii_uppercase()).collect(),
+        ..Default::default()
+    };
     let mut blocks = Vec::new();
     // Clipped references in blocks: (block, index), for their filters once
     // they have handles.
@@ -1172,7 +1186,9 @@ fn build(doc: &Document) -> Built {
                 entities.push(de);
             }
         }
-        blocks.push(dxf::Block { name: b.name.clone(), base_point: to_dxf(b.base), entities, ..Default::default() });
+        let mut block = dxf::Block { name: b.name.clone(), base_point: to_dxf(b.base), entities, ..Default::default() };
+        block.set_is_anonymous(b.name.starts_with('*'));
+        blocks.push(block);
     }
     // Objects are written in draw order, which is the order AutoCAD draws
     // them in when there's no SORTENTSTABLE.
@@ -1186,6 +1202,7 @@ fn build(doc: &Document) -> Built {
             de.common.x_data.extend(hyperlink_xdata(e));
             de.common.x_data.extend(dim_xdata::xdata(&e.geometry));
             de.common.x_data.extend(anno_xdata(e));
+            de.common.x_data.extend(array_xdata::xdata(e));
             add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
             entities.push((de, &e.geometry, e.id));
         }
@@ -1202,6 +1219,7 @@ fn build(doc: &Document) -> Built {
                 de.common.x_data.extend(hyperlink_xdata(e));
                 de.common.x_data.extend(dim_xdata::xdata(&e.geometry));
                 de.common.x_data.extend(anno_xdata(e));
+                de.common.x_data.extend(array_xdata::xdata(e));
                 if i == 0 {
                     de.common.is_in_paper_space = true;
                     add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
@@ -1770,7 +1788,8 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
             });
             continue;
         }
-        if is_dependent(&b.name) {
+        // A dimension's block is made again from it on saving.
+        if is_dependent(&b.name) || b.name.to_ascii_uppercase().starts_with("*D") {
             continue;
         }
         let mut entities = Vec::new();
@@ -1870,6 +1889,9 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                 if let Some(a) = anno_from(&e.common.x_data) {
                     doc.update(id, |x| x.annotative = Some(a));
                 }
+                if let Some(a) = array_xdata::read(&e.common.x_data, &doc, id) {
+                    doc.update(id, |x| x.array = Some(a));
+                }
                 placed.push((e.common.handle.0, position as f64, id));
             }
             None => skipped += 1,
@@ -1909,6 +1931,9 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                     }
                     if let Some(a) = anno_from(&e.common.x_data) {
                         doc.update(id, |x| x.annotative = Some(a));
+                    }
+                    if let Some(a) = array_xdata::read(&e.common.x_data, &doc, id) {
+                        doc.update(id, |x| x.array = Some(a));
                     }
                     placed.push((e.common.handle.0, f64::from(u32::MAX), id));
                 }
@@ -2101,8 +2126,55 @@ pub fn write_with_handles<W: Write>(doc: &Document, writer: &mut W) -> Result<Ha
     let fixed = set_header_value(&fixed, "$CELWEIGHT", &celweight);
     let fixed = underlay_dxf::rename_type(&fixed, "UNDERLAYDEFINITION", "PDFDEFINITION");
     let fixed = clip_dxf::drop_unused_planes(&fixed);
+    let fixed = fix_handles(&fixed);
     writer.write_all(&hatch_dxf::insert_hatches(&fixed, &hatches)).map_err(Error::IoError)?;
     Ok(handles)
+}
+
+/// Handles the dxf crate leaves out or repeats, which AutoCAD may refuse:
+/// each table its own, and each block's ENDBLK one other than its
+/// BLOCK's; past the others, with $HANDSEED after them.
+fn fix_handles(dxf: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(dxf);
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let handle_at = |i: usize| {
+        matches!(lines[i].trim(), "5" | "105").then(|| u64::from_str_radix(lines[i + 1].trim(), 16).ok()).flatten()
+    };
+    let pairs = (0..lines.len().saturating_sub(1)).step_by(2);
+    let mut next = pairs.clone().filter_map(handle_at).max().unwrap_or(0) + 1;
+    let mut seen = std::collections::HashSet::new();
+    let (mut kind, mut out, mut changed) = ("", String::with_capacity(text.len() + 4096), false);
+    for i in pairs {
+        let (code, value) = (lines[i], lines[i + 1]);
+        if code.trim() == "0" {
+            kind = value.trim();
+        }
+        match handle_at(i) {
+            Some(h) if !seen.insert(h) && kind == "ENDBLK" => {
+                out.push_str(code);
+                out.push_str(&format!("{next:X}{}", eol(value)));
+                seen.insert(next);
+                (next, changed) = (next + 1, true);
+                continue;
+            }
+            _ => {}
+        }
+        out.push_str(code);
+        out.push_str(value);
+        // A table's name, then its handle and (no) owner.
+        if kind == "TABLE" && code.trim() == "2" && lines.get(i + 2).is_none_or(|c| c.trim() != "5") {
+            let end = eol(value);
+            out.push_str(&format!("  5{end}{next:X}{end}330{end}0{end}"));
+            (next, changed) = (next + 1, true);
+        }
+    }
+    if !changed {
+        return dxf.to_vec();
+    }
+    if lines.len() % 2 == 1 {
+        out.push_str(lines[lines.len() - 1]);
+    }
+    set_header_value(out.as_bytes(), "$HANDSEED", &format!("{next:X}"))
 }
 
 /// The DXF with header variable `name`'s value replaced (its first value

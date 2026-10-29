@@ -113,6 +113,7 @@ const MODIFY_MORE: &[Tool] = &[
     tool(Icon::Move, "Align", Some("ALIGN"), "Moves, turns and scales objects so two points land on two others (AL)"),
     tool(Icon::Lengthen, "Reverse", Some("REVERSE"), "Reverses lines, polylines and splines"),
     tool(Icon::Array, "Path Array", Some("ARRAYPATH"), "Copies objects evenly along a path curve"),
+    tool(Icon::Array, "Edit Array", Some("ARRAYEDIT"), "Changes an associative array's rows, columns or items"),
     tool(Icon::Viewport, "Change Space", Some("CHSPACE"), "Moves objects between a layout's sheet and model space"),
 ];
 const BLOCK_INSERT: Tool = tool(

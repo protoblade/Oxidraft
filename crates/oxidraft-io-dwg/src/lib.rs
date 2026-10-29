@@ -99,7 +99,7 @@ pub fn read(bytes: &[u8]) -> Result<Opened, Error> {
             .records()
             .iter()
             .filter(|r| {
-                ["PE_URL", "OXIDRAFT_ANNO"].contains(&r.application_name.as_str())
+                ["PE_URL", "OXIDRAFT_ANNO", "OXIDRAFT_ARRAY"].contains(&r.application_name.as_str())
                     || dimension && ["ACAD", "OXIDRAFT_DIM"].contains(&r.application_name.as_str())
             })
             .cloned()
@@ -978,6 +978,86 @@ mod tests {
         oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
         let back = oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document;
         assert!(back.entities().next().unwrap().annotative.is_some(), "Oxidraft's DXF");
+        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
+    fn associative_arrays_survive() {
+        use oxidraft_model::assoc_array::ArrayLayout;
+        let mut doc = Document::new();
+        let c = doc.add(Geometry::Circle { center: Point::new(0.0, 0.0), radius: 1.0 });
+        let l = doc.add(Geometry::Line { start: Point::new(0.0, 5.0), end: Point::new(3.0, 5.0) });
+        let rect = ArrayLayout::Rect { rows: 2, columns: 3, row_spacing: 10.0, column_spacing: 20.0 };
+        doc.make_array(&[c], rect.clone()).unwrap();
+        let arc = Geometry::Arc { center: Point::new(50.0, 50.0), radius: 10.0, start_angle: 0.0, end_angle: 180.0 };
+        doc.make_array(&[l], ArrayLayout::Path { path: Box::new(arc), items: 5, align: true }).unwrap();
+        // Two dimensions, whose blocks mustn't clash with the arrays'.
+        for x in [0.0, 30.0] {
+            doc.add(Geometry::Dimension {
+                p1: Point::new(x, 0.0),
+                p2: Point::new(x + 10.0, 0.0),
+                line: Point::new(x, -10.0),
+                rotation: 0.0,
+                aligned: false,
+                text: None,
+                scale: 1.0,
+                extra: Default::default(),
+            });
+        }
+        let parts = |d: &Document| {
+            let mut n: Vec<usize> = d
+                .entities()
+                .filter(|e| e.array.is_some())
+                .map(|e| d.expanded(e).iter().filter(|g| !matches!(g, Geometry::Point { .. })).count())
+                .collect();
+            n.sort();
+            n
+        };
+        let check = |back: &Document, how: &str| {
+            let arrays: Vec<_> = back.entities().filter_map(|e| e.array.as_deref()).collect();
+            assert_eq!(arrays.len(), 2, "{how}");
+            assert!(arrays.iter().any(|a| a.layout == rect), "{how}");
+            assert!(
+                arrays.iter().any(|a| matches!(a.layout, ArrayLayout::Path { items: 5, align: true, .. })),
+                "{how}"
+            );
+            assert_eq!(parts(back), [5, 6], "{how}");
+            // Still editable.
+            let mut back = back.clone();
+            let id = back.entities().find(|e| e.array.as_ref().is_some_and(|a| a.layout == rect)).unwrap().id;
+            back.begin("ARRAYEDIT");
+            assert!(back.set_array_layout(
+                id,
+                ArrayLayout::Rect { rows: 1, columns: 2, row_spacing: 1.0, column_spacing: 4.0 }
+            ));
+            back.commit();
+            assert_eq!(parts(&back), [2, 5], "{how}");
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        let back = oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document;
+        check(&back, "Oxidraft's DXF");
+        // Saved again: one block of each name.
+        let mut again = Vec::new();
+        oxidraft_io_dxf::write(&back, &mut again).unwrap();
+        let text = String::from_utf8_lossy(&again);
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let (mut names, mut in_block) = (Vec::new(), false);
+        for w in lines.windows(2) {
+            if w[0] == "0" {
+                in_block = w[1] == "BLOCK";
+            } else if in_block && w[0] == "2" {
+                names.push(w[1]);
+                in_block = false;
+            }
+        }
+        let count = names.len();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), count, "{names:?}");
         check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
         for version in [Version::R2018, Version::R2000] {
             check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));

@@ -2098,6 +2098,7 @@ impl Document {
             lineweight,
             transparency,
             hyperlink: None,
+            array: None,
             geometry,
         };
         self.insert_entity(entity)
