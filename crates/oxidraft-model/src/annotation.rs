@@ -182,8 +182,9 @@ pub fn text_box(
         .map(|(x, y)| (position + Point::new(x, y)).rotated_about(position, rotation))
 }
 
-/// Dimension style values for scale 1, like AutoCAD's ISO-25 style
-/// (with a decimal point instead of a comma).
+/// Dimension style values for scale 1 (DIMSTYLE); the default is like
+/// AutoCAD's ISO-25 style (with a decimal point instead of a comma).
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DimStyle {
     pub text_height: f64,
     pub arrow_size: f64,
@@ -197,11 +198,41 @@ pub struct DimStyle {
     pub decimals: usize,
 }
 
-pub const DIM_STYLE: DimStyle =
+pub const DEFAULT_DIM_STYLE: DimStyle =
     DimStyle { text_height: 2.5, arrow_size: 2.5, ext_offset: 0.625, ext_beyond: 1.25, gap: 0.625, decimals: 2 };
 
+impl Default for DimStyle {
+    fn default() -> Self {
+        DEFAULT_DIM_STYLE
+    }
+}
+
+thread_local! {
+    /// The dimension style dimensions are drawn in: the drawing's, set
+    /// while it's drawn (see [`with_dim_style`]).
+    static CURRENT: std::cell::Cell<DimStyle> = const { std::cell::Cell::new(DEFAULT_DIM_STYLE) };
+}
+
+/// The dimension style in effect.
+pub fn dim_style() -> DimStyle {
+    CURRENT.get()
+}
+
+/// Makes `style` the one dimensions are drawn in, on this thread.
+pub fn set_dim_style(style: DimStyle) {
+    CURRENT.set(style);
+}
+
+/// Runs `f` with `style` in effect, then puts the one before back.
+pub fn with_dim_style<T>(style: DimStyle, f: impl FnOnce() -> T) -> T {
+    let before = CURRENT.replace(style);
+    let out = f();
+    CURRENT.set(before);
+    out
+}
+
 pub fn format_measurement(v: f64) -> String {
-    format!("{v:.prec$}", prec = DIM_STYLE.decimals)
+    format!("{v:.prec$}", prec = dim_style().decimals)
 }
 
 /// The measured value of a linear dimension along `rotation` (or along
@@ -251,7 +282,7 @@ pub fn dimension_primitives(
     text: Option<&str>,
     scale: f64,
 ) -> Vec<Geometry> {
-    let s = &DIM_STYLE;
+    let s = &dim_style();
     let r = if aligned { p1.angle_to(p2) } else { rotation };
     let u = Point::ORIGIN.polar(1.0, r);
     let d1 = line + u * (p1 - line).dot(u);
@@ -352,7 +383,7 @@ pub fn radial_primitives(
     text: Option<&str>,
     scale: f64,
 ) -> Vec<Geometry> {
-    let s = &DIM_STYLE;
+    let s = &dim_style();
     let r = center.distance(point);
     if r <= EPSILON {
         return Vec::new();
@@ -406,7 +437,7 @@ pub fn angular_primitives(
     text: Option<&str>,
     scale: f64,
 ) -> Vec<Geometry> {
-    let s = &DIM_STYLE;
+    let s = &dim_style();
     let r = vertex.distance(arc);
     let (a1, a2) = (vertex.angle_to(p1), vertex.angle_to(p2));
     let sweep = angular_measurement(vertex, p1, p2);
@@ -444,7 +475,7 @@ pub fn angular_primitives(
 
 /// Leader line, arrowhead, landing and text of a multileader.
 pub fn leader_primitives(points: &[Point], content: &str, scale: f64) -> Vec<Geometry> {
-    let s = &DIM_STYLE;
+    let s = &dim_style();
     let [first, second, ..] = points else { return Vec::new() };
     let (last, prev) = (points[points.len() - 1], points[points.len() - 2]);
     let side = if last.x >= prev.x { 1.0 } else { -1.0 };
@@ -476,7 +507,7 @@ pub fn leader_primitives(points: &[Point], content: &str, scale: f64) -> Vec<Geo
 /// or Y, by a leader from near the feature to `end` (jogging to reach it),
 /// with the value beyond the leader's end.
 pub fn ordinate_primitives(feature: Point, end: Point, x_datum: bool, text: Option<&str>, scale: f64) -> Vec<Geometry> {
-    let s = &DIM_STYLE;
+    let s = &dim_style();
     let value = override_text(text, format_measurement(if x_datum { feature.x } else { feature.y }));
     // Along the leader, away from the feature; across it, where the jog goes.
     let (along, across) =
@@ -522,7 +553,7 @@ pub fn arc_length_primitives(
     text: Option<&str>,
     scale: f64,
 ) -> Vec<Geometry> {
-    let s = &DIM_STYLE;
+    let s = &dim_style();
     let sweep = (end_angle - start_angle).rem_euclid(360.0);
     let length = radius * sweep.to_radians();
     let content = override_text(text, format_measurement(length));
@@ -574,7 +605,7 @@ pub fn jogged_primitives(
     text: Option<&str>,
     scale: f64,
 ) -> Vec<Geometry> {
-    let s = &DIM_STYLE;
+    let s = &dim_style();
     let r = center.distance(point);
     let content = override_text(text, format!("R{}", format_measurement(r)));
     let d = point - center_override;
@@ -648,7 +679,7 @@ mod tests {
         });
         let (content, position) = text.unwrap();
         assert_eq!(content, "10.00");
-        assert!((position.y - (8.0 + DIM_STYLE.gap)).abs() < 1e-9, "text sits above the dimension line");
+        assert!((position.y - (8.0 + dim_style().gap)).abs() < 1e-9, "text sits above the dimension line");
         // Two extension lines, the dimension line and two arrowheads.
         assert_eq!(prims.iter().filter(|g| matches!(g, Geometry::Line { .. })).count(), 3);
         assert_eq!(prims.iter().filter(|g| matches!(g, Geometry::Hatch { .. })).count(), 2);

@@ -79,6 +79,8 @@ impl OxidraftApp {
     pub(crate) fn canvas(&mut self, ui: &mut Ui) {
         let full = ui.available_rect_before_wrap();
         self.drawing_rect = full;
+        // Previews and highlights draw dimensions in the drawing's style.
+        oxidraft_model::annotation::set_dim_style(self.doc.dim_style());
         let tiled = self.tiles.tiling != Tiling::Single && self.doc.space() == MODEL && self.active_viewport.is_none();
         if !tiled {
             self.canvas_pane(ui, full);

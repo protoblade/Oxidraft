@@ -264,6 +264,10 @@ enum Change {
         before: Vec<Group>,
         after: Vec<Group>,
     },
+    DimStyle {
+        before: crate::annotation::DimStyle,
+        after: crate::annotation::DimStyle,
+    },
     /// REFEDIT's session: started, its working set changed, or ended.
     RefEdit {
         before: Option<Box<RefEdit>>,
@@ -326,6 +330,8 @@ pub struct Document {
     wipeout_frame: u8,
     /// Groups (GROUP), by name.
     groups: Vec<Group>,
+    /// The dimension style (DIMSTYLE) dimensions are drawn in.
+    dim_style: crate::annotation::DimStyle,
 }
 
 /// A group (GROUP): objects picked together. Unnamed groups are called
@@ -387,6 +393,7 @@ impl Document {
             views: Vec::new(),
             wipeout_frame: 1,
             groups: Vec::new(),
+            dim_style: crate::annotation::DEFAULT_DIM_STYLE,
         }
     }
 
@@ -438,6 +445,18 @@ impl Document {
         after.push(layout);
         self.set_layouts(after);
         id
+    }
+
+    /// DIMSTYLE: what dimensions are drawn with.
+    pub fn dim_style(&self) -> crate::annotation::DimStyle {
+        self.dim_style
+    }
+
+    pub fn set_dim_style(&mut self, style: crate::annotation::DimStyle) {
+        if style != self.dim_style {
+            let before = std::mem::replace(&mut self.dim_style, style);
+            self.record(Change::DimStyle { before, after: style });
+        }
     }
 
     /// The groups, their members that still exist.
@@ -906,7 +925,7 @@ impl Document {
         depth: usize,
         out: &mut Vec<Styled>,
     ) {
-        if let Some(parts) = g.primitives() {
+        if let Some(parts) = crate::annotation::with_dim_style(self.dim_style, || g.primitives()) {
             for part in &parts {
                 self.expand_into(part, layer, style, by_block, depth + 1, out);
             }
@@ -1547,6 +1566,7 @@ impl Document {
                     Change::Views { .. } => "View",
                     Change::Linetype { .. } => "Linetype",
                     Change::Groups { .. } => "Group",
+                    Change::DimStyle { .. } => "Dimension style",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -1600,6 +1620,7 @@ impl Document {
             }
             Change::Views { before, after } => self.views = if forward { after } else { before }.clone(),
             Change::Groups { before, after } => self.groups = if forward { after } else { before }.clone(),
+            Change::DimStyle { before, after } => self.dim_style = if forward { *after } else { *before },
             Change::Linetype { key, before, after } => {
                 match if forward { after } else { before } {
                     Some(l) => self.linetypes.insert(key.clone(), l.clone()),

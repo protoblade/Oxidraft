@@ -554,6 +554,15 @@ impl OxidraftApp {
             for t in ANNOTATE_TEXT {
                 self.large_tool(ui, t);
             }
+            ui.vertical(|ui| {
+                for t in [
+                    tool(Icon::Zoom, "Find Text", Some("FIND"), "Finds and replaces text"),
+                    tool(Icon::Scale, "Scale", Some("SCALETEXT"), "Gives text a new height, each about its own point"),
+                    tool(Icon::Text, "Justify", Some("JUSTIFYTEXT"), "Hangs text from another of its points"),
+                ] {
+                    self.small_tool(ui, &t);
+                }
+            });
         });
         ribbon_panel(ui, "Dimensions", |ui| {
             self.large_tool(
@@ -567,6 +576,17 @@ impl OxidraftApp {
                     }
                 });
             }
+        });
+        ribbon_panel(ui, "Dimension Style", |ui| {
+            self.large_tool(
+                ui,
+                &tool(
+                    Icon::Dimension,
+                    "Dimension\nStyle",
+                    Some("DIMSTYLE"),
+                    "Sets text height, arrows, extension lines and precision (D)",
+                ),
+            );
         });
         ribbon_panel(ui, "Centerlines", |ui| {
             ui.vertical(|ui| {

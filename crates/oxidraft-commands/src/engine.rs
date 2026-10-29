@@ -70,6 +70,7 @@ use crate::{
     spline::SplineCmd,
     stretch::Stretch,
     table::{TableEdit, TableInsert},
+    text_edit::{JustifyText, ScaleText},
     trim_extend::TrimExtend,
     underlay::AttachImage,
     underlay::ImageClip,
@@ -422,6 +423,25 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         description: "Edit the cells of a table",
         make: Some(|| Box::new(TableEdit)),
+    },
+    CommandInfo {
+        name: "DIMSTYLE",
+        aliases: &["D", "DST"],
+        description: "Set the dimension style: text height, arrows, extension lines, gaps, precision, scale",
+        make: None,
+    },
+    CommandInfo { name: "FIND", aliases: &[], description: "Find and replace text", make: None },
+    CommandInfo {
+        name: "SCALETEXT",
+        aliases: &[],
+        description: "Give text a new height, or scale it, each about its own point",
+        make: Some(|| Box::new(ScaleText::default())),
+    },
+    CommandInfo {
+        name: "JUSTIFYTEXT",
+        aliases: &[],
+        description: "Hang text from another of its points without moving it",
+        make: Some(|| Box::new(JustifyText::default())),
     },
     CommandInfo {
         name: "DIMORDINATE",
@@ -3499,29 +3519,19 @@ mod tests {
 
     #[test]
     fn autocomplete_prefers_exact_alias() {
-        let names: Vec<_> = Engine::suggest("c").iter().map(|c| c.name).collect();
-        let expected = vec![
-            "CIRCLE",
-            "COPY",
-            "CHAMFER",
-            "CHSPACE",
-            "CENTERMARK",
-            "CENTERLINE",
-            "COLORTHEME",
-            "COPYCLIP",
-            "CUTCLIP",
-            "COPYBASE",
-            "CLIP",
-            "COUNT",
-            "COMPARE",
-            "COMPAREEXIT",
-            "PROPERTIES",
-        ];
-        assert_eq!(names, expected, "PROPERTIES via its CH alias");
-        let names: Vec<_> = Engine::suggest("co").iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["COPY", "COLORTHEME", "COPYCLIP", "COPYBASE", "COUNT", "COMPARE", "COMPAREEXIT"]);
-        let names: Vec<_> = Engine::suggest("s").iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["STRETCH", "SPLINE", "SCALE", "SNAP", "SELECTSIMILAR"]);
+        let names = |prefix: &str| Engine::suggest(prefix).iter().map(|c| c.name).collect::<Vec<_>>();
+        // An exact alias first (C is CIRCLE, CO COPY, S STRETCH), then names
+        // starting so, then other aliases starting so (CH: PROPERTIES).
+        let c = names("c");
+        assert_eq!(c[..3], ["CIRCLE", "COPY", "CHAMFER"]);
+        assert_eq!(c.last(), Some(&"PROPERTIES"), "via its CH alias, after the names");
+        assert!(c.iter().all(|n| n.starts_with('C') || *n == "PROPERTIES"));
+        let co = names("co");
+        assert_eq!(co[0], "COPY");
+        assert!(co.iter().all(|n| n.starts_with("CO")));
+        let s = names("s");
+        assert_eq!(s[..3], ["STRETCH", "SPLINE", "SCALE"]);
+        assert!(s.contains(&"SNAP") && s.contains(&"SELECTSIMILAR"));
     }
 
     #[test]

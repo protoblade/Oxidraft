@@ -1700,3 +1700,42 @@ fn chspace_moves_objects_onto_the_sheet_looking_the_same() {
     let now = (h.state().screen_pos(start), h.state().screen_pos(end));
     assert!((now.0 - on_screen.0).length() < 1.0 && (now.1 - on_screen.1).length() < 1.0, "{now:?} vs {on_screen:?}");
 }
+
+#[test]
+fn dimension_style_and_find_and_replace_dialogs() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["dimstyle"]);
+    h.run_steps(2);
+    let field = h.get_by_role_and_label(Role::TextInput, "Text height:");
+    field.focus();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_role_and_label(Role::TextInput, "Text height:").type_text("5");
+    h.key_press(Key::Enter);
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().dim_style().text_height, 5.0);
+
+    // FIND: text replaced everywhere.
+    h.state_mut().document_mut().add(Geometry::Text {
+        position: Point::new(10.0, 30.0),
+        height: 2.5,
+        rotation: 0.0,
+        width: 0.0,
+        attach: oxidraft_model::Attach::BottomLeft,
+        content: "Door D1".into(),
+    });
+    type_all(&mut h, &["find"]);
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Find what").focus();
+    h.get_by_role_and_label(Role::TextInput, "Find what").type_text("door");
+    h.get_by_role_and_label(Role::TextInput, "Replace with").focus();
+    h.get_by_role_and_label(Role::TextInput, "Replace with").type_text("Gate");
+    h.run_steps(1);
+    let at = h.get_by_label("Replace All").rect().center();
+    click(&mut h, at);
+    h.run_steps(2);
+    let doc = h.state_mut().document_mut();
+    assert!(doc.entities().any(|e| matches!(&e.geometry, Geometry::Text { content, .. } if content == "Gate D1")));
+}

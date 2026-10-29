@@ -58,6 +58,7 @@ mod select;
 mod spline;
 mod stretch;
 mod table;
+mod text_edit;
 mod trim_extend;
 mod underlay;
 mod views;

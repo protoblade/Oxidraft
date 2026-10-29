@@ -584,6 +584,13 @@ fn build(doc: &Document) -> Built {
     let pdfs = doc.image_defs().any(|d| d.is_pdf());
     drawing.header.version = if pdfs { AcadVersion::R2010 } else { AcadVersion::R2000 };
     drawing.header.line_type_scale = doc.ltscale();
+    let dim = doc.dim_style();
+    drawing.header.dimensioning_text_height = dim.text_height;
+    drawing.header.dimensioning_arrow_size = dim.arrow_size;
+    drawing.header.dimension_extension_line_offset = dim.ext_offset;
+    drawing.header.dimension_extension_line_extension = dim.ext_beyond;
+    drawing.header.dimension_line_gap = dim.gap;
+    drawing.header.dimension_unit_tolerance_decimal_places = dim.decimals as i16;
     drawing.header.insertion_base = to_dxf(doc.insbase());
     drawing.header.point_display_mode = doc.pdmode();
     drawing.header.point_display_size = doc.pdsize();
@@ -1106,6 +1113,17 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         doc.set_ltscale(drawing.header.line_type_scale);
     }
     doc.set_insbase(from_dxf(&drawing.header.insertion_base));
+    let h = &drawing.header;
+    let positive = |v: f64, default: f64| if v > 0.0 && v.is_finite() { v } else { default };
+    let d = oxidraft_model::annotation::DEFAULT_DIM_STYLE;
+    doc.set_dim_style(oxidraft_model::annotation::DimStyle {
+        text_height: positive(h.dimensioning_text_height, d.text_height),
+        arrow_size: positive(h.dimensioning_arrow_size, d.arrow_size),
+        ext_offset: h.dimension_extension_line_offset.max(0.0),
+        ext_beyond: h.dimension_extension_line_extension.max(0.0),
+        gap: h.dimension_line_gap.abs(),
+        decimals: h.dimension_unit_tolerance_decimal_places.clamp(0, 8) as usize,
+    });
     doc.set_point_style(drawing.header.point_display_mode, drawing.header.point_display_size);
     doc.set_attdisp(match drawing.header.attribute_visibility {
         AttributeVisibility::None => AttributeDisplay::Off,
