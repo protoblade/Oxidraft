@@ -1,7 +1,7 @@
 //! The Properties palette (PROPERTIES, Ctrl/Cmd+1): general and geometric
 //! properties of the selected objects, editable in place.
 
-use eframe::egui::{self, Frame, Id, Margin, RichText, Ui};
+use eframe::egui::{self, Align, CursorIcon, Frame, Id, Layout, Margin, RichText, Sense, Stroke, Ui, vec2};
 use oxidraft_geom::{Point, curve::ArcSeg};
 use oxidraft_model::{
     Color, Entity, EntityId, Geometry, HatchPattern, Lineweight,
@@ -12,10 +12,17 @@ use oxidraft_model::{
 use crate::{
     app::OxidraftApp,
     layers::{NAMED_COLORS, color_name, linetype_menu, lineweight_menu, swatch},
+    settings::{Dock, Settings},
     theme,
 };
 
 const VARIES: &str = "*VARIES*";
+/// The width of the property names; every value takes the rest of the
+/// palette's width, at least `MIN_VALUE_WIDTH`.
+const LABEL_WIDTH: f32 = 92.0;
+const MIN_VALUE_WIDTH: f32 = 110.0;
+/// How close to the drawing area's side a dragged palette docks there.
+const DOCK_ZONE: f32 = 48.0;
 
 /// A property row's value: read-only text, or a number that can be edited.
 enum Value {
@@ -27,46 +34,160 @@ enum Value {
 }
 
 impl OxidraftApp {
+    /// The Properties palette: docked at the left or right of the drawing
+    /// area, or floating. Dragging its title moves it; dropped at either
+    /// side of the drawing area, it docks there.
     pub(crate) fn properties_palette(&mut self, ui: &mut Ui) {
         if !self.properties_open {
             return;
         }
         let frame = Frame::NONE.fill(theme::ribbon()).inner_margin(Margin::same(8));
-        egui::Panel::left("properties").frame(frame).resizable(true).default_size(270.0).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("PROPERTIES").strong().color(theme::text_dim()));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(egui::Button::new("x").frame(false)).on_hover_text("Close (Cmd+1)").clicked() {
-                        self.properties_open = false;
-                    }
-                    if ui
-                        .small_button("Quick Select")
-                        .on_hover_text("Select objects by type and property (QSELECT)")
-                        .clicked()
+        match self.settings.properties_dock {
+            Dock::Left => {
+                egui::Panel::left("properties")
+                    .frame(frame)
+                    .resizable(true)
+                    .default_size(280.0)
+                    .show(ui, |ui| self.properties_body(ui));
+            }
+            Dock::Right => {
+                egui::Panel::right("properties_right")
+                    .frame(frame)
+                    .resizable(true)
+                    .default_size(280.0)
+                    .show(ui, |ui| self.properties_body(ui));
+            }
+            Dock::Float => {
+                let window = egui::Window::new("Properties")
+                    .id(Id::unique("properties_float"))
+                    .title_bar(false)
+                    .movable(false)
+                    .resizable(true)
+                    .collapsible(false)
+                    .default_size([290.0, 520.0])
+                    .current_pos(self.properties_pos)
+                    .constrain_to(self.dialog_area(ui.ctx()))
+                    .frame(frame.stroke(Stroke::new(1.0, theme::tooltip_edge())).corner_radius(3));
+                window.show(ui.ctx(), |ui| self.properties_body(ui));
+            }
+        }
+        self.drag_properties(ui.ctx());
+    }
+
+    /// Moves the palette while its title is held, and docks it when it's
+    /// let go at a side of the drawing area.
+    fn drag_properties(&mut self, ctx: &egui::Context) {
+        let Some(grab) = self.properties_grab else { return };
+        let (pointer, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.primary_down()));
+        let Some(pointer) = pointer else { return };
+        let area = self.canvas_rect;
+        let side = if pointer.x <= area.left() + DOCK_ZONE {
+            Some(Dock::Left)
+        } else if pointer.x >= area.right() - DOCK_ZONE {
+            Some(Dock::Right)
+        } else {
+            None
+        };
+        if down {
+            self.properties_pos = pointer - grab;
+            ctx.set_cursor_icon(CursorIcon::Grabbing);
+            // Where it would dock.
+            if let Some(side) = side {
+                let strip = match side {
+                    Dock::Left => egui::Rect::from_min_size(area.left_top(), vec2(280.0, area.height())),
+                    _ => egui::Rect::from_min_max(area.right_top() - vec2(280.0, 0.0), area.right_bottom()),
+                };
+                let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("dock_hint")));
+                painter.rect_filled(strip, 0.0, theme::accent().gamma_multiply(0.25));
+            }
+            ctx.request_repaint();
+            return;
+        }
+        self.properties_grab = None;
+        if let Some(side) = side {
+            self.set_properties_dock(ctx, side);
+        }
+    }
+
+    pub(crate) fn set_properties_dock(&mut self, ctx: &egui::Context, dock: Dock) {
+        self.apply_settings(ctx, Settings { properties_dock: dock, ..self.settings });
+    }
+
+    fn properties_body(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.add(egui::Button::new("x").frame(false)).on_hover_text("Close (Cmd+1)").clicked() {
+                    self.properties_open = false;
+                }
+                let dock = self.settings.properties_dock;
+                let menu = ui.small_button("Dock").on_hover_text("Dock at the left or right, or float");
+                egui::Popup::menu(&menu).show(|ui| {
+                    for (label, to) in [("Dock Left", Dock::Left), ("Dock Right", Dock::Right), ("Float", Dock::Float)]
                     {
-                        self.open_quick_select();
+                        if ui.add_enabled(dock != to, egui::Button::new(label)).clicked() {
+                            if to == Dock::Float {
+                                self.properties_pos = menu.rect.left_bottom() + vec2(-200.0, 8.0);
+                            }
+                            self.set_properties_dock(ui.ctx(), to);
+                        }
                     }
                 });
-            });
-            let selected: Vec<Entity> =
-                self.engine.selection().iter().filter_map(|&id| self.doc.entity(id).cloned()).collect();
-            ui.label(RichText::new(selection_title(&selected)).strong());
-            ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                section(ui, "General");
-                self.general_rows(ui, &selected);
-                if let [e] = selected.as_slice() {
-                    section(ui, "Geometry");
-                    self.geometry_rows(ui, e);
+                if ui
+                    .small_button("Quick Select")
+                    .on_hover_text("Select objects by type and property (QSELECT)")
+                    .clicked()
+                {
+                    self.open_quick_select();
+                }
+                // The title is the handle: drag it to move the palette.
+                let (rect, title) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::drag());
+                ui.painter().text(
+                    rect.left_center(),
+                    egui::Align2::LEFT_CENTER,
+                    "PROPERTIES",
+                    egui::FontId::proportional(12.5),
+                    theme::text_dim(),
+                );
+                title.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "PROPERTIES"));
+                let title =
+                    title.on_hover_cursor(CursorIcon::Grab).on_hover_text("Drag to move; drop at a side to dock");
+                if title.drag_started()
+                    && let Some(at) = title.interact_pointer_pos()
+                {
+                    // Docked, it floats from where it was.
+                    let corner = if self.settings.properties_dock == Dock::Float {
+                        self.properties_pos
+                    } else {
+                        ui.max_rect().left_top() - vec2(8.0, 8.0)
+                    };
+                    self.properties_grab = Some(at - corner);
+                    if self.settings.properties_dock != Dock::Float {
+                        self.properties_pos = corner;
+                        self.set_properties_dock(ui.ctx(), Dock::Float);
+                    }
                 }
             });
         });
+        let selected: Vec<Entity> =
+            self.engine.selection().iter().filter_map(|&id| self.doc.entity(id).cloned()).collect();
+        ui.label(RichText::new(selection_title(&selected)).strong());
+        ui.separator();
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            // Every value as wide as the palette leaves them, so they line up.
+            let width = (ui.available_width() - LABEL_WIDTH - 12.0).max(MIN_VALUE_WIDTH);
+            section(ui, "General");
+            self.general_rows(ui, &selected, width);
+            if let [e] = selected.as_slice() {
+                section(ui, "Geometry");
+                self.geometry_rows(ui, e, width);
+            }
+        });
     }
 
-    fn general_rows(&mut self, ui: &mut Ui, selected: &[Entity]) {
+    fn general_rows(&mut self, ui: &mut Ui, selected: &[Entity], width: f32) {
         egui::Grid::new("props_general").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
             // Color
-            ui.label("Color");
+            label_cell(ui, "Color");
             let common_color = common(selected.iter().map(|e| e.color));
             let text = match (selected.is_empty(), common_color) {
                 (true, _) | (false, Some(Color::ByLayer)) => "ByLayer".to_string(),
@@ -77,7 +198,7 @@ impl OxidraftApp {
             let mut chosen = None;
             ui.add_enabled_ui(!selected.is_empty(), |ui| {
                 let shown =
-                    egui::ComboBox::from_id_salt("props_color").width(150.0).selected_text(text).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt("props_color").width(width).selected_text(text).show_ui(ui, |ui| {
                         if ui.selectable_label(common_color == Some(Color::ByLayer), "ByLayer").clicked() {
                             chosen = Some(Color::ByLayer);
                         }
@@ -101,7 +222,7 @@ impl OxidraftApp {
             ui.end_row();
 
             // Layer: with nothing selected it sets the current layer, as in AutoCAD.
-            ui.label("Layer");
+            label_cell(ui, "Layer");
             let common_layer = if selected.is_empty() {
                 Some(self.doc.current_layer().to_string())
             } else {
@@ -110,7 +231,8 @@ impl OxidraftApp {
             let names: Vec<String> = self.doc.layers().iter().map(|l| l.name.clone()).collect();
             let mut chosen = None;
             let shown = egui::ComboBox::from_id_salt("props_layer")
-                .width(150.0)
+                .width(width)
+                .truncate()
                 .selected_text(common_layer.clone().unwrap_or_else(|| VARIES.into()))
                 .show_ui(ui, |ui| {
                     for name in names {
@@ -130,7 +252,7 @@ impl OxidraftApp {
             ui.end_row();
 
             // Linetype and lineweight; new objects are always ByLayer.
-            ui.label("Linetype");
+            label_cell(ui, "Linetype");
             let names: Vec<String> = [linetype::BYLAYER, linetype::BYBLOCK]
                 .into_iter()
                 .map(String::from)
@@ -142,14 +264,14 @@ impl OxidraftApp {
                 common(selected.iter().map(|e| e.linetype.clone()))
             };
             let picked = ui.add_enabled_ui(!selected.is_empty(), |ui| {
-                linetype_menu(ui, common_linetype.as_deref(), &names, "props_linetype")
+                linetype_menu(ui, common_linetype.as_deref(), &names, "props_linetype", width)
             });
             if let Some(linetype) = picked.inner {
                 self.edit(selected.iter().map(|e| e.id), |e| e.linetype = linetype.clone());
             }
             ui.end_row();
 
-            ui.label("Lineweight");
+            label_cell(ui, "Lineweight");
             let common_weight = if selected.is_empty() {
                 Some(Lineweight::ByLayer)
             } else {
@@ -157,7 +279,7 @@ impl OxidraftApp {
             };
             let special = [Lineweight::ByLayer, Lineweight::ByBlock, Lineweight::Default];
             let picked = ui.add_enabled_ui(!selected.is_empty(), |ui| {
-                lineweight_menu(ui, common_weight, &special, "props_lineweight")
+                lineweight_menu(ui, common_weight, &special, "props_lineweight", width)
             });
             if let Some(lineweight) = picked.inner {
                 self.edit(selected.iter().map(|e| e.id), |e| e.lineweight = lineweight);
@@ -166,7 +288,7 @@ impl OxidraftApp {
         });
     }
 
-    fn geometry_rows(&mut self, ui: &mut Ui, e: &Entity) {
+    fn geometry_rows(&mut self, ui: &mut Ui, e: &Entity, width: f32) {
         let rows: Vec<(&str, Value)> = match &e.geometry {
             Geometry::Point { position } => {
                 vec![("Position X", Value::Number(position.x)), ("Position Y", Value::Number(position.y))]
@@ -324,16 +446,16 @@ impl OxidraftApp {
         };
         egui::Grid::new("props_geometry").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
             for (label, value) in rows {
-                ui.label(label);
+                label_cell(ui, label);
                 let changed = match value {
                     Value::Text(t) => {
                         ui.colored_label(theme::text_dim(), t);
                         None
                     }
-                    Value::Number(v) => self.number_field(ui, Id::unique(("prop", e.id, label)), v, false),
-                    Value::Angle(v) => self.number_field(ui, Id::unique(("prop", e.id, label)), v, true),
+                    Value::Number(v) => self.number_field(ui, Id::unique(("prop", e.id, label)), v, false, width),
+                    Value::Angle(v) => self.number_field(ui, Id::unique(("prop", e.id, label)), v, true, width),
                     Value::Edit(s) => {
-                        if let Some(new) = self.string_field(ui, Id::unique(("prop", e.id, label)), &s) {
+                        if let Some(new) = self.string_field(ui, Id::unique(("prop", e.id, label)), &s, width) {
                             match with_text_property(&e.geometry, label, &new) {
                                 Some(g) => self.edit([e.id], |x| x.geometry = g.clone()),
                                 None => self.engine.log(format!("Invalid value for {label}.")),
@@ -355,10 +477,10 @@ impl OxidraftApp {
     }
 
     /// An editable number that applies on Enter or when it loses focus.
-    fn number_field(&mut self, ui: &mut Ui, id: Id, value: f64, angle: bool) -> Option<f64> {
+    fn number_field(&mut self, ui: &mut Ui, id: Id, value: f64, angle: bool, width: f32) -> Option<f64> {
         let shown = if angle { format!("{value:.0}") } else { fmt(value) };
         let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or(shown);
-        let response = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(140.0));
+        let response = ui.add(text_field(&mut text, id, width));
         self.text_fields.push(id);
         if response.has_focus() {
             ui.data_mut(|d| d.insert_temp(id, text.clone()));
@@ -373,9 +495,9 @@ impl OxidraftApp {
     }
 
     /// An editable string that applies on Enter or when it loses focus.
-    fn string_field(&mut self, ui: &mut Ui, id: Id, value: &str) -> Option<String> {
+    fn string_field(&mut self, ui: &mut Ui, id: Id, value: &str, width: f32) -> Option<String> {
         let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| value.to_string());
-        let response = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(140.0));
+        let response = ui.add(text_field(&mut text, id, width));
         self.text_fields.push(id);
         if response.has_focus() {
             ui.data_mut(|d| d.insert_temp(id, text.clone()));
@@ -492,6 +614,19 @@ fn selection_title(selected: &[Entity]) -> String {
 pub(crate) fn common<T: PartialEq>(mut items: impl Iterator<Item = T>) -> Option<T> {
     let first = items.next()?;
     items.all(|x| x == first).then_some(first)
+}
+
+/// A property's name, as wide as every other (a long one cut short).
+fn label_cell(ui: &mut Ui, text: &str) {
+    ui.allocate_ui_with_layout(vec2(LABEL_WIDTH, 20.0), Layout::left_to_right(Align::Center), |ui| {
+        ui.set_min_width(LABEL_WIDTH);
+        ui.add(egui::Label::new(text).truncate());
+    });
+}
+
+/// A text field `width` wide overall, like the dropdowns beside it.
+fn text_field<'a>(text: &'a mut String, id: Id, width: f32) -> egui::TextEdit<'a> {
+    egui::TextEdit::singleline(text).id(id).margin(egui::Margin::symmetric(4, 2)).desired_width(width)
 }
 
 fn section(ui: &mut Ui, title: &str) {

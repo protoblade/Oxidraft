@@ -751,7 +751,10 @@ fn light_theme_and_white_drawing_area() {
     // Color 7 stays white on the dark drawing area, and turns black on a white one.
     assert_eq!(theme::aci(7), eframe::egui::Color32::WHITE);
     let ctx = h.ctx.clone();
-    h.state_mut().apply_settings(&ctx, Settings { color_theme: ColorTheme::Light, background: Background::White });
+    h.state_mut().apply_settings(
+        &ctx,
+        Settings { color_theme: ColorTheme::Light, background: Background::White, ..Settings::default() },
+    );
     h.run_steps(1);
     assert_eq!(theme::aci(7), eframe::egui::Color32::BLACK);
     assert_eq!(theme::swatch(7), eframe::egui::Color32::WHITE, "the layer swatch still says white");
@@ -841,4 +844,37 @@ fn layer_manager_fits_long_names_and_changes_several_layers_at_once() {
     h.get_all_by_label("Lock: 0").last().unwrap().click();
     h.run_steps(2);
     assert!(layer(&mut h, "0").locked && !layer(&mut h, names[0]).locked);
+}
+
+#[test]
+fn properties_palette_lines_up_and_docks_at_either_side_or_floats() {
+    let mut h = app_with_line();
+    let wall = screen(&h, 50.0, 0.0);
+    click(&mut h, wall);
+    h.state_mut().type_command("pr");
+    h.run_steps(3);
+    // Its dropdowns and fields are one width, edge to edge.
+    let right = |h: &Harness<'_, OxidraftApp>, label: &str| h.get_by_role_and_label(Role::ComboBox, label).rect().max.x;
+    let edge = right(&h, "Color");
+    for label in ["Linetype", "Lineweight"] {
+        assert!((right(&h, label) - edge).abs() < 1.0, "{label} ends at {} not {edge}", right(&h, label));
+    }
+    let title = |h: &Harness<'_, OxidraftApp>| h.get_by_label("PROPERTIES").rect();
+    assert!(title(&h).min.x < 100.0, "docked at the left: {:?}", title(&h));
+    // The Dock menu moves it to the right.
+    h.get_by_label("Dock").click();
+    h.run_steps(2);
+    h.get_by_label("Dock Right").click();
+    h.run_steps(3);
+    assert!(title(&h).min.x > 800.0, "docked at the right: {:?}", title(&h));
+    // Dragged by its title into the drawing, it floats there...
+    let from = title(&h).center();
+    drag(&mut h, from, Pos2::new(600.0, 400.0));
+    h.run_steps(3);
+    let t = title(&h);
+    assert!(t.min.x > 300.0 && t.max.x < 1000.0, "floating: {t:?}");
+    // ...and dropped at the left side, it docks there.
+    drag(&mut h, t.center(), Pos2::new(5.0, 400.0));
+    h.run_steps(3);
+    assert!(title(&h).min.x < 100.0, "docked at the left again: {:?}", title(&h));
 }

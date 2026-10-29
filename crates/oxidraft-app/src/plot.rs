@@ -290,7 +290,7 @@ impl OxidraftApp {
                                 ui.label("Name:");
                                 egui::ComboBox::from_id_salt("plot_printer")
                                     .selected_text("Oxidraft PDF")
-                                    .width(220.0)
+                                    .width(ui.available_width())
                                     .show_ui(ui, |ui| {
                                         let _ = ui.selectable_label(true, "Oxidraft PDF");
                                     });
@@ -303,7 +303,7 @@ impl OxidraftApp {
                         section(ui, "Paper size", |ui| {
                             egui::ComboBox::from_id_salt("plot_paper")
                                 .selected_text(s.paper.name)
-                                .width(300.0)
+                                .width(ui.available_width())
                                 .show_ui(ui, |ui| {
                                     for p in PAPERS {
                                         ui.selectable_value(&mut s.paper, *p, p.name);
@@ -318,7 +318,8 @@ impl OxidraftApp {
                                     PlotArea::Extents => "Extents",
                                     PlotArea::Window(_) => "Window",
                                 };
-                                egui::ComboBox::from_id_salt("plot_area").selected_text(label).show_ui(ui, |ui| {
+                                let area = egui::ComboBox::from_id_salt("plot_area").width(ui.available_width());
+                                area.selected_text(label).show_ui(ui, |ui| {
                                     if ui.selectable_label(label == "Display", "Display").clicked() {
                                         s.area = PlotArea::Display(displayed);
                                     }
@@ -377,7 +378,7 @@ impl OxidraftApp {
                                     let current = if fit { "Custom".to_string() } else { scale_label(mm, units) };
                                     egui::ComboBox::from_id_salt("plot_scale")
                                         .selected_text(&current)
-                                        .width(180.0)
+                                        .width(ui.available_width())
                                         .show_ui(ui, |ui| {
                                             for &(m, u) in SCALES {
                                                 if ui
@@ -419,7 +420,7 @@ impl OxidraftApp {
                         section(ui, "Plot style table (pen assignments)", |ui| {
                             egui::ComboBox::from_id_salt("plot_style")
                                 .selected_text(s.style.name())
-                                .width(200.0)
+                                .width(ui.available_width())
                                 .show_ui(ui, |ui| {
                                     for style in PlotStyle::ALL {
                                         ui.selectable_value(&mut s.style, style, style.name());

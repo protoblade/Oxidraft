@@ -16,6 +16,18 @@ use crate::theme::{self, Background, ColorTheme};
 pub struct Settings {
     pub color_theme: ColorTheme,
     pub background: Background,
+    /// Where the Properties palette sits.
+    pub properties_dock: Dock,
+}
+
+/// Where a palette sits: docked at the left or right of the drawing
+/// area, or floating over it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Dock {
+    #[default]
+    Left,
+    Right,
+    Float,
 }
 
 impl Settings {
@@ -90,6 +102,7 @@ impl OxidraftApp {
                 egui::Grid::new("options_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                     ui.label("Color theme:");
                     egui::ComboBox::from_id_salt("options_color_theme")
+                        .width(140.0)
                         .selected_text(match d.settings.color_theme {
                             ColorTheme::Dark => "Dark",
                             ColorTheme::Light => "Light",
@@ -101,6 +114,7 @@ impl OxidraftApp {
                     ui.end_row();
                     ui.label("Drawing background:");
                     egui::ComboBox::from_id_salt("options_background")
+                        .width(140.0)
                         .selected_text(match d.settings.background {
                             Background::Dark => "Dark",
                             Background::White => "White",
@@ -137,7 +151,8 @@ mod tests {
     fn settings_round_trip_and_default_when_missing() {
         let path = std::env::temp_dir().join(format!("oxidraft-settings-{}/settings.json", std::process::id()));
         assert_eq!(Settings::load(&path), Settings::default());
-        let s = Settings { color_theme: ColorTheme::Light, background: Background::White };
+        let s =
+            Settings { color_theme: ColorTheme::Light, background: Background::White, properties_dock: Dock::Right };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
         // Unknown or missing fields fall back to the defaults.

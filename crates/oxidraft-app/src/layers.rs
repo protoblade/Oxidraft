@@ -137,18 +137,9 @@ pub fn color_menu(ui: &mut Ui, current: u8, id_salt: impl std::hash::Hash + std:
     chosen
 }
 
-/// A dropdown of linetype names. Returns the one picked, if any.
+/// A dropdown of linetype names, `width` wide (a long name cut short).
+/// Returns the one picked, if any.
 pub(crate) fn linetype_menu(
-    ui: &mut Ui,
-    current: Option<&str>,
-    names: &[String],
-    salt: impl std::hash::Hash + std::fmt::Debug,
-) -> Option<String> {
-    linetype_menu_sized(ui, current, names, salt, 120.0)
-}
-
-/// A linetype dropdown `width` wide, its text cut short to fit.
-pub(crate) fn linetype_menu_sized(
     ui: &mut Ui,
     current: Option<&str>,
     names: &[String],
@@ -176,10 +167,11 @@ pub(crate) fn lineweight_menu(
     current: Option<Lineweight>,
     special: &[Lineweight],
     salt: impl std::hash::Hash + std::fmt::Debug,
+    width: f32,
 ) -> Option<Lineweight> {
     let mut chosen = None;
     let text = current.map_or("*VARIES*".into(), Lineweight::label);
-    let shown = egui::ComboBox::from_id_salt(salt).width(90.0).selected_text(text).show_ui(ui, |ui| {
+    let shown = egui::ComboBox::from_id_salt(salt).width(width).selected_text(text).show_ui(ui, |ui| {
         let all = special.iter().copied().chain(Lineweight::STANDARD.into_iter().map(Lineweight::Hundredths));
         for lw in all {
             if ui.selectable_label(current == Some(lw), lw.label()).clicked() {
@@ -364,12 +356,13 @@ impl OxidraftApp {
                     self.change_layers(&layer.name, |l| l.color = color);
                 }
                 let salt = ("layer_linetype", &layer.name);
-                if let Some(linetype) = linetype_menu_sized(ui, Some(&layer.linetype), &linetypes, salt, linetype_width)
-                {
+                if let Some(linetype) = linetype_menu(ui, Some(&layer.linetype), &linetypes, salt, linetype_width) {
                     self.change_layers(&layer.name, |l| l.linetype = linetype.clone());
                 }
                 let salt = ("layer_lineweight", &layer.name);
-                if let Some(lineweight) = lineweight_menu(ui, Some(layer.lineweight), &[Lineweight::Default], salt) {
+                if let Some(lineweight) =
+                    lineweight_menu(ui, Some(layer.lineweight), &[Lineweight::Default], salt, 90.0)
+                {
                     self.change_layers(&layer.name, |l| l.lineweight = lineweight);
                 }
                 ui.label(self.doc.layer_usage(&layer.name).to_string());

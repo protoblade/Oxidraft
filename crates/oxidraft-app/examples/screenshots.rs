@@ -255,12 +255,18 @@ fn main() {
     h.run_steps(2);
     save(&mut h, &dir, "13-layer-manager");
 
-    // Properties palette for a selected wall.
+    // Properties palette for a selected wall, then the same docked at the
+    // right.
     let mut h = harness();
     click(&mut h, Point::new(100.0, 30.0));
     h.state_mut().type_command("pr");
     h.run_steps(3);
     save(&mut h, &dir, "14-properties");
+    h.get_by_label("Dock").click();
+    h.run_steps(2);
+    h.get_by_label("Dock Right").click();
+    h.run_steps(3);
+    save(&mut h, &dir, "14b-properties-right");
 
     // BLOCK from the table, then INSERT with a preview at the cursor.
     let mut h = harness();
@@ -532,7 +538,8 @@ fn main() {
     for (name, background) in [("28-light-theme", Background::Dark), ("29-light-white-drawing", Background::White)] {
         let mut h = harness();
         let ctx = h.ctx.clone();
-        h.state_mut().apply_settings(&ctx, Settings { color_theme: ColorTheme::Light, background });
+        h.state_mut()
+            .apply_settings(&ctx, Settings { color_theme: ColorTheme::Light, background, ..Settings::default() });
         click(&mut h, Point::new(30.0, 0.0));
         click(&mut h, Point::new(80.0, 30.0));
         let dialog = if background == Background::White { "op" } else { "la" };

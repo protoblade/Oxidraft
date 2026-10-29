@@ -105,6 +105,10 @@ pub struct OxidraftApp {
     /// `Some(Some(kind))` snaps only to `kind`, `Some(None)` doesn't snap.
     pub(crate) snap_override: Option<Option<oxidraft_model::snap::SnapKind>>,
     pub(crate) properties_open: bool,
+    /// The floating Properties palette's place, and where the pointer
+    /// holds it while it's dragged by its title.
+    pub(crate) properties_pos: egui::Pos2,
+    pub(crate) properties_grab: Option<egui::Vec2>,
     /// Rows selected in the Layer Properties Manager.
     pub(crate) selected_layers: Vec<String>,
     /// Where a Shift-click's run of layers starts.
@@ -185,6 +189,8 @@ impl OxidraftApp {
             layer_manager_open: false,
             snap_override: None,
             properties_open: false,
+            properties_pos: egui::pos2(320.0, 220.0),
+            properties_grab: None,
             selected_layers: Vec::new(),
             layer_anchor: None,
             renaming_layer: None,

@@ -64,6 +64,8 @@ struct Chrome {
     tooltip_bg: Color32,
     tooltip_edge: Color32,
     input_bg: Color32,
+    /// The edge of dropdowns, text fields, buttons and checkboxes.
+    control_edge: Color32,
     /// The command line's input bar, its history over the drawing, and the
     /// clickable options in its prompt.
     command_bar: Color32,
@@ -86,6 +88,7 @@ const DARK_CHROME: Chrome = Chrome {
     tooltip_bg: Color32::from_rgb(52, 60, 74),
     tooltip_edge: Color32::from_rgb(90, 102, 122),
     input_bg: Color32::from_rgb(28, 33, 41),
+    control_edge: Color32::from_rgb(84, 96, 116),
     command_bar: Color32::from_rgb(52, 60, 74),
     command_history: Color32::from_rgba_premultiplied(30, 35, 44, 200),
     command_keyword: Color32::from_rgb(70, 82, 102),
@@ -106,6 +109,7 @@ const LIGHT_CHROME: Chrome = Chrome {
     tooltip_bg: Color32::from_rgb(252, 252, 253),
     tooltip_edge: Color32::from_rgb(176, 184, 196),
     input_bg: Color32::from_rgb(255, 255, 255),
+    control_edge: Color32::from_rgb(170, 178, 190),
     command_bar: Color32::from_rgb(250, 251, 253),
     command_history: Color32::from_rgba_premultiplied(225, 228, 233, 230),
     command_keyword: Color32::from_rgb(212, 223, 238),
@@ -190,7 +194,7 @@ macro_rules! colors {
 }
 
 colors!(chrome: top_bar, ribbon, ribbon_title, ribbon_hover, strip, tab, text, text_dim, text_disabled, warning, accent,
-    tooltip_bg, tooltip_edge, input_bg, command_bar, command_history, command_keyword);
+    tooltip_bg, tooltip_edge, input_bg, control_edge, command_bar, command_history, command_keyword);
 
 colors!(model: label, grid_minor, grid_major, axis_x, axis_y, crosshair, autosnap, tracking, preview, selection_glow, grip,
     grip_hover, window_fill, window_edge, crossing_fill, crossing_edge);
@@ -240,10 +244,8 @@ pub fn apply(ctx: &egui::Context) {
         w.weak_bg_fill = ribbon();
         w.corner_radius = CornerRadius::same(2);
     }
-    // Buttons need an edge to show on a light panel.
-    if light {
-        v.widgets.inactive.bg_stroke = Stroke::new(1.0, tooltip_edge());
-    }
+    // Dropdowns, fields and buttons keep their edge, not just on hover.
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0, control_edge());
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, ribbon_title());
     v.widgets.hovered.weak_bg_fill = ribbon_hover();
     v.widgets.hovered.bg_fill = ribbon_hover();
