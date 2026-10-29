@@ -2343,3 +2343,39 @@ fn fields_go_in_from_the_field_dialog_and_the_text_editor() {
         g => panic!("{g:?}"),
     }
 }
+
+#[test]
+fn spell_changes_words_not_in_the_dictionary() {
+    use oxidraft_model::Attach;
+    let mut h = app_with_line();
+    let doc = h.state_mut().document_mut();
+    let text = doc.add(Geometry::Text {
+        look: Default::default(),
+        position: Point::new(30.0, 30.0),
+        height: 5.0,
+        rotation: 0.0,
+        width: 0.0,
+        attach: Attach::BottomLeft,
+        content: r"Qwzx\PQwzx %%c20".into(),
+    });
+    h.run_steps(2);
+    type_all(&mut h, &["spell"]);
+    h.run_steps(2);
+    let start = h.get_by_label("Start").rect().center();
+    click(&mut h, start);
+    h.run_steps(2);
+    let field = h.get_by_role_and_label(Role::TextInput, "Change to");
+    field.focus();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_role_and_label(Role::TextInput, "Change to").type_text("Beam");
+    h.run_steps(1);
+    let all = h.get_by_label("Change All").rect().center();
+    click(&mut h, all);
+    h.run_steps(2);
+    match &h.state_mut().document_mut().entity(text).unwrap().geometry {
+        Geometry::Text { content, .. } => assert_eq!(content, r"Beam\PBeam %%c20"),
+        g => panic!("{g:?}"),
+    }
+    assert!(h.query_all_by_label("Spelling check complete.").next().is_some());
+}

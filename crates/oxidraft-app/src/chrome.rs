@@ -202,6 +202,7 @@ const ANNOTATE_DIMENSIONS_MORE: &[Tool] = &[
     tool(Icon::Properties, "Override", Some("DIMOVERRIDE"), "Sets dimension variables on selected dimensions (DOV)"),
     tool(Icon::Undo, "Update", Some("DIMUPDATE"), "Puts dimensions back to the current style"),
     tool(Icon::Table, "Tolerance", Some("TOLERANCE"), "Places a geometric tolerance frame (TOL)"),
+    tool(Icon::Text, "Inspect", Some("DIMINSPECT"), "Adds an inspection label and rate around dimension text"),
 ];
 const UTILITIES_LARGE: &[Tool] = &[tool(
     Icon::Measure,

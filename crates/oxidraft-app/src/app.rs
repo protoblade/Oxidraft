@@ -129,6 +129,8 @@ pub struct OxidraftApp {
     pub(crate) point_style: Option<crate::drafting::PointStyle>,
     pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
     pub(crate) field_dialog: Option<crate::fields::FieldDialog>,
+    pub(crate) spell: Option<crate::spell::SpellDialog>,
+    pub(crate) inspect_dialog: Option<crate::diminspect::InspectDialog>,
     pub(crate) text_editor: Option<crate::fields::TextEditor>,
     /// When the drawing's file was made and saved, for fields.
     pub(crate) file_times: crate::fields::FileTimes,
@@ -293,6 +295,8 @@ impl OxidraftApp {
             point_style: None,
             tolerance_dialog: None,
             field_dialog: None,
+            spell: None,
+            inspect_dialog: None,
             text_editor: None,
             file_times: Default::default(),
             style_dialog: None,
@@ -632,6 +636,8 @@ impl OxidraftApp {
             "PTYPE" | "DDPTYPE" => self.open_point_style(),
             "TOLERANCE" | "TOL" => self.open_tolerance(),
             "FIELD" => self.open_field_dialog(false),
+            "SPELL" | "SP" => self.open_spell(),
+            "DIMINSPECT" => self.open_inspect_dialog(),
             "MLEADERSTYLE" | "MLS" => self.open_leader_style(),
             "BATTMAN" => self.open_attribute_manager(),
             "LAYERSTATE" | "LAS" => self.open_layer_states(),
@@ -1018,6 +1024,8 @@ impl eframe::App for OxidraftApp {
         self.tolerance_dialog(&ctx);
         self.text_editor(&ctx);
         self.field_dialog(&ctx);
+        self.spell_dialog(&ctx);
+        self.inspect_dialog(&ctx);
         self.annotation_style_dialog(&ctx);
         self.attribute_manager_dialog(&ctx);
         self.layer_states_dialog(&ctx);

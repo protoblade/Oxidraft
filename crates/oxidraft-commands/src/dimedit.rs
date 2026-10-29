@@ -3,7 +3,10 @@
 //! where other objects cross it.
 
 use oxidraft_geom::{Point, Segment, curve::Seg};
-use oxidraft_model::{EntityId, Geometry, annotation::DimExtra};
+use oxidraft_model::{
+    EntityId, Geometry,
+    annotation::{DimExtra, Inspection, InspectionShape},
+};
 
 use crate::{Command, Ctx, Input, Prompt, Step};
 
@@ -658,6 +661,106 @@ impl Command for DimUpdate {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum InspectStage {
+    Mode,
+    Select { remove: bool },
+    Shape,
+    Label,
+    Rate,
+}
+
+/// -DIMINSPECT: inspection data (a shape, a label and an inspection rate)
+/// around the selected dimensions' text, or Removed.
+pub struct DimInspect {
+    stage: InspectStage,
+    ids: Vec<EntityId>,
+    inspection: Inspection,
+}
+
+impl Default for DimInspect {
+    fn default() -> Self {
+        Self {
+            stage: InspectStage::Mode,
+            ids: Vec::new(),
+            inspection: Inspection { rate: "100%".into(), ..Default::default() },
+        }
+    }
+}
+
+impl Command for DimInspect {
+    fn prompt(&self) -> Prompt {
+        match self.stage {
+            InspectStage::Mode => {
+                Prompt::new("Add inspection data or").with_keywords(&["Add", "Remove"]).with_default("Add")
+            }
+            InspectStage::Select { .. } => Prompt::new("Select dimensions"),
+            InspectStage::Shape => {
+                Prompt::new("Enter shape").with_keywords(&["Round", "Angular", "None"]).with_default("Round")
+            }
+            InspectStage::Label => Prompt::new("Enter label value or <None>"),
+            InspectStage::Rate => Prompt::new("Enter inspection rate").with_default(&self.inspection.rate),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (self.stage, input) {
+            (InspectStage::Mode, Input::Keyword("Remove")) => self.stage = InspectStage::Select { remove: true },
+            (InspectStage::Mode, Input::Keyword(_) | Input::Enter) => {
+                self.stage = InspectStage::Select { remove: false }
+            }
+            (InspectStage::Select { remove }, Input::Selection(s)) => {
+                if remove {
+                    let n = s.ids.iter().filter(|id| change(ctx, **id, &|x, _| x.inspection = None)).count();
+                    ctx.messages.push(format!("{n} dimension(s) without inspection data."));
+                    return Ok(Step::Done);
+                }
+                self.ids = s.ids;
+                self.stage = InspectStage::Shape;
+            }
+            (InspectStage::Shape, input @ (Input::Keyword(_) | Input::Enter)) => {
+                self.inspection.shape = match input {
+                    Input::Keyword("Angular") => InspectionShape::Angular,
+                    Input::Keyword("None") => InspectionShape::None,
+                    _ => InspectionShape::Round,
+                };
+                self.stage = InspectStage::Label;
+            }
+            (InspectStage::Label, Input::Text(t)) => {
+                self.inspection.label = t.trim().to_string();
+                self.stage = InspectStage::Rate;
+            }
+            (InspectStage::Label, Input::Enter) => self.stage = InspectStage::Rate,
+            (InspectStage::Rate, input @ (Input::Text(_) | Input::Value(_) | Input::Enter)) => {
+                match input {
+                    Input::Text(t) => self.inspection.rate = t.trim().to_string(),
+                    Input::Value(v) => self.inspection.rate = format!("{v}%"),
+                    _ => {}
+                }
+                let i = self.inspection.clone();
+                let n = self.ids.iter().filter(|id| change(ctx, **id, &|x, _| x.inspection = Some(i.clone()))).count();
+                ctx.messages.push(format!("{n} dimension(s) with inspection data."));
+                return Ok(Step::Done);
+            }
+            (_, Input::Enter) => return Ok(Step::Done),
+            _ => return Err("Invalid input.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn wants_selection(&self) -> bool {
+        matches!(self.stage, InspectStage::Select { .. })
+    }
+
+    fn wants_text(&self) -> bool {
+        matches!(self.stage, InspectStage::Label | InspectStage::Rate)
+    }
+
+    fn text_with_spaces(&self) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Engine;
@@ -748,6 +851,26 @@ mod tests {
         assert_eq!(extra(&d).0.style.map(|s| s.text_height), Some(5.0));
         run(&mut e, &mut d, &["dimupdate", "all", ""]);
         assert_eq!(extra(&d).0.style, None);
+    }
+
+    #[test]
+    fn diminspect_frames_the_text() {
+        let (mut e, mut d) = (Engine::new(), doc());
+        run(&mut e, &mut d, &["diminspect", "", "all", "", "a", "Key", "25%"]);
+        let i = extra(&d).0.inspection.expect("inspection data");
+        assert_eq!((i.shape, i.label.as_str(), i.rate.as_str()), (super::InspectionShape::Angular, "Key", "25%"));
+        let g = d.entities().find(|x| matches!(x.geometry, Geometry::Dimension { .. })).unwrap().geometry.clone();
+        let prims = g.primitives().unwrap();
+        let texts: Vec<&str> = prims
+            .iter()
+            .filter_map(|p| match p {
+                Geometry::Text { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["Key", "25%", "40.00"]);
+        run(&mut e, &mut d, &["-diminspect", "r", "all", ""]);
+        assert_eq!(extra(&d).0.inspection, None);
     }
 
     #[test]

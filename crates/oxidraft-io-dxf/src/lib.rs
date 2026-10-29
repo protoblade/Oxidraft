@@ -19,6 +19,7 @@ use oxidraft_model::{
 };
 
 mod clip_dxf;
+mod dim_xdata;
 mod hatch_dxf;
 mod layout_dxf;
 mod underlay_dxf;
@@ -944,6 +945,12 @@ fn build(doc: &Document) -> Built {
     if doc.layers().iter().any(|l| l.transparency > 0) {
         apps.push(TRANSPARENCY_APP);
     }
+    let dims: Vec<_> = doc.all_entities().flat_map(|e| dim_xdata::xdata(&e.geometry)).collect();
+    for x in &dims {
+        if !apps.contains(&x.application_name.as_str()) {
+            apps.push(if x.application_name == "ACAD" { "ACAD" } else { dim_xdata::APP });
+        }
+    }
     for name in apps {
         if !drawing.app_ids().any(|a| a.name == name) {
             drawing.add_app_id(dxf::tables::AppId { name: name.into(), ..Default::default() });
@@ -1065,6 +1072,7 @@ fn build(doc: &Document) -> Built {
         for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
             de.common.transparency = e.transparency.to_dxf();
             de.common.x_data.extend(hyperlink_xdata(e));
+            de.common.x_data.extend(dim_xdata::xdata(&e.geometry));
             add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
             entities.push((de, &e.geometry, e.id));
         }
@@ -1079,6 +1087,7 @@ fn build(doc: &Document) -> Built {
             for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
                 de.common.transparency = e.transparency.to_dxf();
                 de.common.x_data.extend(hyperlink_xdata(e));
+                de.common.x_data.extend(dim_xdata::xdata(&e.geometry));
                 if i == 0 {
                     de.common.is_in_paper_space = true;
                     add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
@@ -1723,6 +1732,9 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                 wipeouts.mend(&mut g, e.common.handle.0);
                 style_attributes(&mut g, style, &e.common.layer);
                 attach_clip(&mut g, e, &raw.clips);
+                if let Geometry::Dimension { extra, .. } = &mut g {
+                    dim_xdata::read(&e.common.x_data, doc.dim_style(), extra);
+                }
                 let (color, linetype) = (from_dxf_color(&e.common.color), linetype_from_dxf(&e.common.line_type_name));
                 let id = doc.add_with(
                     g,
@@ -1758,6 +1770,9 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                     wipeouts.mend(&mut g, e.common.handle.0);
                     style_attributes(&mut g, None, &e.common.layer);
                     attach_clip(&mut g, e, &raw.clips);
+                    if let Geometry::Dimension { extra, .. } = &mut g {
+                        dim_xdata::read(&e.common.x_data, doc.dim_style(), extra);
+                    }
                     let id = doc.add_with(
                         g,
                         &e.common.layer,

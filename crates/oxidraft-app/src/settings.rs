@@ -22,6 +22,8 @@ pub struct Settings {
     pub block_library: Option<PathBuf>,
     /// Command aliases of the user's own (ALIASEDIT), as (alias, command).
     pub aliases: Vec<(String, String)>,
+    /// Words added to the dictionary (SPELL).
+    pub words: Vec<String>,
 }
 
 /// Where a palette sits: docked at the left or right of the drawing
@@ -166,6 +168,7 @@ mod tests {
             properties_dock: Dock::Right,
             block_library: Some("/blocks".into()),
             aliases: vec![("QQ".into(), "CIRCLE".into())],
+            words: vec!["Oxidraft".into()],
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);

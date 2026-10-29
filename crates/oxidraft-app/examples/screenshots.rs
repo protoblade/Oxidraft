@@ -960,6 +960,48 @@ fn main() {
     h.run_steps(3);
     save(&mut h, &dir, "47-field");
 
+    // DIMINSPECT's frames, and Check Spelling on a misspelled note.
+    let mut h = harness();
+    {
+        use oxidraft_model::annotation::{DimExtra, Inspection, InspectionShape};
+        let doc = h.state_mut().document_mut();
+        for (y, shape) in [(80.0, InspectionShape::Round), (95.0, InspectionShape::Angular)] {
+            doc.add(Geometry::Dimension {
+                p1: Point::new(0.0, y - 8.0),
+                p2: Point::new(60.0, y - 8.0),
+                line: Point::new(0.0, y),
+                rotation: 0.0,
+                aligned: false,
+                text: None,
+                scale: 1.0,
+                extra: Box::new(DimExtra {
+                    inspection: Some(Inspection { shape, label: "A".into(), rate: "100%".into() }),
+                    ..Default::default()
+                }),
+            });
+        }
+        doc.add(Geometry::Text {
+            look: Default::default(),
+            position: Point::new(110.0, 75.0),
+            height: 3.0,
+            rotation: 0.0,
+            width: 0.0,
+            attach: Default::default(),
+            content: "ALL COLUMS TO BE CONCRETE".into(),
+        });
+    }
+    h.state_mut().type_command("ze");
+    h.run_steps(3);
+    save(&mut h, &dir, "48-inspect");
+    h.state_mut().type_command("spell");
+    h.run_steps(3);
+    let start = h.get_by_label("Start").rect().center();
+    h.hover_at(start);
+    h.run_steps(1);
+    h.get_by_label("Start").click();
+    h.run_steps(4);
+    save(&mut h, &dir, "49-spell");
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");

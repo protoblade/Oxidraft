@@ -703,6 +703,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(crate::views::IsoPlaneCmd::default())),
     },
     CommandInfo {
+        name: "DIMINSPECT",
+        aliases: &["-DIMINSPECT"],
+        description: "Add inspection data (a shape, label and inspection rate) to dimensions, or remove it",
+        make: Some(|| Box::new(crate::dimedit::DimInspect::default())),
+    },
+    CommandInfo {
         name: "FIELD",
         aliases: &[],
         description: "Insert a field: text showing the date, the file name, the drawing's properties or an object's area",
@@ -823,6 +829,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: None,
     },
     CommandInfo { name: "FIND", aliases: &[], description: "Find and replace text", make: None },
+    CommandInfo {
+        name: "SPELL",
+        aliases: &["SP"],
+        description: "Check the spelling of text in the drawing",
+        make: None,
+    },
     CommandInfo {
         name: "SCALETEXT",
         aliases: &[],

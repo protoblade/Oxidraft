@@ -89,14 +89,23 @@ pub fn read(bytes: &[u8]) -> Result<Opened, Error> {
         .read()
         .map_err(|e| format!("not a readable DWG file ({e})"))?;
     let version = Version::of(cad.version);
-    // Oxidraft keeps no other extended data than hyperlinks, and some trips
-    // up the DXF reader.
+    // Oxidraft keeps no other extended data than hyperlinks and what it
+    // adds to dimensions, and some trips up the DXF reader.
     for e in cad.entities_mut() {
+        let dimension = matches!(e, acadrust::EntityType::Dimension(_));
         let data = &mut e.common_mut().extended_data;
-        let link = data.get_record("PE_URL").cloned();
+        let kept: Vec<_> = data
+            .records()
+            .iter()
+            .filter(|r| {
+                r.application_name == "PE_URL"
+                    || dimension && ["ACAD", "OXIDRAFT_DIM"].contains(&r.application_name.as_str())
+            })
+            .cloned()
+            .collect();
         *data = Default::default();
-        if let Some(link) = link {
-            data.add_record(link);
+        for r in kept {
+            data.add_record(r);
         }
     }
     let dxf = DxfWriter::new(&cad).with_version(DxfVersion::AC1032).write_to_vec().map_err(|e| e.to_string())?;
@@ -817,6 +826,43 @@ mod tests {
         check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF", true);
         check(&read(&write(&doc, Version::R2018).unwrap()).unwrap().imported.document, "R2018", true);
         check(&read(&write(&doc, Version::R2000).unwrap()).unwrap().imported.document, "R2000", false);
+    }
+
+    #[test]
+    fn dimension_extras_survive() {
+        use oxidraft_model::annotation::{DimExtra, DimStyle, Inspection, InspectionShape};
+        let extra = DimExtra {
+            breaks: vec![(Point::new(10.0, 10.0), Point::new(13.0, 10.0))],
+            jog: Some(Point::new(30.0, 10.0)),
+            style: Some(DimStyle { text_height: 5.0, decimals: 1, ..Default::default() }),
+            inspection: Some(Inspection { shape: InspectionShape::Angular, label: "Key".into(), rate: "25%".into() }),
+            ..Default::default()
+        };
+        let mut doc = Document::new();
+        doc.add(Geometry::Dimension {
+            p1: Point::new(0.0, 0.0),
+            p2: Point::new(40.0, 0.0),
+            line: Point::new(0.0, 10.0),
+            rotation: 0.0,
+            aligned: false,
+            text: None,
+            scale: 1.0,
+            extra: Box::new(extra.clone()),
+        });
+        let check = |back: &Document, how: &str| {
+            let got = back.entities().find_map(|e| match &e.geometry {
+                Geometry::Dimension { extra, .. } => Some((**extra).clone()),
+                _ => None,
+            });
+            assert_eq!(got.as_ref(), Some(&extra), "{how}");
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
     }
 
     #[test]

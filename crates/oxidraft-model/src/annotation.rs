@@ -397,7 +397,7 @@ pub fn dimension_primitives(
     }
     let angle = extra.text_angle.unwrap_or_else(|| readable(r));
     let up = Point::ORIGIN.polar(1.0, readable(r) + 90.0);
-    out.push(Geometry::Text {
+    let value = Geometry::Text {
         look: Default::default(),
         position: text_mid + up * (s.gap * scale),
         height: s.text_height * scale,
@@ -405,7 +405,87 @@ pub fn dimension_primitives(
         width: 0.0,
         attach: Attach::BottomCenter,
         content: dimension_text(text, measurement(p1, p2, rotation, aligned)),
-    });
+    };
+    if let Some(i) = &extra.inspection {
+        out.extend(inspection_frame(&value, i, s.gap * scale));
+    }
+    out.push(value);
+    out
+}
+
+/// DIMINSPECT's shape around a dimension's text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InspectionShape {
+    #[default]
+    Round,
+    Angular,
+    None,
+}
+
+/// DIMINSPECT: how often a dimension is to be checked, in a frame around
+/// its text: a label to its left, the inspection rate to its right.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Inspection {
+    pub shape: InspectionShape,
+    pub label: String,
+    pub rate: String,
+}
+
+/// The frame, label and rate around a dimension's `value` text (bottom
+/// centered), `gap` clear of it.
+fn inspection_frame(value: &Geometry, i: &Inspection, gap: f64) -> Vec<Geometry> {
+    let Geometry::Text { position, height, rotation, content, .. } = value else { return Vec::new() };
+    let width = |s: &str| {
+        let [a, b, ..] = text_box(Point::ORIGIN, *height, 0.0, 0.0, Attach::BottomLeft, s, 1.0);
+        a.distance(b)
+    };
+    // Clear of the text on each side, a little more than above and below.
+    let pad = gap + height * 0.3;
+    let half = width(content) / 2.0 + pad;
+    let section = |s: &str| if s.is_empty() { 0.0 } else { width(s) + 2.0 * pad };
+    let (left, right) = (-half - section(&i.label), half + section(&i.rate));
+    let (bottom, top) = (-gap, height + gap);
+    let at = |x: f64, y: f64| (*position + Point::new(x, y)).rotated_about(*position, *rotation);
+    let line = |a: (f64, f64), b: (f64, f64)| Geometry::Line { start: at(a.0, a.1), end: at(b.0, b.1) };
+    let text = |x: f64, s: &str| Geometry::Text {
+        look: Default::default(),
+        position: at(x, 0.0),
+        height: *height,
+        rotation: *rotation,
+        width: 0.0,
+        attach: Attach::BottomCenter,
+        content: s.to_string(),
+    };
+    let mut out = Vec::new();
+    if !i.label.is_empty() {
+        out.push(line((-half, bottom), (-half, top)));
+        out.push(text((left - half) / 2.0, &i.label));
+    }
+    if !i.rate.is_empty() {
+        out.push(line((half, bottom), (half, top)));
+        out.push(text((right + half) / 2.0, &i.rate));
+    }
+    if i.shape == InspectionShape::None {
+        return out;
+    }
+    out.push(line((left, bottom), (right, bottom)));
+    out.push(line((left, top), (right, top)));
+    let r = (top - bottom) / 2.0;
+    let mid = bottom + r;
+    match i.shape {
+        InspectionShape::Round => {
+            for (x, start) in [(left, 90.0), (right, -90.0)] {
+                let (start_angle, end_angle) = (rotation + start, rotation + start + 180.0);
+                out.push(Geometry::Arc { center: at(x, mid), radius: r, start_angle, end_angle });
+            }
+        }
+        _ => {
+            for (x, dx) in [(left, -r), (right, r)] {
+                out.push(line((x, top), (x + dx, mid)));
+                out.push(line((x + dx, mid), (x, bottom)));
+            }
+        }
+    }
     out
 }
 
@@ -425,6 +505,8 @@ pub struct DimExtra {
     pub jog: Option<Point>,
     /// Its own style, overriding the drawing's (DIMOVERRIDE).
     pub style: Option<DimStyle>,
+    /// Inspection data around its text (DIMINSPECT).
+    pub inspection: Option<Inspection>,
 }
 
 impl DimExtra {
@@ -441,6 +523,7 @@ impl DimExtra {
             breaks: self.breaks.iter().map(|(a, b)| (f(*a), f(*b))).collect(),
             jog: self.jog.map(f),
             style: self.style,
+            inspection: self.inspection.clone(),
         }
     }
 }
