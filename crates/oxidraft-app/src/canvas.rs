@@ -143,7 +143,9 @@ impl OxidraftApp {
             None => (painter.clone(), rect, Vec::new()),
         };
         self.draw_ucs_icon(&model, rect, area);
+        self.sheet_scale = self.active_viewport.filter(|_| active.is_some()).map(|a| a.page.scale);
         self.draw_entities(&model, rect, cursor.as_ref(), self.doc.space(), &frozen);
+        self.sheet_scale = None;
         // The sheet's own objects over it, and the frame worked in.
         if let (Some((_, r)), Some(a)) = (&active, self.active_viewport) {
             self.view = a.page;
@@ -247,7 +249,9 @@ impl OxidraftApp {
             // Model space as the viewport shows it: its view center at the
             // viewport's center, scaled from paper to model units.
             self.view = View { scale: page.scale * k, center: view_center - (center - page.center) * (1.0 / k) };
+            self.sheet_scale = Some(page.scale);
             self.draw_entities(&painter.with_clip_rect(clip), rect, None, MODEL, &frozen);
+            self.sheet_scale = None;
             self.view = page;
         }
     }
@@ -565,7 +569,7 @@ impl OxidraftApp {
         let view = self.world_rect(rect);
         // Dash patterns in screen pixels by linetype name, looked up once a frame.
         let mut patterns: HashMap<String, Option<Vec<f64>>> = HashMap::new();
-        let px_per_unit = self.doc.ltscale() * self.view.scale;
+        let px_per_unit = self.doc.ltscale() * self.sheet_scale.unwrap_or(self.view.scale);
         let refedit = self.doc.refedit();
         for e in self.doc.space_in_draw_order(space) {
             if !self.doc.is_shown(&e.layer) || !on_screen(&self.doc.entity_bounds(e), &view) {

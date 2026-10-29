@@ -103,6 +103,9 @@ pub struct OxidraftApp {
     pub(crate) cursor: Option<Point>,
     /// Drawing area from the last frame.
     pub(crate) canvas_rect: Rect,
+    /// Drawing model space through a viewport: the sheet's screen points
+    /// per paper unit, which linetypes go by there (PSLTSCALE 1).
+    pub(crate) sheet_scale: Option<f64>,
     /// Top of the command line's history and input from the last frame.
     pub(crate) command_line_top: f32,
     pub(crate) ribbon_tab: usize,
@@ -205,6 +208,7 @@ impl OxidraftApp {
             title: String::new(),
             cursor: None,
             canvas_rect: Rect::NOTHING,
+            sheet_scale: None,
             command_line_top: f32::INFINITY,
             ribbon_tab: 0,
             history_expanded: false,
