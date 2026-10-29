@@ -207,6 +207,8 @@ pub enum UiRequest {
     Tiling(Tiling),
     /// CHSPACE: these objects to the other space, through a viewport.
     ChangeSpace(Vec<EntityId>),
+    /// WMFOUT: these objects to a Windows Metafile.
+    WmfOut(Vec<EntityId>),
 }
 
 /// Result of feeding one input to a command.

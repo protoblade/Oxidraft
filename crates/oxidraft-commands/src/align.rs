@@ -303,6 +303,29 @@ impl Command for ChangeSpace {
     }
 }
 
+/// WMFOUT: the objects selected, for the app to write as a Windows
+/// Metafile.
+#[derive(Default)]
+pub struct WmfOut;
+
+impl Command for WmfOut {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Select objects")
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let Input::Selection(s) = input else { return Err("Select objects, then press Enter.".into()) };
+        if !s.ids.is_empty() {
+            ctx.ui = Some(crate::UiRequest::WmfOut(s.ids));
+        }
+        Ok(Step::Done)
+    }
+
+    fn wants_selection(&self) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Engine;

@@ -9,7 +9,7 @@ use oxidraft_geom::{Aabb, Point};
 use oxidraft_model::{Document, MODEL, Space, hatch};
 use std::sync::Arc;
 
-use oxidraft_plot::{Item, PAPERS, Picture, PlotArea, PlotScale, PlotSettings, PlotStyle, SCALES, Sheet, scale_label};
+use oxidraft_plot::{Item, Picture, PlotArea, PlotScale, PlotSettings, PlotStyle, Plotter, SCALES, Sheet, scale_label};
 
 use crate::{app::OxidraftApp, theme};
 
@@ -254,7 +254,7 @@ impl OxidraftApp {
             oxidraft_plot::render_with_pictures(&self.doc, space, &settings, &pictures)
         };
         let sheet = sheet.ok_or("There's nothing to plot.")?;
-        let bytes = oxidraft_plot::pdf(&sheet, &self.file_name());
+        let bytes = self.plot_bytes(settings.plotter, std::slice::from_ref(&sheet))?;
         std::fs::write(path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
         let area = sheet.layout.clip;
         self.engine.log(format!("Effective plotting area: {:.2} wide by {:.2} high", area.width(), area.height()));
@@ -264,14 +264,10 @@ impl OxidraftApp {
         Ok(())
     }
 
-    /// OK: asks where to save the PDF, then plots.
+    /// OK: asks where to save the plot, then plots.
     fn plot_with_dialog(&mut self) {
-        let name = Path::new(&self.file_name()).with_extension("pdf");
-        let mut dialog = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name.to_string_lossy());
-        if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
-            dialog = dialog.set_directory(dir);
-        }
-        let Some(path): Option<PathBuf> = dialog.save_file() else { return };
+        let plotter = self.plot.as_ref().map_or(self.plot_settings.plotter, |d| d.settings.plotter);
+        let Some(path): Option<PathBuf> = self.plot_file_path(plotter) else { return };
         if let Err(e) = self.plot_to(&path) {
             self.engine.log(e);
         }
@@ -345,17 +341,19 @@ impl OxidraftApp {
                         section(ui, "Printer/plotter", |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Name:");
-                                egui::ComboBox::from_id_salt("plot_printer")
-                                    .selected_text("Oxidraft PDF")
+                                let r = egui::ComboBox::from_id_salt("plot_printer")
+                                    .selected_text(s.plotter.name())
                                     .width(ui.available_width())
                                     .show_ui(ui, |ui| {
-                                        let _ = ui.selectable_label(true, "Oxidraft PDF");
+                                        for p in Plotter::ALL {
+                                            ui.selectable_value(&mut s.plotter, p, p.name());
+                                        }
                                     });
+                                r.response.widget_info(|| {
+                                    egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Printer/plotter")
+                                });
                             });
-                            ui.colored_label(
-                                theme::text_dim(),
-                                "Writes a PDF file: lines as vectors, text you can search.",
-                            );
+                            ui.colored_label(theme::text_dim(), s.plotter.description());
                         });
                         // A layout plots on its page setup's paper.
                         section(ui, "Paper size", |ui| {
@@ -364,8 +362,8 @@ impl OxidraftApp {
                                     .selected_text(&paper_name)
                                     .width(ui.available_width())
                                     .show_ui(ui, |ui| {
-                                        for p in PAPERS {
-                                            ui.selectable_value(&mut s.paper, *p, p.name);
+                                        for p in oxidraft_plot::papers() {
+                                            ui.selectable_value(&mut s.paper, p, p.name);
                                         }
                                     });
                             });

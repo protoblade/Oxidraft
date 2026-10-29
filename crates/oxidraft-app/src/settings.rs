@@ -29,6 +29,11 @@ pub struct Settings {
     /// Scales added to AutoCAD's (SCALELISTEDIT), as drawing units per
     /// paper unit.
     pub scales: Vec<f64>,
+    /// Paper sizes of your own (PLOTTERMANAGER): name, width and height in
+    /// millimeters.
+    pub papers: Vec<(String, f64, f64)>,
+    /// How fine PNG and JPEG plots are, in dots per inch (0: 150).
+    pub raster_dpi: u32,
 }
 
 /// Where a palette sits: docked at the left or right of the drawing
@@ -87,6 +92,7 @@ impl OxidraftApp {
         }
         self.engine.vars.color_theme = u8::from(settings.color_theme == ColorTheme::Light);
         self.engine.aliases = settings.aliases.clone();
+        oxidraft_plot::set_custom_papers(&settings.papers);
         if settings != self.settings
             && let Some(path) = &self.settings_path
             && let Err(e) = settings.save(path)
@@ -176,6 +182,8 @@ mod tests {
             words: vec!["Oxidraft".into()],
             tool_palettes: crate::tool_palettes::default_palettes(),
             scales: vec![25.0],
+            papers: vec![("Banner".into(), 1000.0, 300.0)],
+            raster_dpi: 300,
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);

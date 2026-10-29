@@ -3,17 +3,18 @@
 //! Model tab) or every layout; PUBLISH (Batch Plot) plots a list of sheets,
 //! from this drawing and others added to it.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use eframe::egui::{self, Align, Layout, RichText, vec2};
 use oxidraft_model::{Document, MODEL, Space};
-use oxidraft_plot::{PlotArea, PlotSettings, Sheet};
+use oxidraft_plot::{PlotArea, PlotSettings, Plotter, Sheet};
 
 use crate::{app::OxidraftApp, theme};
 
-/// EXPORTPDF's dialog: which layouts.
+/// EXPORTPDF's (and EXPORTDWFX's) dialog: which layouts.
 pub(crate) struct ExportPdf {
     all: bool,
+    plotter: Plotter,
 }
 
 /// A sheet in PUBLISH's list: model space or a layout of this drawing
@@ -28,6 +29,8 @@ struct SheetEntry {
 
 pub(crate) struct PublishDialog {
     sheets: Vec<SheetEntry>,
+    /// PDF or DWFx.
+    plotter: Plotter,
     /// Drawings sheets were added from: file name and contents.
     others: Vec<(String, Document)>,
     selected: Option<usize>,
@@ -57,11 +60,11 @@ impl OxidraftApp {
         settings
     }
 
-    fn write_pdf(&mut self, path: &Path, sheets: &[Sheet]) -> Result<usize, String> {
+    fn write_sheets(&mut self, path: &Path, sheets: &[Sheet], plotter: Plotter) -> Result<usize, String> {
         if sheets.is_empty() {
             return Err("There's nothing to plot.".into());
         }
-        let bytes = oxidraft_plot::pdf_pages(sheets, &self.file_name());
+        let bytes = self.plot_bytes(plotter, sheets)?;
         std::fs::write(path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
         self.engine.log(format!("{} sheet(s) written to {}", sheets.len(), path.display()));
         Ok(sheets.len())
@@ -70,6 +73,11 @@ impl OxidraftApp {
     /// EXPORTPDF to `path`: the layout shown (on the Model tab, what PLOT
     /// would plot), or every layout. Returns how many pages.
     pub fn export_pdf_to(&mut self, path: &Path, all_layouts: bool) -> Result<usize, String> {
+        self.export_to_with(path, all_layouts, Plotter::Pdf)
+    }
+
+    /// EXPORTPDF or EXPORTDWFX (`plotter`) to `path`.
+    pub fn export_to_with(&mut self, path: &Path, all_layouts: bool, plotter: Plotter) -> Result<usize, String> {
         let spaces: Vec<Space> =
             if all_layouts { self.doc.layouts().iter().map(|l| l.id).collect() } else { vec![self.shown_space()] };
         let sheets: Vec<Sheet> = {
@@ -81,7 +89,7 @@ impl OxidraftApp {
                 })
                 .collect()
         };
-        self.write_pdf(path, &sheets)
+        self.write_sheets(path, &sheets, plotter)
     }
 
     /// PUBLISH to `path`: the sheets ticked in its list. Returns how many
@@ -102,26 +110,28 @@ impl OxidraftApp {
                 })
                 .collect()
         };
-        self.write_pdf(path, &sheets)
-    }
-
-    /// Asks where the PDF goes, named after the drawing.
-    fn pdf_path(&self) -> Option<PathBuf> {
-        let name = Path::new(&self.file_name()).with_extension("pdf");
-        let mut dialog = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name.to_string_lossy());
-        if let Some(dir) = self.path.as_ref().and_then(|p| p.parent()) {
-            dialog = dialog.set_directory(dir);
-        }
-        dialog.save_file()
+        let plotter = self.publish.as_ref().map_or(Plotter::Pdf, |d| d.plotter);
+        self.write_sheets(path, &sheets, plotter)
     }
 
     pub(crate) fn open_export_pdf(&mut self) {
-        self.export_pdf = Some(ExportPdf { all: false });
+        self.open_export(Plotter::Pdf);
+    }
+
+    pub(crate) fn open_export(&mut self, plotter: Plotter) {
+        self.export_pdf = Some(ExportPdf { all: false, plotter });
     }
 
     pub(crate) fn open_publish(&mut self) {
         let sheets = sheets_of(&self.doc, 0, "");
-        self.publish = Some(PublishDialog { sheets, others: Vec::new(), selected: None });
+        self.publish = Some(PublishDialog { sheets, plotter: Plotter::Pdf, others: Vec::new(), selected: None });
+    }
+
+    /// PUBLISH writes PDF or DWFx.
+    pub fn set_publish_format(&mut self, plotter: Plotter) {
+        if let Some(d) = &mut self.publish {
+            d.plotter = plotter;
+        }
     }
 
     /// Adds sheets from drawings picked to PUBLISH's list.
@@ -139,7 +149,7 @@ impl OxidraftApp {
         let Some(mut d) = self.export_pdf.take() else { return };
         let (mut open, mut save, mut cancel) = (true, false, false);
         let model = self.shown_space() == MODEL;
-        egui::Window::new("Save As PDF")
+        egui::Window::new(if d.plotter == Plotter::Dwfx { "Save As DWFx" } else { "Save As PDF" })
             .id(egui::Id::unique("export_pdf"))
             .open(&mut open)
             .collapsible(false)
@@ -159,8 +169,8 @@ impl OxidraftApp {
                 });
             });
         if save {
-            if let Some(path) = self.pdf_path()
-                && let Err(e) = self.export_pdf_to(&path, d.all)
+            if let Some(path) = self.plot_file_path(d.plotter)
+                && let Err(e) = self.export_to_with(&path, d.all, d.plotter)
             {
                 self.engine.log(e);
             }
@@ -222,7 +232,21 @@ impl OxidraftApp {
                     }
                 });
                 let count = d.sheets.iter().filter(|s| s.include).count();
-                ui.colored_label(theme::text_dim(), format!("{count} sheet(s) to one PDF, each with its page setup."));
+                ui.horizontal(|ui| {
+                    ui.label("Publish to:");
+                    let r = egui::ComboBox::from_id_salt("publish_to")
+                        .selected_text(d.plotter.extension().to_ascii_uppercase())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut d.plotter, Plotter::Pdf, "PDF");
+                            ui.selectable_value(&mut d.plotter, Plotter::Dwfx, "DWFX");
+                        });
+                    r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Publish to"));
+                });
+                let kind = d.plotter.extension().to_ascii_uppercase();
+                ui.colored_label(
+                    theme::text_dim(),
+                    format!("{count} sheet(s) to one {kind}, each with its page setup."),
+                );
                 let row = vec2(ui.available_width(), 24.0);
                 ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
                     cancel = ui.button("Cancel").clicked();
@@ -239,7 +263,8 @@ impl OxidraftApp {
                 }
             }
         }
-        if publish && let Some(path) = self.pdf_path() {
+        let plotter = self.publish.as_ref().map_or(Plotter::Pdf, |d| d.plotter);
+        if publish && let Some(path) = self.plot_file_path(plotter) {
             match self.publish_to(&path) {
                 Ok(_) => self.publish = None,
                 Err(e) => self.engine.log(e),

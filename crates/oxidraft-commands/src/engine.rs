@@ -3,7 +3,7 @@ use oxidraft_model::{Document, EntityId, Geometry, snap};
 
 use crate::{
     Command, Ctx, Input, Prompt, Selection, Step, UiRequest, Vars, ViewRequest,
-    align::{Align, ArrayPath, ChangeSpace, Reverse},
+    align::{Align, ArrayPath, ChangeSpace, Reverse, WmfOut},
     annotate::Dimension,
     annotate::MLeader,
     annotate::MText,
@@ -813,6 +813,30 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "EXPORT", aliases: &["EXP"], description: "Save a copy as DXF, DWG or PDF", make: None },
     CommandInfo { name: "DXFOUT", aliases: &[], description: "Save a copy as DXF", make: None },
     CommandInfo { name: "PNGOUT", aliases: &[], description: "Save the drawing area as a PNG image", make: None },
+    CommandInfo {
+        name: "WMFOUT",
+        aliases: &[],
+        description: "Save objects as a Windows Metafile",
+        make: Some(|| Box::new(WmfOut)),
+    },
+    CommandInfo {
+        name: "EXPORTDWFX",
+        aliases: &[],
+        description: "Save the layout or every layout as a DWFx file",
+        make: None,
+    },
+    CommandInfo {
+        name: "EXPORTDWF",
+        aliases: &[],
+        description: "Save the layout or every layout for DWF viewers (as DWFx)",
+        make: None,
+    },
+    CommandInfo {
+        name: "PLOTTERMANAGER",
+        aliases: &[],
+        description: "Plotter configurations, paper sizes of your own and image plot resolution",
+        make: None,
+    },
     CommandInfo { name: "JPGOUT", aliases: &[], description: "Save the drawing area as a JPEG image", make: None },
     CommandInfo { name: "BMPOUT", aliases: &[], description: "Save the drawing area as a BMP image", make: None },
     CommandInfo { name: "DXFIN", aliases: &[], description: "Open a DXF file", make: None },

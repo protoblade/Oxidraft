@@ -867,12 +867,33 @@ impl OxidraftApp {
                     ),
                 );
             });
+            ui.vertical(|ui| {
+                self.small_tool(
+                    ui,
+                    &tool(
+                        Icon::Plot,
+                        "Plotter Manager",
+                        Some("PLOTTERMANAGER"),
+                        "Plotter configurations, paper sizes of your own, image plot resolution",
+                    ),
+                );
+            });
         });
         ribbon_panel(ui, "Export to DWF/PDF", |ui| {
             self.large_tool(
                 ui,
                 &tool(Icon::Pdf, "Export", Some("EXPORTPDF"), "Saves the current layout, or all of them, as a PDF"),
             );
+            ui.vertical(|ui| {
+                self.small_tool(
+                    ui,
+                    &tool(Icon::Pdf, "DWFx", Some("EXPORTDWFX"), "Saves the current layout, or all of them, as DWFx"),
+                );
+                self.small_tool(
+                    ui,
+                    &tool(Icon::Pdf, "Metafile", Some("WMFOUT"), "Saves objects as a Windows Metafile (WMF)"),
+                );
+            });
         });
     }
 

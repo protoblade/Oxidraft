@@ -48,6 +48,16 @@ impl Typeface {
         &self.name
     }
 
+    /// Its family name (as Windows names fonts).
+    pub fn family(&self) -> String {
+        self.face
+            .names()
+            .into_iter()
+            .filter(|n| n.name_id == ttf_parser::name_id::FAMILY)
+            .find_map(|n| n.to_string())
+            .unwrap_or_else(|| "Arial".into())
+    }
+
     /// The style font it stands for; empty for the default typeface.
     pub fn key(&self) -> &str {
         &self.key

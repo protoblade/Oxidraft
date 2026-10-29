@@ -31,6 +31,79 @@ pub const PAPERS: &[Paper] = &[
     paper("ANSI E (34.00 x 44.00 Inches)", 863.6, 1117.6),
 ];
 
+/// Paper sizes of your own (PLOTTERMANAGER), after the standard ones.
+static CUSTOM: std::sync::Mutex<Vec<Paper>> = std::sync::Mutex::new(Vec::new());
+
+/// Sets the paper sizes of your own: (name, width, height in millimeters).
+pub fn set_custom_papers(sizes: &[(String, f64, f64)]) {
+    let papers = sizes
+        .iter()
+        .filter(|(_, w, h)| *w > 0.0 && *h > 0.0)
+        .map(|(name, w, h)| {
+            // Names live as long as the papers do: kept once each.
+            let known = CUSTOM.lock().ok().and_then(|c| c.iter().find(|p| p.name == name).map(|p| p.name));
+            let name: &'static str = known.unwrap_or_else(|| Box::leak(name.clone().into_boxed_str()));
+            Paper { name, width: *w, height: *h }
+        })
+        .collect();
+    if let Ok(mut c) = CUSTOM.lock() {
+        *c = papers;
+    }
+}
+
+/// Every paper size the plotters offer: the standard ones, then yours.
+pub fn papers() -> Vec<Paper> {
+    let custom = CUSTOM.lock().map(|c| c.clone()).unwrap_or_default();
+    PAPERS.iter().copied().chain(custom).collect()
+}
+
+/// What a plot is written as: AutoCAD's plotter configurations for files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Plotter {
+    #[default]
+    Pdf,
+    Dwfx,
+    Png,
+    Jpg,
+}
+
+impl Plotter {
+    pub const ALL: [Plotter; 4] = [Plotter::Pdf, Plotter::Dwfx, Plotter::Png, Plotter::Jpg];
+
+    /// Its configuration's name, as AutoCAD's.
+    pub fn name(self) -> &'static str {
+        match self {
+            Plotter::Pdf => "DWG To PDF.pc3",
+            Plotter::Dwfx => "DWFx ePlot (XPS Compatible).pc3",
+            Plotter::Png => "PublishToWeb PNG.pc3",
+            Plotter::Jpg => "PublishToWeb JPG.pc3",
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Plotter::Pdf => "pdf",
+            Plotter::Dwfx => "dwfx",
+            Plotter::Png => "png",
+            Plotter::Jpg => "jpg",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Plotter::Pdf => "Writes a PDF file: lines as vectors, text you can search.",
+            Plotter::Dwfx => "Writes a DWFx file (XPS compatible): vectors and text, for DWF and XPS viewers.",
+            Plotter::Png => "Writes a PNG image of the sheet.",
+            Plotter::Jpg => "Writes a JPEG image of the sheet.",
+        }
+    }
+
+    /// Whether it writes pixels rather than vectors.
+    pub fn is_raster(self) -> bool {
+        matches!(self, Plotter::Png | Plotter::Jpg)
+    }
+}
+
 /// The border round the sheet that isn't plotted on, in millimeters.
 pub const MARGIN: f64 = 5.0;
 
@@ -161,11 +234,13 @@ pub struct PlotSettings {
     pub style: PlotStyle,
     /// Plot object lineweights; off, every line plots as thin as it can.
     pub lineweights: bool,
+    pub plotter: Plotter,
 }
 
 impl Default for PlotSettings {
     fn default() -> Self {
         Self {
+            plotter: Plotter::Pdf,
             paper: PAPERS[0],
             landscape: true,
             area: PlotArea::Extents,

@@ -13,6 +13,7 @@ oxidraft-model.workspace = true
 # The typeface the drawing area shows text in, embedded so plots match it.
 epaint_default_fonts = "0.37"
 flate2 = "1"
+crc32fast = "1"
 ttf-parser = "0.25"
 
 [lints]

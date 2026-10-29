@@ -2988,6 +2988,7 @@ dependencies = [
 name = "oxidraft-plot"
 version = "0.9.0"
 dependencies = [
+ "crc32fast",
  "epaint_default_fonts",
  "flate2",
  "oxidraft-geom",

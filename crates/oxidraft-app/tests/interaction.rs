@@ -2816,3 +2816,46 @@ fn an_associative_array_shows_and_changes_in_properties() {
     let layout = h.state_mut().document_mut().array(id).map(|a| a.layout.clone());
     assert!(matches!(layout, Some(ArrayLayout::Rect { rows: 2, columns: 5, .. })), "{layout:?}");
 }
+
+#[test]
+fn plotters_wmfout_and_paper_sizes_of_your_own() {
+    use oxidraft_plot::Plotter;
+    let mut h = app_with_line();
+    let dir = std::env::temp_dir().join(format!("oxidraft-plotters-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // PLOT to the PublishToWeb PNG plotter: an image of the sheet.
+    h.state_mut().type_command("plot");
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::ComboBox, "Printer/plotter").click();
+    h.run_steps(2);
+    h.get_by_label("PublishToWeb PNG.pc3").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().plot_settings_mut().unwrap().plotter, Plotter::Png);
+    let png = dir.join("plot.png");
+    h.state_mut().plot_to(&png).unwrap();
+    let img = image::open(&png).unwrap();
+    assert!(img.width() > 1000 && img.height() > 500, "{}x{}", img.width(), img.height());
+    // EXPORTDWFX: a DWFx (zip) package.
+    let dwfx = dir.join("sheets.dwfx");
+    assert_eq!(h.state_mut().export_to_with(&dwfx, false, Plotter::Dwfx), Ok(1));
+    assert!(std::fs::read(&dwfx).unwrap().starts_with(b"PK\x03\x04"));
+    // WMFOUT: a placeable metafile of the objects.
+    let ids: Vec<_> = h.state_mut().document_mut().entities().map(|e| e.id).collect();
+    let wmf = dir.join("objects.wmf");
+    h.state_mut().wmf_out_to(&wmf, &ids).unwrap();
+    assert!(std::fs::read(&wmf).unwrap().starts_with(&[0xD7, 0xCD, 0xC6, 0x9A]));
+    // PLOTTERMANAGER: a paper size of your own, which the plotters offer.
+    h.key_press(Key::Escape);
+    h.state_mut().type_command("plottermanager");
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Paper name").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(Role::TextInput, "Paper name").type_text("Banner 1000");
+    h.run_steps(1);
+    h.get_by_label("Add").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert!(oxidraft_plot::papers().iter().any(|p| p.name == "Banner 1000"));
+    std::fs::remove_dir_all(&dir).ok();
+}

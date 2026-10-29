@@ -116,6 +116,8 @@ pub struct OxidraftApp {
     pub(crate) layer_walk: Option<crate::layer_walk::LayerWalk>,
     /// EXPORTPDF's and PUBLISH's dialogs.
     pub(crate) export_pdf: Option<crate::publish::ExportPdf>,
+    /// PLOTTERMANAGER's dialog.
+    pub(crate) plotter_manager: Option<crate::plotters::PlotterManager>,
     pub(crate) publish: Option<crate::publish::PublishDialog>,
     /// UNITS: the settings being chosen.
     pub(crate) units_dialog: Option<oxidraft_model::Units>,
@@ -311,6 +313,7 @@ impl OxidraftApp {
             alias_dialog: None,
             layer_walk: None,
             export_pdf: None,
+            plotter_manager: None,
             publish: None,
             units_dialog: None,
             rename: None,
@@ -672,6 +675,12 @@ impl OxidraftApp {
             "ALIASEDIT" => self.open_aliases(),
             "LAYWALK" => self.open_layer_walk(),
             "EXPORTPDF" => self.open_export_pdf(),
+            "EXPORTDWFX" => self.open_export(oxidraft_plot::Plotter::Dwfx),
+            "EXPORTDWF" => {
+                self.engine.log("DWF6 isn't written: the sheets go to DWFx, which DWF viewers open.");
+                self.open_export(oxidraft_plot::Plotter::Dwfx);
+            }
+            "PLOTTERMANAGER" => self.open_plotter_manager(),
             "PUBLISH" => self.open_publish(),
             "UNITS" | "UN" => self.open_units(),
             "RENAME" | "REN" => self.open_rename(),
@@ -792,6 +801,7 @@ impl OxidraftApp {
                 UiRequest::CompareXref(name) => self.xcompare(&name),
                 UiRequest::Tiling(tiling) => self.set_tiling(tiling),
                 UiRequest::ChangeSpace(ids) => self.change_space(&ids),
+                UiRequest::WmfOut(ids) => self.wmf_out(&ids),
                 UiRequest::SaveXrefEdit => self.prepare_xref_edit_save(),
                 UiRequest::ColorTheme(n) => {
                     let color_theme = if n == 1 { ColorTheme::Light } else { ColorTheme::Dark };
@@ -1121,6 +1131,7 @@ impl eframe::App for OxidraftApp {
         self.alias_dialog(&ctx);
         self.layer_walk_dialog(&ctx);
         self.export_pdf_dialog(&ctx);
+        self.plotter_manager_dialog(&ctx);
         self.publish_dialog(&ctx);
         self.units_dialog(&ctx);
         self.rename_dialog(&ctx);

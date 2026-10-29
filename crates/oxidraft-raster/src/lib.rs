@@ -337,6 +337,23 @@ fn read_tiff(path: &Path, region: Region, width: u32, height: u32) -> Result<Pix
     Ok(Pixels { width, height, rgba })
 }
 
+/// Page `page` of the PDF in `data` at `dpi` dots to the inch, on white
+/// (PNG and JPEG plots).
+pub fn render_pdf_data(data: Vec<u8>, page: usize, dpi: f32) -> Result<Pixels, String> {
+    use hayro::vello_cpu::{color::palette::css::WHITE, peniko::ImageAlphaType};
+    let pdf = hayro::hayro_syntax::Pdf::new(data).map_err(|e| format!("not a readable PDF ({e:?})"))?;
+    let p = pdf.pages().get(page).ok_or("no such page")?;
+    let (w, h) = p.render_dimensions();
+    // At most 16000 pixels a side.
+    let scale = (dpi / 72.0).min(16_000.0 / w.max(h)).max(0.01);
+    let settings = hayro::PixmapSettings { x_scale: scale, y_scale: scale, bg_color: WHITE };
+    let interpreter = hayro::hayro_interpret::InterpreterSettings::default();
+    let pixmap =
+        hayro::render(p, &hayro::RenderCache::new(), &interpreter, &hayro::RenderSettings::default(), &settings);
+    let (width, height) = (u32::from(pixmap.width()), u32::from(pixmap.height()));
+    Ok(Pixels { width, height, rgba: pixmap.take_rgba8(ImageAlphaType::AlphaPremultiplied) })
+}
+
 fn render_pdf(path: &Path, page: usize, max_side: u32) -> Result<Pixels, String> {
     use hayro::vello_cpu::{color::palette::css::WHITE, peniko::ImageAlphaType};
     // Without the layers turned off for it (ULAYERS).
