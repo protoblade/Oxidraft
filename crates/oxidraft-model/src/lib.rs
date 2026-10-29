@@ -17,6 +17,7 @@ mod purge;
 mod refedit;
 pub mod snap;
 pub mod table;
+pub mod ucs;
 mod underlay;
 pub mod units;
 mod xref;

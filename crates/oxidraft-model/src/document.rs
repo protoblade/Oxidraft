@@ -338,6 +338,11 @@ pub struct Document {
     attdisp: AttributeDisplay,
     /// INSBASE: the point that lands where the drawing is inserted or pasted.
     insbase: Point,
+    /// The current UCS, the ones before it (UCS Previous), and the named
+    /// ones.
+    ucs: crate::ucs::Ucs,
+    ucs_previous: Vec<crate::ucs::Ucs>,
+    named_ucs: Vec<crate::ucs::NamedUcs>,
     /// LIMITS: LIMMIN and LIMMAX, and LIMCHECK (no points outside them).
     limits: (Point, Point),
     limits_check: bool,
@@ -482,6 +487,9 @@ impl Document {
             pdsize: 0.0,
             attdisp: AttributeDisplay::Normal,
             insbase: Point::ORIGIN,
+            ucs: crate::ucs::WORLD,
+            ucs_previous: Vec::new(),
+            named_ucs: Vec::new(),
             limits: (Point::ORIGIN, Point::new(420.0, 297.0)),
             limits_check: false,
             fill: true,
@@ -1326,6 +1334,67 @@ impl Document {
             self.insbase = p;
             self.revision += 1;
         }
+    }
+
+    /// The current UCS.
+    pub fn ucs(&self) -> crate::ucs::Ucs {
+        self.ucs
+    }
+
+    /// Makes `ucs` current; the one it replaces is UCS Previous's.
+    pub fn set_ucs(&mut self, ucs: crate::ucs::Ucs) {
+        if ucs != self.ucs {
+            self.ucs_previous.push(self.ucs);
+            if self.ucs_previous.len() > 10 {
+                self.ucs_previous.remove(0);
+            }
+            self.ucs = ucs;
+            self.revision += 1;
+        }
+    }
+
+    /// UCS Previous: back to the UCS before; false if there's none.
+    pub fn previous_ucs(&mut self) -> bool {
+        let Some(ucs) = self.ucs_previous.pop() else { return false };
+        self.ucs = ucs;
+        self.revision += 1;
+        true
+    }
+
+    /// The named UCSs, in the order saved.
+    pub fn named_ucs(&self) -> &[crate::ucs::NamedUcs] {
+        &self.named_ucs
+    }
+
+    /// Saves `ucs` as `name` (replacing one of that name).
+    pub fn save_ucs(&mut self, name: &str, ucs: crate::ucs::Ucs) -> Result<(), String> {
+        check_name(name)?;
+        let name = name.trim().to_string();
+        match self.named_ucs.iter_mut().find(|n| n.name.eq_ignore_ascii_case(&name)) {
+            Some(n) => n.ucs = ucs,
+            None => self.named_ucs.push(crate::ucs::NamedUcs { name, ucs }),
+        }
+        self.revision += 1;
+        Ok(())
+    }
+
+    pub fn delete_ucs(&mut self, name: &str) -> bool {
+        let before = self.named_ucs.len();
+        self.named_ucs.retain(|n| !n.name.eq_ignore_ascii_case(name));
+        self.revision += 1;
+        self.named_ucs.len() != before
+    }
+
+    pub fn rename_ucs(&mut self, old: &str, new: &str) -> Result<(), String> {
+        check_name(new)?;
+        let new = new.trim().to_string();
+        if !old.eq_ignore_ascii_case(&new) && self.named_ucs.iter().any(|n| n.name.eq_ignore_ascii_case(&new)) {
+            return Err(format!("A UCS named \"{new}\" already exists."));
+        }
+        let n = self.named_ucs.iter_mut().find(|n| n.name.eq_ignore_ascii_case(old)).ok_or("No such UCS.")?;
+        n.name = new;
+        self.revision += 1;
+        Ok(())
     }
 
     /// LIMMIN and LIMMAX.

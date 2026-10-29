@@ -129,6 +129,7 @@ pub struct OxidraftApp {
     pub(crate) point_style: Option<crate::drafting::PointStyle>,
     pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
     pub(crate) field_dialog: Option<crate::fields::FieldDialog>,
+    pub(crate) ucs_dialog: Option<crate::ucs_dialog::UcsDialog>,
     /// The last script run, for RSCRIPT.
     pub(crate) last_script: Option<String>,
     /// PNGOUT and the like: the image being saved.
@@ -303,6 +304,7 @@ impl OxidraftApp {
             point_style: None,
             tolerance_dialog: None,
             field_dialog: None,
+            ucs_dialog: None,
             last_script: None,
             image_out: None,
             clean_screen: false,
@@ -651,6 +653,7 @@ impl OxidraftApp {
             "TOLERANCE" | "TOL" => self.open_tolerance(),
             "FIELD" => self.open_field_dialog(false),
             "STATUS" => self.status(),
+            "UCSMAN" | "UC" => self.open_ucs_dialog(),
             "RSCRIPT" => self.rerun_script(),
             "PNGOUT" => self.image_out_command("PNG", &["png"]),
             "JPGOUT" => self.image_out_command("JPEG", &["jpg", "jpeg"]),
@@ -1068,6 +1071,7 @@ impl eframe::App for OxidraftApp {
         self.tolerance_dialog(&ctx);
         self.text_editor(&ctx);
         self.field_dialog(&ctx);
+        self.ucs_dialog(&ctx);
         self.spell_dialog(&ctx);
         self.inspect_dialog(&ctx);
         self.annotation_style_dialog(&ctx);

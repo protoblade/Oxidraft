@@ -740,6 +740,46 @@ fn read_text_styles(doc: &mut Document, drawing: &Drawing) {
     let _ = doc.set_current_text_style(&style_from_dxf(&drawing.header.text_style));
 }
 
+/// A UCS's axes as DXF vectors.
+fn ucs_axes(ucs: &oxidraft_model::ucs::Ucs) -> (dxf::Vector, dxf::Vector) {
+    let (x, y) = (Point::ORIGIN.polar(1.0, ucs.angle), Point::ORIGIN.polar(1.0, ucs.angle + 90.0));
+    (dxf::Vector::new(x.x, x.y, 0.0), dxf::Vector::new(y.x, y.y, 0.0))
+}
+
+/// The UCS an origin and X axis make (`None` for a UCS not in plan).
+fn ucs_from(origin: &DxfPoint, x: &dxf::Vector) -> Option<oxidraft_model::ucs::Ucs> {
+    (x.x.hypot(x.y) > 1e-9 && x.z.abs() < 1e-9)
+        .then(|| oxidraft_model::ucs::Ucs { origin: from_dxf(origin), angle: x.y.atan2(x.x).to_degrees() })
+}
+
+/// The current UCS ($UCSORG, $UCSXDIR, $UCSYDIR) and the named ones.
+fn write_ucs(drawing: &mut Drawing, doc: &Document) {
+    let ucs = doc.ucs();
+    drawing.header.ucs_origin = to_dxf(ucs.origin);
+    (drawing.header.ucs_x_axis, drawing.header.ucs_y_axis) = ucs_axes(&ucs);
+    for n in doc.named_ucs() {
+        let (x_axis, y_axis) = ucs_axes(&n.ucs);
+        drawing.add_ucs(dxf::tables::Ucs {
+            name: n.name.clone(),
+            origin: to_dxf(n.ucs.origin),
+            x_axis,
+            y_axis,
+            ..Default::default()
+        });
+    }
+}
+
+fn read_ucs(doc: &mut Document, drawing: &Drawing) {
+    for u in drawing.ucss() {
+        if let Some(ucs) = ucs_from(&u.origin, &u.x_axis) {
+            let _ = doc.save_ucs(&u.name, ucs);
+        }
+    }
+    if let Some(ucs) = ucs_from(&drawing.header.ucs_origin, &drawing.header.ucs_x_axis).filter(|u| !u.is_world()) {
+        doc.set_ucs(ucs);
+    }
+}
+
 /// True if the drawing has what AutoCAD 2000's DXF can't hold: PDF
 /// underlays, transparency or fields.
 pub fn needs_newer_version(doc: &Document) -> bool {
@@ -803,6 +843,8 @@ pub fn settings_of(doc: &Document) -> Vec<(&'static str, f64)> {
         ("IMAGEFRAME", f64::from(doc.picture_frame(false))),
         ("PDFFRAME", f64::from(doc.picture_frame(true))),
         ("WIPEOUTFRAME", f64::from(doc.wipeout_frame())),
+        // acadrust's DXF leaves $LIMCHECK out.
+        ("LIMCHECK", if doc.limits_check() { 1.0 } else { 0.0 }),
     ]
 }
 
@@ -886,6 +928,7 @@ fn read_settings(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
                     "IMAGEFRAME" => doc.set_picture_frame(false, v as u8),
                     "PDFFRAME" => doc.set_picture_frame(true, v as u8),
                     "WIPEOUTFRAME" => doc.set_wipeout_frame(v as u8),
+                    "LIMCHECK" => doc.set_limits_check(v != 0.0),
                     _ => {}
                 }
             }
@@ -947,6 +990,7 @@ fn build(doc: &Document) -> Built {
     drawing.header.use_limits_checking = doc.limits_check();
     drawing.header.fill_mode_on = doc.fill();
     drawing.header.use_quick_text_mode = doc.quick_text();
+    write_ucs(&mut drawing, doc);
     write_units(&mut drawing.header, doc.units());
     write_text_styles(&mut drawing, doc);
     // The XDATA applications used: registered, as AutoCAD (and DWG) need.
@@ -1544,6 +1588,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
     doc.set_limits_check(h.use_limits_checking);
     doc.set_fill(h.fill_mode_on);
     doc.set_quick_text(h.use_quick_text_mode);
+    read_ucs(&mut doc, drawing);
     doc.set_units(read_units(&drawing.header));
     read_text_styles(&mut doc, drawing);
     doc.set_current_props(oxidraft_model::CurrentProps {

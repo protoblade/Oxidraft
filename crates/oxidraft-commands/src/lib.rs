@@ -78,6 +78,7 @@ mod table;
 mod text_edit;
 pub mod text_style;
 mod trim_extend;
+pub mod ucs_cmd;
 mod underlay;
 mod units_cmd;
 mod views;
@@ -170,6 +171,9 @@ pub enum ViewRequest {
     RealtimeZoom,
     /// Real-time pan: drag to move the view.
     RealtimePan,
+    /// PLAN: the view turned so a UCS's X axis (at this angle) runs across
+    /// the screen, the extents shown.
+    Plan(f64),
 }
 
 /// Something a command asks the app to show.
@@ -313,6 +317,8 @@ pub struct Vars {
     pub viewport: Option<EntityId>,
     /// GRIDUNIT, kept by the app (0: adaptive).
     pub grid_spacing: f64,
+    /// How far the view is turned (VIEWTWIST), kept by the app.
+    pub view_rotation: f64,
     /// The last area AREA or MEASUREGEOM measured (for Volume).
     pub last_area: f64,
     /// SNAPMODE (F9) and SNAPUNIT: the cursor jumps to points this far
@@ -361,6 +367,7 @@ impl Default for Vars {
             isoplane: None,
             viewport: None,
             grid_spacing: 0.0,
+            view_rotation: 0.0,
             erased: Vec::new(),
             last_area: 0.0,
             snap: false,

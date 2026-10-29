@@ -903,6 +903,35 @@ mod tests {
     }
 
     #[test]
+    fn ucs_limits_and_modes_survive() {
+        use oxidraft_model::ucs::Ucs;
+        let mut doc = Document::new();
+        doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });
+        let ucs = Ucs { origin: Point::new(100.0, 50.0), angle: 30.0 };
+        doc.set_ucs(ucs);
+        doc.save_ucs("Site", Ucs { origin: Point::new(5.0, 5.0), angle: -45.0 }).unwrap();
+        doc.set_limits(Point::new(-10.0, -10.0), Point::new(841.0, 594.0));
+        doc.set_limits_check(true);
+        doc.set_fill(false);
+        doc.set_quick_text(true);
+        let check = |back: &Document, how: &str| {
+            let (u, named) = (back.ucs(), back.named_ucs());
+            assert!(u.origin.approx_eq(ucs.origin) && (u.angle - 30.0).abs() < 1e-9, "{how}: {u:?}");
+            assert_eq!(named.len(), 1, "{how}");
+            assert!(named[0].name == "Site" && (named[0].ucs.angle + 45.0).abs() < 1e-9, "{how}: {named:?}");
+            assert_eq!(back.limits(), (Point::new(-10.0, -10.0), Point::new(841.0, 594.0)), "{how}");
+            assert_eq!((back.limits_check(), back.fill(), back.quick_text()), (true, false, true), "{how}");
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
     fn hyperlinks_survive() {
         let mut doc = Document::new();
         let id = doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });

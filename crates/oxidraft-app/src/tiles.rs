@@ -83,9 +83,11 @@ impl OxidraftApp {
         oxidraft_model::annotation::set_dim_style(self.doc.dim_style());
         oxidraft_model::annotation::set_leader_style(self.doc.leader_style());
         oxidraft_model::units::set_current(self.doc.units());
+        oxidraft_model::ucs::set_current(self.doc.ucs());
         oxidraft_model::field::set_env(self.field_env());
         self.engine.vars.viewport = self.active_viewport.as_ref().map(|v| v.id);
         self.engine.vars.grid_spacing = self.grid_spacing.unwrap_or(0.0);
+        self.engine.vars.view_rotation = self.view.rotation;
         let tiled = self.tiles.tiling != Tiling::Single && self.doc.space() == MODEL && self.active_viewport.is_none();
         if !tiled {
             self.canvas_pane(ui, full);

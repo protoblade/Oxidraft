@@ -40,6 +40,7 @@ mod text_styles;
 pub mod theme;
 mod tiles;
 mod tolerance;
+mod ucs_dialog;
 mod underlay;
 pub mod update;
 mod view;

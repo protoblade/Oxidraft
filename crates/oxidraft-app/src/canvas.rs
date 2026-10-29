@@ -187,7 +187,7 @@ impl OxidraftApp {
         theme::set_paper(layout.is_some());
         match &layout {
             Some(l) => self.draw_sheet(&painter, rect, &l.paper),
-            None if self.grid && self.view.rotation == 0.0 && !capturing => self.draw_grid(&painter, rect),
+            None if self.grid && !capturing => self.draw_grid(&painter, rect),
             None => {}
         }
         if layout.is_some() {
@@ -464,6 +464,14 @@ impl OxidraftApp {
                 self.realtime = Some(request);
                 return;
             }
+            // The drawing turned so the UCS's X axis runs across, all of it
+            // in view.
+            ViewRequest::Plan(angle) => {
+                self.view.rotation = -angle;
+                if let Some(b) = self.doc.extents() {
+                    self.view.zoom_extents(rect, fit, b);
+                }
+            }
         }
         self.remember_view(before);
     }
@@ -495,9 +503,11 @@ impl OxidraftApp {
                 let (i, j) = (((u + v) / 2.0).round(), ((v - u) / 2.0).round());
                 Point::new((i - j) * c, (i + j) * h)
             }
+            // On the UCS's snap grid.
             (true, None) => {
-                let k = vars.snap_spacing;
-                Point::new((raw.x / k).round() * k, (raw.y / k).round() * k)
+                let (k, ucs) = (vars.snap_spacing, self.doc.ucs());
+                let p = ucs.to_ucs(raw);
+                ucs.to_world(Point::new((p.x / k).round() * k, (p.y / k).round() * k))
             }
             (false, _) => raw,
         };
@@ -632,6 +642,9 @@ impl OxidraftApp {
         if self.engine.vars.isoplane.is_some() {
             return self.draw_iso_grid(painter, rect, minor);
         }
+        if !self.doc.ucs().is_world() || self.view.rotation != 0.0 {
+            return self.draw_turned_grid(painter, rect, minor, major);
+        }
         let min = self.view.to_world(rect, rect.left_bottom());
         let max = self.view.to_world(rect, rect.right_top());
         let ratio = (major / minor).round() as i64;
@@ -661,6 +674,49 @@ impl OxidraftApp {
                 theme::grid_minor()
             };
             painter.line_segment([pos2(rect.left(), sy), pos2(rect.right(), sy)], Stroke::new(1.0, color));
+            y += minor;
+        }
+    }
+
+    /// The grid along the UCS's axes, however it and the view are turned.
+    fn draw_turned_grid(&self, painter: &Painter, rect: Rect, minor: f64, major: f64) {
+        let ucs = self.doc.ucs();
+        let corners = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()]
+            .map(|c| ucs.to_ucs(self.view.to_world(rect, c)));
+        let lo = Point::new(
+            corners.iter().map(|p| p.x).fold(f64::INFINITY, f64::min),
+            corners.iter().map(|p| p.y).fold(f64::INFINITY, f64::min),
+        );
+        let hi = Point::new(
+            corners.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max),
+            corners.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max),
+        );
+        if ((hi.x - lo.x) / minor + (hi.y - lo.y) / minor) > 4000.0 {
+            return;
+        }
+        let ratio = (major / minor).round() as i64;
+        let color = |v: f64, axis: Color32| {
+            let k = (v / minor).round() as i64;
+            if k == 0 {
+                axis
+            } else if k.rem_euclid(ratio) == 0 {
+                theme::grid_major()
+            } else {
+                theme::grid_minor()
+            }
+        };
+        let line = |a: Point, b: Point, c: Color32| {
+            let (a, b) = (self.view.to_screen(rect, ucs.to_world(a)), self.view.to_screen(rect, ucs.to_world(b)));
+            painter.line_segment([a, b], Stroke::new(1.0, c));
+        };
+        let mut x = (lo.x / minor).floor() * minor;
+        while x <= hi.x {
+            line(Point::new(x, lo.y), Point::new(x, hi.y), color(x, theme::axis_y()));
+            x += minor;
+        }
+        let mut y = (lo.y / minor).floor() * minor;
+        while y <= hi.y {
+            line(Point::new(lo.x, y), Point::new(hi.x, y), color(y, theme::axis_x()));
             y += minor;
         }
     }
@@ -695,28 +751,38 @@ impl OxidraftApp {
     /// At the origin when it's on screen in `area` (the drawing area, or
     /// the viewport worked in), else at `area`'s lower left.
     pub(crate) fn draw_ucs_icon(&self, painter: &Painter, rect: Rect, area: Rect) {
-        let o = self.view.to_screen(rect, Point::ORIGIN);
+        // At the UCS's origin when that's in view, its axes as they lie.
+        let ucs = self.doc.ucs();
+        let o = self.view.to_screen(rect, ucs.origin);
         let inner = area.shrink2(vec2(60.0, 60.0));
         let at = if inner.contains(o) {
             o
         } else if area == rect {
-            pos2(rect.left() + 28.0, rect.bottom() - 70.0)
+            pos2(rect.left() + 48.0, rect.bottom() - 70.0)
         } else {
-            pos2(area.left() + 14.0, area.bottom() - 14.0)
+            pos2(area.left() + 34.0, area.bottom() - 34.0)
         };
+        let screen_dir = |angle: f64| {
+            let d = self.view.to_screen(rect, ucs.origin + Point::ORIGIN.polar(1.0, angle)) - o;
+            d / d.length().max(1e-6)
+        };
+        let (xd, yd) = (screen_dir(ucs.angle), screen_dir(ucs.angle + 90.0));
         let len = 42.0;
         let x_col = Color32::from_rgb(230, 80, 80);
         let y_col = Color32::from_rgb(80, 210, 90);
-        arrow(painter, at, at + vec2(len, 0.0), x_col);
-        arrow(painter, at, at - vec2(0.0, len), y_col);
-        painter.rect_stroke(
-            Rect::from_center_size(at, vec2(7.0, 7.0)),
-            0.0,
-            Stroke::new(1.0, theme::label()),
-            StrokeKind::Middle,
-        );
-        painter.text(at + vec2(len + 6.0, 0.0), Align2::LEFT_CENTER, "X", FontId::proportional(11.0), x_col);
-        painter.text(at - vec2(0.0, len + 6.0), Align2::CENTER_BOTTOM, "Y", FontId::proportional(11.0), y_col);
+        arrow(painter, at, at + xd * len, x_col);
+        arrow(painter, at, at + yd * len, y_col);
+        // The square at the origin: the world coordinate system.
+        if ucs.is_world() {
+            painter.rect_stroke(
+                Rect::from_center_size(at, vec2(7.0, 7.0)),
+                0.0,
+                Stroke::new(1.0, theme::label()),
+                StrokeKind::Middle,
+            );
+        }
+        painter.text(at + xd * (len + 8.0), Align2::CENTER_CENTER, "X", FontId::proportional(11.0), x_col);
+        painter.text(at + yd * (len + 8.0), Align2::CENTER_CENTER, "Y", FontId::proportional(11.0), y_col);
     }
 
     /// Draws `space`'s objects (but those on `frozen` layers).

@@ -495,6 +495,31 @@ impl OxidraftApp {
                 self.engine.vars.nav_bar = !nav;
             }
         });
+        ribbon_panel(ui, "Coordinates", |ui| {
+            for column in [
+                [
+                    tool(Icon::Ucs, "World", Some("UCS W"), "Back to the world coordinate system (UCS World)"),
+                    tool(Icon::Ucs, "UCS", Some("UCS"), "A new origin, and a point on its X axis (UCS)"),
+                    tool(Icon::Ucs, "Object", Some("UCS OB"), "The UCS along an object (UCS Object)"),
+                ],
+                [
+                    tool(Icon::Rotate, "Z", Some("UCS Z"), "The UCS turned about Z (UCS Z)"),
+                    tool(Icon::Ucs, "View", Some("UCS V"), "The UCS lined up with the screen (UCS View)"),
+                    tool(Icon::Undo, "Previous", Some("UCS P"), "The UCS before (UCS Previous)"),
+                ],
+                [
+                    tool(Icon::Ucs, "Named", Some("UCSMAN"), "Named UCSs to make current, rename or delete (UCSMAN)"),
+                    tool(Icon::Ucs, "Plan View", Some("PLAN"), "Turns the view so the UCS's X axis runs across (PLAN)"),
+                    tool(Icon::Ucs, "World Plan", Some("PLAN W"), "The view as the world lies (PLAN World)"),
+                ],
+            ] {
+                ui.vertical(|ui| {
+                    for t in &column {
+                        self.small_tool(ui, t);
+                    }
+                });
+            }
+        });
         let viewports = ribbon_panel_more(ui, "Model Viewports", |ui| {
             let config = tool(
                 Icon::ViewportConfig,
@@ -1219,7 +1244,12 @@ impl OxidraftApp {
                 }
                 ui.add_space(12.0);
                 let l = oxidraft_model::units::length;
-                let coords = self.cursor.map_or(String::new(), |p| format!("{}, {}, {}", l(p.x), l(p.y), l(0.0)));
+                // In the current UCS.
+                let ucs = self.doc.ucs();
+                let coords = self
+                    .cursor
+                    .map(|p| ucs.to_ucs(p))
+                    .map_or(String::new(), |p| format!("{}, {}, {}", l(p.x), l(p.y), l(0.0)));
                 ui.add_sized(
                     [210.0, 20.0],
                     egui::Label::new(egui::RichText::new(coords).monospace().color(theme::text_dim())),

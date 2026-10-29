@@ -32,6 +32,9 @@ pub enum Input {
 ///
 /// With dynamic input on (`dyn_relative`), coordinates are relative to `last`
 /// unless prefixed with `#`, as in AutoCAD's dynamic input tooltip.
+///
+/// Coordinates are in the current UCS; `*` before them (`*x,y`, `@*dx,dy`)
+/// gives them in the world's.
 pub fn parse_input(
     text: &str,
     last: Option<Point>,
@@ -51,18 +54,23 @@ pub fn parse_input(
         let looks_like_point = t.contains(',') || t.contains('<');
         (dyn_relative && last.is_some() && looks_like_point, t)
     };
-    let base = if relative { last.ok_or("No last point for relative (@) input.")? } else { Point::ORIGIN };
+    // `*`: in world coordinates rather than the UCS's.
+    let (ucs, body) = match body.strip_prefix('*') {
+        Some(rest) => (oxidraft_model::ucs::WORLD, rest.trim()),
+        None => (oxidraft_model::ucs::current(), body),
+    };
+    let base = if relative { last.ok_or("No last point for relative (@) input.")? } else { ucs.origin };
 
     if relative && body.is_empty() {
         return Ok(Input::Point(base));
     }
     if let Some((a, b)) = body.split_once(',') {
         let (x, y) = (num(a)?, num(b)?);
-        return Ok(Input::Point(base + Point::new(x, y)));
+        return Ok(Input::Point(base + ucs.vector_to_world(Point::new(x, y))));
     }
     if let Some((d, a)) = body.split_once('<') {
         let angle = oxidraft_model::units::parse_direction(a).ok_or_else(|| format!("Not an angle: {}", a.trim()))?;
-        return Ok(Input::Point(base.polar(num(d)?, angle)));
+        return Ok(Input::Point(base.polar(num(d)?, angle + ucs.angle)));
     }
     if !relative && let Some(v) = oxidraft_model::units::parse_length(body) {
         return Ok(Input::Value(v));

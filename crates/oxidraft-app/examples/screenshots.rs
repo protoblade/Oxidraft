@@ -1002,6 +1002,18 @@ fn main() {
     h.run_steps(4);
     save(&mut h, &dir, "49-spell");
 
+    // A UCS turned 30 degrees: the grid and icon follow it; then PLAN.
+    let mut h = harness();
+    h.state_mut().document_mut().set_ucs(oxidraft_model::ucs::Ucs { origin: Point::new(30.0, 20.0), angle: 30.0 });
+    h.state_mut().type_command("ze");
+    h.run_steps(3);
+    save(&mut h, &dir, "50-ucs");
+    h.state_mut().type_command("plan");
+    h.run_steps(1);
+    h.state_mut().type_command("");
+    h.run_steps(3);
+    save(&mut h, &dir, "51-plan");
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");

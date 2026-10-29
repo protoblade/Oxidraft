@@ -630,6 +630,19 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo { name: "RSCRIPT", aliases: &[], description: "Run the last script again", make: None },
     CommandInfo {
+        name: "UCS",
+        aliases: &[],
+        description: "Move or turn the user coordinate system, align it to an object or the view, or name it",
+        make: Some(|| Box::new(crate::ucs_cmd::UcsCmd::default())),
+    },
+    CommandInfo { name: "UCSMAN", aliases: &["UC"], description: "Manage named user coordinate systems", make: None },
+    CommandInfo {
+        name: "PLAN",
+        aliases: &[],
+        description: "Turn the view so the UCS's X axis runs across the screen",
+        make: Some(|| Box::new(crate::ucs_cmd::Plan::default())),
+    },
+    CommandInfo {
         name: "SKETCH",
         aliases: &[],
         description: "Draw freehand: click to put the pen down and lift it",
@@ -2006,16 +2019,19 @@ impl Engine {
             let point = if pa.distance(cursor) <= pb.distance(cursor) { pa } else { pb };
             return Tracked { point, polar: None };
         }
+        // Ortho and polar angles run from the UCS's X axis.
+        let ucs = oxidraft_model::ucs::current().angle;
         if self.ortho {
-            let point =
-                if d.x.abs() >= d.y.abs() { Point::new(cursor.x, base.y) } else { Point::new(base.x, cursor.y) };
-            return Tracked { point, polar: None };
+            let local = d.rotated_about(Point::ORIGIN, -ucs);
+            let along =
+                if local.x.abs() >= local.y.abs() { Point::new(local.x, 0.0) } else { Point::new(0.0, local.y) };
+            return Tracked { point: base + along.rotated_about(Point::ORIGIN, ucs), polar: None };
         }
         if !self.polar || d.length() <= tolerance || self.polar_increment <= 0.0 {
             return free;
         }
         let step = self.polar_increment;
-        let angle = ((base.angle_to(cursor) / step).round() * step).rem_euclid(360.0);
+        let angle = (((base.angle_to(cursor) - ucs) / step).round() * step + ucs).rem_euclid(360.0);
         let dir = Point::ORIGIN.polar(1.0, angle);
         let along = d.dot(dir);
         let off = (d - dir * along).length();
@@ -2058,6 +2074,7 @@ impl Engine {
     /// Handles text submitted on the command line (Enter or Space).
     pub fn submit(&mut self, text: &str, doc: &mut Document, cursor: Point, pick_tolerance: f64) {
         oxidraft_model::units::set_current(doc.units());
+        oxidraft_model::ucs::set_current(doc.ucs());
         let text = text.trim();
         if !text.is_empty() {
             self.typed.push(text.to_string());
@@ -2119,6 +2136,7 @@ impl Engine {
     /// `raw` is the bare cursor, used for picking objects and selection windows.
     pub fn click(&mut self, point: Point, raw: Point, shift: bool, doc: &mut Document, pick_tolerance: f64) {
         oxidraft_model::units::set_current(doc.units());
+        oxidraft_model::ucs::set_current(doc.ucs());
         if self.is_selecting() && self.active.is_some() && self.gathering.is_some() {
             self.gather(raw, doc, pick_tolerance);
             return;
@@ -2448,6 +2466,7 @@ impl Engine {
     /// Starts a command by name, as if typed. Returns false if unknown.
     pub fn run(&mut self, name: &str, doc: &mut Document) -> bool {
         oxidraft_model::units::set_current(doc.units());
+        oxidraft_model::ucs::set_current(doc.ucs());
         let Some(info) = find(name) else { return false };
         if self.active.is_some() {
             self.cancel(doc);

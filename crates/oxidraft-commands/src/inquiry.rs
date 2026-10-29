@@ -18,7 +18,8 @@ impl Command for Id {
     fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
         match input {
             Input::Point(p) => {
-                let l = units::length;
+                // In the current UCS, as AutoCAD's ID.
+                let (l, p) = (units::length, ctx.doc.ucs().to_ucs(p));
                 ctx.messages.push(format!("X = {}     Y = {}     Z = {}", l(p.x), l(p.y), l(0.0)));
                 Ok(Step::Done)
             }
