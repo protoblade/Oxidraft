@@ -1030,3 +1030,31 @@ fn blocks_palette_inserts_from_the_drawing_and_from_a_library() {
     assert!(h.state_mut().document_mut().layer("Trees").is_some(), "its layer came along");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn layout_tabs_switch_spaces_and_drawing_goes_into_the_layout() {
+    let mut h = app_with_line();
+    // A drawing without layouts offers Layout1, made when it's opened.
+    h.get_by_role_and_label(Role::Tab, "Layout1").click();
+    h.run_steps(3);
+    let layout = {
+        let doc = h.state_mut().document_mut();
+        assert_eq!(doc.layouts().len(), 1);
+        assert_eq!(doc.space(), doc.layouts()[0].id);
+        assert!(doc.is_empty(), "the layout has nothing yet; model space is apart");
+        doc.space()
+    };
+    // What's drawn now is on the sheet, not in model space.
+    for input in ["l", "10,10", "100,10", ""] {
+        h.state_mut().type_command(input);
+        h.run_steps(1);
+    }
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.len(), 1);
+    assert!(doc.entities().all(|e| e.space == layout));
+    h.get_by_role_and_label(Role::Tab, "Model").click();
+    h.run_steps(3);
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.space(), oxidraft_model::MODEL);
+    assert_eq!(doc.len(), 2, "the two test lines");
+}

@@ -610,6 +610,64 @@ fn main() {
     hover(&mut h, Point::new(10.0, 4.0));
     save(&mut h, &dir, "32-block-editor");
 
+    // A layout: an A3 sheet with a frame, a title and a viewport onto the
+    // plan at 1:50 (paper millimeters, model units of 10 cm).
+    let mut h = harness();
+    {
+        let doc = h.state_mut().document_mut();
+        let paper = oxidraft_model::Paper {
+            size_name: "ISO_A3_(420.00_x_297.00_MM)".into(),
+            width: 420.0,
+            height: 297.0,
+            margins: [7.5, 20.0, 7.5, 20.0],
+            rotation: 0,
+            millimeters: true,
+            raw: Vec::new(),
+        };
+        let layout =
+            oxidraft_model::layout::Layout { id: oxidraft_model::MODEL, name: "A3 Plan".into(), tab_order: 1, paper };
+        let space = doc.add_layout(layout);
+        doc.set_space(space);
+        let rect = |x0: f64, y0: f64, x1: f64, y1: f64| Geometry::Polyline {
+            vertices: [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| Vertex::at(Point::new(x, y))).to_vec(),
+            closed: true,
+        };
+        doc.add(rect(0.0, 0.0, 405.0, 257.0));
+        doc.add(rect(285.0, 0.0, 405.0, 40.0));
+        doc.add(Geometry::Text {
+            position: Point::new(292.0, 22.0),
+            height: 6.0,
+            rotation: 0.0,
+            width: 0.0,
+            attach: Attach::BottomLeft,
+            content: "GROUND FLOOR".into(),
+        });
+        doc.add(Geometry::Text {
+            position: Point::new(292.0, 9.0),
+            height: 4.0,
+            rotation: 0.0,
+            width: 0.0,
+            attach: Attach::BottomLeft,
+            content: "Scale 1:50".into(),
+        });
+        doc.add(Geometry::Viewport {
+            center: Point::new(140.0, 135.0),
+            width: 260.0,
+            height: 220.0,
+            view_center: Point::new(55.0, 32.0),
+            view_height: 110.0,
+            twist: 0.0,
+            frozen: vec!["Hatch".into()],
+            locked: false,
+            on: true,
+        });
+        doc.set_space(oxidraft_model::MODEL);
+    }
+    let space = h.state_mut().document_mut().layouts()[0].id;
+    h.state_mut().switch_space(space);
+    h.run_steps(4);
+    save(&mut h, &dir, "33-layout");
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");

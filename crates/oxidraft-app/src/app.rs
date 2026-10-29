@@ -75,6 +75,9 @@ pub struct OxidraftApp {
     /// and the drawing's revision then: a picture whose layer is turned on
     /// loads.
     pub(crate) shown_image_layers: Option<(u64, std::collections::HashSet<String>)>,
+    /// Each space's view when it was left: model space and the layouts
+    /// keep their own.
+    pub(crate) space_views: std::collections::HashMap<oxidraft_model::Space, View>,
     pub(crate) loader: crate::underlay::Loader,
     pub(crate) raster_revision: u64,
     pub(crate) image_attach_dialog: Option<crate::underlay::ImageAttachDialog>,
@@ -180,6 +183,7 @@ impl OxidraftApp {
             detail_wants: Default::default(),
             detail_generation: 0,
             shown_image_layers: None,
+            space_views: Default::default(),
             loader: Default::default(),
             raster_revision: 0,
             image_attach_dialog: None,
@@ -218,6 +222,44 @@ impl OxidraftApp {
         }
     }
 
+    /// The Model and layout tabs: draws in `space` from now on, with the
+    /// view it had when left (a layout seen first shows its whole sheet).
+    pub fn switch_space(&mut self, space: oxidraft_model::Space) {
+        if space == self.doc.space() {
+            return;
+        }
+        // A command and the selection belong to the space they were in.
+        self.engine.cancel(&mut self.doc);
+        self.engine.cancel(&mut self.doc);
+        self.space_views.insert(self.doc.space(), self.view);
+        self.doc.set_space(space);
+        match (self.space_views.get(&space), self.doc.layout(space)) {
+            (Some(view), _) => self.view = *view,
+            (None, Some(layout)) => {
+                let (sheet, _) = layout.paper.sheet_bounds();
+                self.pending_views.push(ViewRequest::Window(sheet));
+            }
+            (None, None) => self.zoom_extents_pending = true,
+        }
+    }
+
+    /// A first layout for a drawing that has none, as AutoCAD's Layout1 is:
+    /// an A4 sheet, landscape.
+    pub(crate) fn first_layout(&mut self) -> oxidraft_model::Space {
+        let paper = oxidraft_model::Paper {
+            size_name: "ISO_A4_(297.00_x_210.00_MM)".into(),
+            width: 297.0,
+            height: 210.0,
+            margins: [7.5, 20.0, 7.5, 20.0],
+            rotation: 0,
+            millimeters: true,
+            raw: Vec::new(),
+        };
+        let layout =
+            oxidraft_model::layout::Layout { id: oxidraft_model::MODEL, name: "Layout1".into(), tab_order: 1, paper };
+        self.doc.add_layout(layout)
+    }
+
     /// Keeps the options in `path` from now on, as the app does in the
     /// user's configuration folder.
     pub fn keep_settings_in(&mut self, path: PathBuf) {
@@ -231,6 +273,7 @@ impl OxidraftApp {
         self.saved_revision = self.doc.revision();
         self.zoom_extents_pending = true;
         self.shown_image_layers = None;
+        self.space_views.clear();
         self.view_history.clear();
     }
 
@@ -291,6 +334,7 @@ impl OxidraftApp {
         self.engine.cancel(&mut self.doc);
         self.doc = Document::new();
         self.shown_image_layers = None;
+        self.space_views.clear();
         self.saved_revision = 0;
         self.path = None;
         self.dwg_version = None;

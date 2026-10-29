@@ -39,6 +39,29 @@ pub struct Paper {
 }
 
 impl Paper {
+    /// The sheet and its printable area in paper space. As in AutoCAD, the
+    /// origin is the printable area's lower-left corner. An unknown paper
+    /// size is A4 landscape.
+    pub fn sheet_bounds(&self) -> (oxidraft_geom::Aabb, oxidraft_geom::Aabb) {
+        use oxidraft_geom::{Aabb, Point};
+        let (w, h) = match self.sheet() {
+            (w, h) if w > 0.0 && h > 0.0 => (w, h),
+            _ => (297.0, 210.0),
+        };
+        let scale = if self.millimeters { 1.0 } else { 1.0 / 25.4 };
+        let m = self.margins.map(|v| v * scale);
+        // Margins (left, bottom, right, top) turn with the sheet.
+        let [l, b, r, t] = match self.rotation % 4 {
+            1 => [m[1], m[2], m[3], m[0]],
+            2 => [m[2], m[3], m[0], m[1]],
+            3 => [m[3], m[0], m[1], m[2]],
+            _ => m,
+        };
+        let sheet = Aabb::from_points(Point::new(-l, -b), Point::new(w - l, h - b));
+        let printable = Aabb::from_points(Point::ORIGIN, Point::new((w - l - r).max(0.0), (h - b - t).max(0.0)));
+        (sheet, printable)
+    }
+
     /// The sheet as it lies on screen: width and height in paper units,
     /// the rotation applied.
     pub fn sheet(&self) -> (f64, f64) {

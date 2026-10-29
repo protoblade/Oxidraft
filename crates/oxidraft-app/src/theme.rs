@@ -25,6 +25,18 @@ pub enum Background {
 
 static LIGHT: AtomicBool = AtomicBool::new(false);
 static WHITE: AtomicBool = AtomicBool::new(false);
+/// A layout is being drawn: its sheet is white, whatever the background.
+static PAPER: AtomicBool = AtomicBool::new(false);
+
+/// While a layout is drawn, the drawing colors are those for a white sheet.
+pub fn set_paper(on: bool) {
+    PAPER.store(on, Ordering::Relaxed);
+}
+
+/// Around a layout's sheet.
+pub fn backdrop() -> Color32 {
+    if WHITE.load(Ordering::Relaxed) { Color32::from_rgb(200, 204, 211) } else { Color32::from_rgb(57, 64, 75) }
+}
 
 pub fn color_theme() -> ColorTheme {
     if LIGHT.load(Ordering::Relaxed) { ColorTheme::Light } else { ColorTheme::Dark }
@@ -182,7 +194,7 @@ fn chrome() -> &'static Chrome {
 }
 
 fn model() -> &'static Model {
-    if WHITE.load(Ordering::Relaxed) { &WHITE_MODEL } else { &DARK_MODEL }
+    if WHITE.load(Ordering::Relaxed) || PAPER.load(Ordering::Relaxed) { &WHITE_MODEL } else { &DARK_MODEL }
 }
 
 macro_rules! colors {
@@ -210,7 +222,7 @@ pub const BRAND: Color32 = Color32::from_rgb(196, 84, 30);
 /// Maps an AutoCAD Color Index to a screen color in the drawing: color 7
 /// shows white on a dark background and black on a white one, as in AutoCAD.
 pub fn aci(index: u8) -> Color32 {
-    if index == 7 && WHITE.load(Ordering::Relaxed) {
+    if index == 7 && (WHITE.load(Ordering::Relaxed) || PAPER.load(Ordering::Relaxed)) {
         return Color32::BLACK;
     }
     swatch(index)

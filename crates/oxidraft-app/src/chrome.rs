@@ -613,11 +613,30 @@ impl OxidraftApp {
         egui::Panel::bottom("status").frame(frame).exact_size(28.0).show_separator_line(false).show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                for (i, name) in ["Model", "Layout1", "Layout2"].into_iter().enumerate() {
-                    let r = layout_tab(ui, name, i == 0);
-                    if i > 0 {
-                        r.on_hover_text(format!("Paper space layouts — {NOT_YET}"));
+                // Model, then the layouts; a drawing without any shows Layout1,
+                // made when it's first opened.
+                let current = self.doc.space();
+                let mut tabs: Vec<(Option<oxidraft_model::Space>, String)> =
+                    vec![(Some(oxidraft_model::MODEL), "Model".into())];
+                tabs.extend(self.doc.layouts().iter().map(|l| (Some(l.id), l.name.clone())));
+                if tabs.len() == 1 {
+                    tabs.push((None, "Layout1".into()));
+                }
+                let mut switch = None;
+                for (space, name) in tabs {
+                    let tab = layout_tab(ui, &name, space == Some(current));
+                    let tab = tab.on_hover_text(if space == Some(oxidraft_model::MODEL) {
+                        "Model space"
+                    } else {
+                        "A layout: a sheet to plot"
+                    });
+                    if tab.clicked() {
+                        switch = Some(space);
                     }
+                }
+                if let Some(space) = switch {
+                    let space = space.unwrap_or_else(|| self.first_layout());
+                    self.switch_space(space);
                 }
                 ui.add_space(12.0);
                 let coords = self.cursor.map_or(String::new(), |p| format!("{:.4}, {:.4}, 0.0000", p.x, p.y));
@@ -683,7 +702,8 @@ impl OxidraftApp {
                         self.grid = grid;
                         self.log_toggle("Grid", grid);
                     }
-                    ui.label(egui::RichText::new("MODEL").strong().color(theme::text()));
+                    let space = if self.doc.layout(self.doc.space()).is_some() { "PAPER" } else { "MODEL" };
+                    ui.label(egui::RichText::new(space).strong().color(theme::text()));
                 });
             });
         });
@@ -843,9 +863,12 @@ fn layout_tab(ui: &mut Ui, name: &str, selected: bool) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
     if selected {
         ui.painter().rect_filled(rect, 2.0, theme::ribbon());
+    } else if response.hovered() {
+        ui.painter().rect_filled(rect, 2.0, theme::ribbon_hover());
     }
     let color = if selected { theme::text() } else { theme::text_dim() };
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, name, font, color);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Tab, true, name));
     response
 }
 

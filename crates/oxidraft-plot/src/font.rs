@@ -70,7 +70,7 @@ impl Typeface {
 /// past `wrap` ems (0 for no wrapping), between words.
 pub fn lines(content: &str, wrap: f64) -> Vec<String> {
     let mut out = Vec::new();
-    for paragraph in content.replace("\\P", "\n").split('\n') {
+    for paragraph in oxidraft_model::annotation::plain_text(content).split('\n') {
         if wrap <= 0.0 {
             out.push(paragraph.to_string());
             continue;

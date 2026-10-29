@@ -9,7 +9,7 @@ use eframe::egui::{
 use oxidraft_commands::{Tracked, ViewRequest};
 use oxidraft_geom::{Aabb, Point, curve::Seg, intersect::clip_segment};
 use oxidraft_model::{
-    Geometry, HatchPattern, Lineweight, Vertex,
+    Geometry, HatchPattern, Lineweight, MODEL, Space, Vertex,
     annotation::text_box,
     hatch, linetype,
     snap::{self, Snap, SnapKind},
@@ -91,11 +91,19 @@ impl OxidraftApp {
             response.context_menu(|ui| self.shortcut_menu(ui));
         }
 
-        if self.grid {
-            self.draw_grid(&painter, rect);
+        // A layout: its sheet, and model space through its viewports.
+        let layout = self.doc.layout(self.doc.space()).cloned();
+        theme::set_paper(layout.is_some());
+        match &layout {
+            Some(l) => self.draw_sheet(&painter, rect, &l.paper),
+            None if self.grid => self.draw_grid(&painter, rect),
+            None => {}
         }
         self.draw_ucs_icon(&painter, rect);
-        self.draw_entities(&painter, rect, cursor.as_ref());
+        if layout.is_some() {
+            self.draw_viewports(&painter, rect);
+        }
+        self.draw_entities(&painter, rect, cursor.as_ref(), self.doc.space(), &[]);
         self.request_details();
         if let Some(c) = &cursor {
             for g in self.engine.preview(c.point) {
@@ -135,6 +143,57 @@ impl OxidraftApp {
             theme::label(),
         );
         self.navigation_bar(ui, rect);
+        theme::set_paper(false);
+    }
+
+    /// A layout's sheet on its backdrop, its printable area dashed.
+    fn draw_sheet(&self, painter: &Painter, rect: Rect, paper: &oxidraft_model::Paper) {
+        painter.rect_filled(rect, 0.0, theme::backdrop());
+        let (sheet, printable) = paper.sheet_bounds();
+        let to = |p: Point| self.view.to_screen(rect, p);
+        let on_screen = Rect::from_two_pos(to(sheet.min), to(sheet.max));
+        painter.rect_filled(on_screen.translate(vec2(4.0, 4.0)), 0.0, Color32::from_black_alpha(90));
+        painter.rect_filled(on_screen, 0.0, Color32::WHITE);
+        let c = printable.corners();
+        let edge = Stroke::new(1.0, Color32::from_gray(150));
+        for i in 0..4 {
+            let points = vec![to(c[i]), to(c[(i + 1) % 4])];
+            painter.extend(Shape::dashed_line(&points, edge, 4.0, 3.0));
+        }
+    }
+
+    /// Model space through the layout's viewports: each shows the part
+    /// around its view center at its scale, without the layers it freezes.
+    fn draw_viewports(&mut self, painter: &Painter, rect: Rect) {
+        let viewports: Vec<(Point, f64, f64, Point, f64, Vec<String>)> = self
+            .doc
+            .entities()
+            .filter(|e| self.doc.is_shown(&e.layer))
+            .filter_map(|e| match &e.geometry {
+                Geometry::Viewport { center, width, height, view_center, view_height, frozen, on: true, .. } => {
+                    Some((*center, *width, *height, *view_center, *view_height, frozen.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let page = self.view;
+        for (center, width, height, view_center, view_height, frozen) in viewports {
+            let k = height / view_height;
+            if !k.is_finite() || k <= 0.0 {
+                continue;
+            }
+            let corners = oxidraft_model::viewport_corners(center, width, height);
+            let frame = Rect::from_two_pos(page.to_screen(rect, corners[0]), page.to_screen(rect, corners[2]));
+            let clip = frame.intersect(rect);
+            if clip.width() <= 0.0 || clip.height() <= 0.0 {
+                continue;
+            }
+            // Model space as the viewport shows it: its view center at the
+            // viewport's center, scaled from paper to model units.
+            self.view = View { scale: page.scale * k, center: view_center - (center - page.center) * (1.0 / k) };
+            self.draw_entities(&painter.with_clip_rect(clip), rect, None, MODEL, &frozen);
+            self.view = page;
+        }
     }
 
     /// AutoCAD's navigation bar at the right edge of the drawing: Pan, and
@@ -413,7 +472,15 @@ impl OxidraftApp {
         painter.text(at - vec2(0.0, len + 6.0), Align2::CENTER_BOTTOM, "Y", FontId::proportional(11.0), y_col);
     }
 
-    fn draw_entities(&self, painter: &Painter, rect: Rect, cursor: Option<&CursorState>) {
+    /// Draws `space`'s objects (but those on `frozen` layers).
+    fn draw_entities(
+        &self,
+        painter: &Painter,
+        rect: Rect,
+        cursor: Option<&CursorState>,
+        space: Space,
+        frozen: &[String],
+    ) {
         let selected = self.engine.highlighted();
         // Rollover highlighting: the object under the pickbox gets thicker, and
         // so does everything a selection window in progress would select
@@ -430,8 +497,11 @@ impl OxidraftApp {
         let mut patterns: HashMap<String, Option<Vec<f64>>> = HashMap::new();
         let px_per_unit = self.doc.ltscale() * self.view.scale;
         let refedit = self.doc.refedit();
-        for e in self.doc.entities_in_draw_order() {
+        for e in self.doc.space_in_draw_order(space) {
             if !self.doc.is_shown(&e.layer) || !on_screen(&self.doc.entity_bounds(e), &view) {
+                continue;
+            }
+            if frozen.iter().any(|f| f.eq_ignore_ascii_case(&e.layer)) {
                 continue;
             }
             // REFEDIT: the reference being edited shows as its working set,
@@ -661,7 +731,7 @@ impl OxidraftApp {
         }
         // Few distinct sizes keep egui's glyph cache small while zooming.
         let size = 2f32.powf((px.min(400.0).log2() * 8.0).round() / 8.0);
-        let text = content.replace("\\P", "\n");
+        let text = oxidraft_model::annotation::plain_text(content);
         let wrap = if *width > 0.0 { (*width * self.view.scale) as f32 } else { f32::INFINITY };
         let galley = painter.layout(text, FontId::proportional(size), stroke.color, wrap);
         // Anchor on the type itself, not egui's line box: "top" is the first

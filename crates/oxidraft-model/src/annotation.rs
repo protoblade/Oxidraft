@@ -86,9 +86,65 @@ pub const LINE_SPACING: f64 = 5.0 / 3.0;
 /// estimates (selection boxes, extents) without font metrics.
 const CHAR_WIDTH: f64 = 0.6;
 
-/// The text's lines: MTEXT paragraph breaks (`\P`) and newlines.
+/// What text shows: MTEXT's inline formatting taken out (fonts, heights,
+/// colors and the like: `\f…;`, `\H…;`, `\C…;`, braces, underline and
+/// overline toggles), `\U+XXXX` turned into its character, stacked
+/// fractions (`\S1/2;`) into their text, and paragraph breaks (`\P`) into
+/// newlines. The drawing keeps the codes; this is only how it's shown.
+pub fn plain_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    let until_semicolon = |chars: &mut std::iter::Peekable<std::str::Chars>| {
+        let mut taken = String::new();
+        for c in chars.by_ref() {
+            if c == ';' {
+                break;
+            }
+            taken.push(c);
+        }
+        taken
+    };
+    while let Some(c) = chars.next() {
+        if c == '{' || c == '}' {
+            continue;
+        }
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('P') => out.push('\n'),
+            Some('~') => out.push('\u{a0}'),
+            Some(c @ ('\\' | '{' | '}')) => out.push(c),
+            Some('U' | 'u') if chars.peek() == Some(&'+') => {
+                chars.next();
+                let hex: String = chars.by_ref().take(4).collect();
+                if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                    out.push(ch);
+                }
+            }
+            // A character in another code page: left out.
+            Some('M' | 'm') if chars.peek() == Some(&'+') => {
+                chars.by_ref().take(6).for_each(drop);
+            }
+            Some('S') => out.push_str(&until_semicolon(&mut chars).replace(['^', '#'], "/")),
+            Some('A' | 'C' | 'c' | 'F' | 'f' | 'H' | 'Q' | 'T' | 'W' | 'p') => {
+                until_semicolon(&mut chars);
+            }
+            Some('L' | 'l' | 'O' | 'o' | 'K' | 'k') => {}
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// The text's lines, as shown (see [`plain_text`]).
 pub fn text_lines(content: &str) -> Vec<String> {
-    content.replace("\\P", "\n").lines().map(str::to_string).collect()
+    plain_text(content).lines().map(str::to_string).collect()
 }
 
 /// Estimated size (width, height) of a text box in drawing units.
@@ -418,6 +474,14 @@ pub fn leader_primitives(points: &[Point], content: &str, scale: f64) -> Vec<Geo
 
 #[cfg(test)]
 mod tests {
+    use super::plain_text;
+
+    #[test]
+    fn mtext_formatting_is_shown_as_its_text() {
+        let raw = "{\\fArial|b0|i1|c204|p34;\\U+041F\\U+0423\\U+041F} \\H2.5x;\\C1;\\U+043A\\U+0432.17\\P\\S1/2; \\Lline\\l a\\\\b";
+        assert_eq!(plain_text(raw), "ПУП кв.17\n1/2 line a\\b");
+    }
+
     use super::*;
 
     #[test]
