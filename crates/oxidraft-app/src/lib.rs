@@ -11,10 +11,12 @@ mod classic;
 mod clipboard;
 mod cmdline;
 mod compare;
+mod customize;
 mod design_center;
 mod diminspect;
 mod drafting;
 mod drawing_units;
+pub mod drawings;
 mod etransmit;
 mod fields;
 mod files;
@@ -38,6 +40,8 @@ mod publish;
 mod qselect;
 mod quickcalc;
 mod settings;
+mod share;
+mod sheet_set;
 mod shortcut_menu;
 mod spell;
 mod status;
@@ -59,6 +63,7 @@ mod wblock;
 mod xref;
 
 pub use app::OxidraftApp;
+pub use drawings::Drawings;
 pub use layers::LAYER_MANAGER;
 pub use settings::Settings;
 pub use wblock::{Afterwards, WblockSource};
@@ -93,7 +98,7 @@ pub fn run() -> eframe::Result {
             if std::env::var_os(update::DISABLE_ENV).is_none() {
                 app.updater.check(&cc.egui_ctx, false);
             }
-            Ok(Box::new(app))
+            Ok(Box::new(Drawings::new(app)))
         }),
     )
 }

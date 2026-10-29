@@ -118,6 +118,10 @@ pub struct OxidraftApp {
     pub(crate) export_pdf: Option<crate::publish::ExportPdf>,
     /// PLOTTERMANAGER's dialog.
     pub(crate) plotter_manager: Option<crate::plotters::PlotterManager>,
+    /// CUI's dialog.
+    pub(crate) cui: Option<crate::customize::CuiDialog>,
+    /// The Sheet Set Manager (SHEETSET).
+    pub(crate) sheet_set: Option<crate::sheet_set::SheetSetPalette>,
     pub(crate) publish: Option<crate::publish::PublishDialog>,
     /// UNITS: the settings being chosen.
     pub(crate) units_dialog: Option<oxidraft_model::Units>,
@@ -170,6 +174,16 @@ pub struct OxidraftApp {
     /// "Save changes?" before NEW, OPEN, CLOSE or QUIT; and quitting once answered.
     pub(crate) save_prompt: Option<crate::files::Then>,
     pub(crate) quit_now: bool,
+    /// The drawings open in this window, for the file tabs (name, and
+    /// whether it has changes), and which tab this one is; set each frame
+    /// by [`crate::Drawings`].
+    pub(crate) tabs: Vec<(String, bool)>,
+    pub(crate) tab: usize,
+    /// What this drawing asked of the window this frame: another tab,
+    /// a new or opened drawing, closing.
+    pub(crate) tab_request: Option<crate::drawings::TabRequest>,
+    /// The number in a new drawing's name (Drawing1, Drawing2, ...).
+    pub(crate) untitled: u32,
     pub(crate) properties_dialog: Option<crate::files::PropertiesDialog>,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
@@ -314,6 +328,8 @@ impl OxidraftApp {
             layer_walk: None,
             export_pdf: None,
             plotter_manager: None,
+            cui: None,
+            sheet_set: None,
             publish: None,
             units_dialog: None,
             rename: None,
@@ -354,6 +370,10 @@ impl OxidraftApp {
             layer_states_dialog: None,
             save_prompt: None,
             quit_now: false,
+            tabs: Vec::new(),
+            tab: 0,
+            tab_request: None,
+            untitled: 1,
             properties_dialog: None,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
@@ -490,7 +510,7 @@ impl OxidraftApp {
         self.path
             .as_ref()
             .and_then(|p| p.file_name())
-            .map_or("Drawing1.dxf".into(), |n| n.to_string_lossy().into_owned())
+            .map_or_else(|| format!("Drawing{}.dxf", self.untitled.max(1)), |n| n.to_string_lossy().into_owned())
     }
 
     pub(crate) fn is_dirty(&self) -> bool {
@@ -643,6 +663,16 @@ impl OxidraftApp {
             "PASTEBLOCK" => self.paste_block_command(),
             "SAVE" | "QSAVE" => self.save(false),
             "SAVEAS" => self.save(true),
+            // With other drawings open beside it, new and opened ones get
+            // tabs of their own.
+            "OPEN" | "DXFIN" if self.in_tabs() => self.open_in_tab(),
+            "NEW" | "QNEW" if self.in_tabs() => self.tab_request = Some(crate::drawings::TabRequest::New),
+            "CLOSEALL" if self.in_tabs() => self.tab_request = Some(crate::drawings::TabRequest::CloseAll),
+            "SWITCHWINDOWS" => self.tab_request = Some(crate::drawings::TabRequest::Next(false)),
+            "CASCADE" => {
+                self.tab_request = Some(crate::drawings::TabRequest::Arrange(crate::drawings::Arrange::Cascade))
+            }
+            "TILE" => self.tab_request = Some(crate::drawings::TabRequest::Arrange(crate::drawings::Arrange::Vertical)),
             "OPEN" => self.after_saving(crate::files::Then::Open),
             "NEW" => self.after_saving(crate::files::Then::New),
             "CLOSE" | "CLOSEALL" => self.after_saving(crate::files::Then::Close),
@@ -681,6 +711,29 @@ impl OxidraftApp {
                 self.open_export(oxidraft_plot::Plotter::Dwfx);
             }
             "PLOTTERMANAGER" => self.open_plotter_manager(),
+            "CUI" => self.open_cui(),
+            "SHEETSET" | "SSM" => self.toggle_sheet_set(),
+            "SHEETSETHIDE" => self.sheet_set = None,
+            "OPENSHEETSET" => {
+                if let Some(path) = rfd::FileDialog::new().add_filter("Sheet set", &["oxss"]).pick_file()
+                    && let Err(e) = self.open_sheet_set(&path)
+                {
+                    self.engine.log(e);
+                }
+            }
+            "NEWSHEETSET" => {
+                if let Some(path) =
+                    rfd::FileDialog::new().add_filter("Sheet set", &["oxss"]).set_file_name("Sheets.oxss").save_file()
+                {
+                    let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                    if let Err(e) = self.new_sheet_set(&path, &name) {
+                        self.engine.log(e);
+                    }
+                }
+            }
+            "ARCHIVE" => self.archive_command(),
+            "SHARE" => self.share(),
+            "MARKUP" | "MARKUPIMPORT" => self.markup_import(),
             "PUBLISH" => self.open_publish(),
             "UNITS" | "UN" => self.open_units(),
             "RENAME" | "REN" => self.open_rename(),
@@ -802,6 +855,15 @@ impl OxidraftApp {
                 UiRequest::Tiling(tiling) => self.set_tiling(tiling),
                 UiRequest::ChangeSpace(ids) => self.change_space(&ids),
                 UiRequest::WmfOut(ids) => self.wmf_out(&ids),
+                UiRequest::Workspace(option, name, new) => self.workspace_option(&option, &name, &new),
+                UiRequest::ArrangeWindows(n) => {
+                    let arrange = match n {
+                        1 => crate::drawings::Arrange::Horizontal,
+                        2 => crate::drawings::Arrange::Vertical,
+                        _ => crate::drawings::Arrange::Cascade,
+                    };
+                    self.tab_request = Some(crate::drawings::TabRequest::Arrange(arrange));
+                }
                 UiRequest::SaveXrefEdit => self.prepare_xref_edit_save(),
                 UiRequest::ColorTheme(n) => {
                     let color_theme = if n == 1 { ColorTheme::Light } else { ColorTheme::Dark };
@@ -895,6 +957,8 @@ impl OxidraftApp {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        // Your own shortcuts (CUI) come first.
+        self.custom_shortcuts(ctx);
         let cmd = Modifiers::COMMAND;
         let none = Modifiers::NONE;
         // Space while dragging a lasso cycles Window, Crossing and Fence,
@@ -1050,10 +1114,16 @@ impl OxidraftApp {
             self.save(false);
         }
         if open {
-            self.after_saving(crate::files::Then::Open);
+            self.run("OPEN");
         }
         if new {
-            self.after_saving(crate::files::Then::New);
+            self.run("NEW");
+        }
+        // Ctrl+Tab and Ctrl+Shift+Tab: the next or previous drawing.
+        if ctx.input_mut(|i| i.consume_key(Modifiers::CTRL | Modifiers::SHIFT, Key::Tab)) {
+            self.tab_request = Some(crate::drawings::TabRequest::Next(true));
+        } else if ctx.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::Tab)) {
+            self.tab_request = Some(crate::drawings::TabRequest::Next(false));
         }
         if select_all {
             self.engine.select_all(&self.doc);
@@ -1132,6 +1202,8 @@ impl eframe::App for OxidraftApp {
         self.layer_walk_dialog(&ctx);
         self.export_pdf_dialog(&ctx);
         self.plotter_manager_dialog(&ctx);
+        self.cui_dialog(&ctx);
+        self.sheet_set_palette(&ctx);
         self.publish_dialog(&ctx);
         self.units_dialog(&ctx);
         self.rename_dialog(&ctx);

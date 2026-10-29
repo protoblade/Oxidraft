@@ -202,7 +202,18 @@ impl OxidraftApp {
                 continue;
             }
             let raster = match result {
-                Ok(px) => {
+                Ok(mut px) => {
+                    // A PDF's dark lines lighten on a dark background, as
+                    // AutoCAD adjusts underlay colors for it.
+                    if self.doc.image_def(&k).is_some_and(|d| d.is_pdf()) && theme::background_now().intensity() < 0.5 {
+                        for c in px.rgba.as_chunks_mut::<4>().0 {
+                            let (hi, lo) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
+                            let shift = 255 - i16::from(hi) - i16::from(lo);
+                            for v in &mut c[..3] {
+                                *v = (i16::from(*v) + shift).clamp(0, 255) as u8;
+                            }
+                        }
+                    }
                     let image =
                         egui::ColorImage::from_rgba_unmultiplied([px.width as usize, px.height as usize], &px.rgba);
                     Raster::Ready(ctx.load_texture(format!("picture {k}"), image, egui::TextureOptions::LINEAR))

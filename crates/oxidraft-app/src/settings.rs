@@ -34,6 +34,13 @@ pub struct Settings {
     pub papers: Vec<(String, f64, f64)>,
     /// How fine PNG and JPEG plots are, in dots per inch (0: 150).
     pub raster_dpi: u32,
+    /// Workspaces saved (WSSAVE), and the current one's name.
+    pub workspaces: Vec<crate::customize::Workspace>,
+    pub workspace: String,
+    /// Keyboard shortcuts of your own (CUI): keys, command.
+    pub shortcuts: Vec<(String, String)>,
+    /// Commands added to the Quick Access Toolbar (CUI).
+    pub quick_access: Vec<String>,
 }
 
 /// Where a palette sits: docked at the left or right of the drawing
@@ -90,6 +97,11 @@ impl OxidraftApp {
         if look(&settings) != look(&self.settings) {
             theme::set(ctx, settings.color_theme, settings.background);
         }
+        self.keep_settings(settings);
+    }
+
+    /// Uses `settings` from now on, the look unchanged, and keeps them.
+    pub(crate) fn keep_settings(&mut self, settings: Settings) {
         self.engine.vars.color_theme = u8::from(settings.color_theme == ColorTheme::Light);
         self.engine.aliases = settings.aliases.clone();
         oxidraft_plot::set_custom_papers(&settings.papers);
@@ -184,6 +196,14 @@ mod tests {
             scales: vec![25.0],
             papers: vec![("Banner".into(), 1000.0, 300.0)],
             raster_dpi: 300,
+            workspaces: vec![crate::customize::Workspace {
+                name: "Layout".into(),
+                properties: true,
+                ..Default::default()
+            }],
+            workspace: "Layout".into(),
+            shortcuts: vec![("Ctrl+Shift+L".into(), "LAYER".into())],
+            quick_access: vec!["MATCHPROP".into()],
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);

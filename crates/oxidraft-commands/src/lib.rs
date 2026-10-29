@@ -83,6 +83,7 @@ pub mod ucs_cmd;
 mod underlay;
 mod units_cmd;
 mod views;
+mod windows;
 mod wipeout;
 mod xclip;
 mod xline;
@@ -209,6 +210,12 @@ pub enum UiRequest {
     ChangeSpace(Vec<EntityId>),
     /// WMFOUT: these objects to a Windows Metafile.
     WmfOut(Vec<EntityId>),
+    /// SYSWINDOWS: the open drawings laid out: 0 cascaded, 1 tiled
+    /// horizontally, 2 vertically.
+    ArrangeWindows(u8),
+    /// WORKSPACE: an option (setCurrent, SAveas, Rename, Delete, ?), the
+    /// workspace's name, and for Rename its new one.
+    Workspace(String, String, String),
 }
 
 /// Result of feeding one input to a command.

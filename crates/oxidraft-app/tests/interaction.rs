@@ -2859,3 +2859,160 @@ fn plotters_wmfout_and_paper_sizes_of_your_own() {
     assert!(oxidraft_plot::papers().iter().any(|p| p.name == "Banner 1000"));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn several_drawings_in_file_tabs() {
+    use oxidraft_app::Drawings;
+    let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(0.25).build_eframe(|cc| {
+        let mut app = OxidraftApp::new(cc);
+        let mut doc = Document::new();
+        doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(100.0, 0.0) });
+        app.set_document(doc);
+        Drawings::new(app)
+    });
+    h.run_steps(3);
+    let type_in = |h: &mut Harness<'_, Drawings>, text: &str| {
+        h.state_mut().current().type_command(text);
+        h.run_steps(2);
+    };
+    // NEW: a second drawing in a tab of its own, current.
+    type_in(&mut h, "new");
+    assert_eq!((h.state().len(), h.state().active()), (2, 1));
+    assert_eq!(h.state_mut().current().document_mut().len(), 0);
+    h.state_mut().current().document_mut().add(Geometry::Circle { center: Point::ORIGIN, radius: 5.0 });
+    h.run_steps(1);
+    assert!(h.query_by_label("Drawing2.dxf*").is_some(), "both tabs show, the changed one marked");
+    // Ctrl+Tab and SWITCHWINDOWS go round them.
+    h.key_press_modifiers(Modifiers::CTRL, Key::Tab);
+    h.run_steps(2);
+    assert_eq!(h.state().active(), 0);
+    type_in(&mut h, "switchwindows");
+    assert_eq!(h.state().active(), 1);
+    // A drawing opened gets a tab; one already open is gone back to.
+    let dir = std::env::temp_dir().join(format!("oxidraft-tabs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("site.dxf");
+    let mut site = Document::new();
+    site.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(5.0, 5.0) });
+    oxidraft_io_dxf::save_file(&site, &file).unwrap();
+    for _ in 0..2 {
+        let ctx = h.ctx.clone();
+        h.state_mut().handle(&ctx, oxidraft_app::drawings::TabRequest::Open(file.clone()));
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().names(), ["Drawing1.dxf", "Drawing2.dxf", "site.dxf"]);
+    assert_eq!(h.state().active(), 2);
+    // SYSWINDOWS, tiled: the drawings side by side; a click picks one.
+    type_in(&mut h, "syswindows");
+    type_in(&mut h, "v");
+    h.get_by_role_and_label(Role::Button, "site.dxf");
+    h.get_by_role_and_label(Role::Button, "Drawing1.dxf").click();
+    h.run_steps(2);
+    assert_eq!(h.state().active(), 0);
+    // CLOSE: its tab goes (it has no changes to ask about).
+    type_in(&mut h, "close");
+    assert_eq!(h.state().names(), ["Drawing2.dxf", "site.dxf"]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn workspaces_and_cui() {
+    let mut h = app_with_line();
+    let props = |h: &Harness<'_, OxidraftApp>| h.query_by_label("PROPERTIES").is_some();
+    // The Properties palette open, saved as workspace Review.
+    type_all(&mut h, &["pr"]);
+    h.run_steps(2);
+    assert!(props(&h));
+    type_all(&mut h, &["wssave", "Review"]);
+    assert_eq!(h.state().current_workspace(), "Review");
+    // AutoCAD's own: the palette closes; Review again (WSCURRENT) opens it.
+    type_all(&mut h, &["workspace", "", "Drafting & Annotation"]);
+    h.run_steps(2);
+    assert!(!props(&h));
+    type_all(&mut h, &["wscurrent", "Review"]);
+    h.run_steps(2);
+    assert!(props(&h));
+    // CUI: a shortcut of your own, and a command on the Quick Access Toolbar.
+    type_all(&mut h, &["cui"]);
+    h.run_steps(2);
+    let field = |h: &mut Harness<'_, OxidraftApp>, label: &str, text: &str| {
+        h.get_by_role_and_label(Role::TextInput, label).click();
+        h.run_steps(1);
+        h.get_by_role_and_label(Role::TextInput, label).type_text(text);
+        h.run_steps(1);
+    };
+    field(&mut h, "Shortcut keys", "Ctrl+Shift+J");
+    field(&mut h, "Shortcut command", "circle");
+    h.get_by_label("Add Shortcut").click();
+    h.run_steps(1);
+    field(&mut h, "Toolbar command", "matchprop");
+    h.get_by_label("Add to Toolbar").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("matchprop").is_some(), "on the Quick Access Toolbar");
+    h.key_press_modifiers(Modifiers::CTRL | Modifiers::SHIFT, Key::J);
+    h.run_steps(2);
+    assert!(h.state_mut().engine_mut().is_active(), "the shortcut started CIRCLE");
+}
+
+#[test]
+fn sheet_sets_share_and_markup() {
+    let mut h = app_with_line();
+    let dir = std::env::temp_dir().join(format!("oxidraft-sheetset-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("plans")).unwrap();
+    // A drawing with two layouts, beside the set.
+    let mut plan = Document::new();
+    plan.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(50.0, 20.0) });
+    let paper = oxidraft_model::Paper { width: 420.0, height: 297.0, millimeters: true, ..Default::default() };
+    for (i, name) in ["Plan", "Details"].iter().enumerate() {
+        let layout = oxidraft_model::layout::Layout {
+            id: 0,
+            name: (*name).into(),
+            tab_order: i as i32 + 1,
+            paper: paper.clone(),
+        };
+        let space = plan.add_layout(layout);
+        plan.set_space(space);
+        plan.add(Geometry::Circle { center: Point::new(100.0, 100.0), radius: 20.0 });
+        plan.set_space(oxidraft_model::MODEL);
+    }
+    let drawing = dir.join("plans").join("plan.dxf");
+    oxidraft_io_dwg::save_dxf(&plan, &drawing).unwrap();
+    // SHEETSET: a new set, the drawing's layouts its sheets.
+    let set = dir.join("Project.oxss");
+    let app = h.state_mut();
+    app.new_sheet_set(&set, "Project").unwrap();
+    assert_eq!(app.add_sheets_from(&drawing), Ok(2));
+    let saved = std::fs::read_to_string(&set).unwrap();
+    assert!(saved.contains("plans/plan.dxf") && saved.contains("Details"), "{saved}");
+    // Published: a page a sheet.
+    let pdf = dir.join("Project.pdf");
+    assert_eq!(app.publish_sheet_set(&pdf), Ok(2));
+    assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
+    // ARCHIVE: the set, its drawing and a report.
+    let archive = dir.join("archive");
+    let archived = app.archive_sheet_set(&archive);
+    let report = std::fs::read_to_string(archive.join("archive report.txt")).unwrap_or_default();
+    assert_eq!(archived, Ok(2), "{report}");
+    assert!(archive.join("Project.oxss").is_file() && archive.join("plans/plan.dxf").is_file());
+    assert!(archive.join("archive report.txt").is_file());
+    // SHARE: the drawing as DWG and a PDF of its sheets, in one zip.
+    let package = dir.join("shared.zip");
+    assert_eq!(app.share_to(&package), Ok(2));
+    let zip = std::fs::read(&package).unwrap();
+    assert!(zip.starts_with(b"PK\x03\x04"));
+    let text = String::from_utf8_lossy(&zip);
+    assert!(text.contains("Drawing1.dwg") && text.contains("Drawing1.pdf"));
+    // MARKUP: a plot laid back over its sheet, on layer MARKUP.
+    let plotted = dir.join("plot.pdf");
+    type_all(&mut h, &["plot"]);
+    h.run_steps(2);
+    h.state_mut().plot_to(&plotted).unwrap();
+    h.state_mut().markup_import_file(&plotted).unwrap();
+    let doc = h.state_mut().document_mut();
+    let markup = doc.entities().find(|e| e.layer == "MARKUP").expect("the markup");
+    let Geometry::Image { origin, u, v, .. } = &markup.geometry else { panic!() };
+    assert!(u.length() > 0.0 && v.length() > 0.0 && origin.x.is_finite());
+    std::fs::remove_dir_all(&dir).ok();
+}

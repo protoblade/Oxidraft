@@ -354,20 +354,21 @@ pub fn render_pdf_data(data: Vec<u8>, page: usize, dpi: f32) -> Result<Pixels, S
     Ok(Pixels { width, height, rgba: pixmap.take_rgba8(ImageAlphaType::AlphaPremultiplied) })
 }
 
+/// A PDF page's content on a clear page, as an underlay shows it.
 fn render_pdf(path: &Path, page: usize, max_side: u32) -> Result<Pixels, String> {
-    use hayro::vello_cpu::{color::palette::css::WHITE, peniko::ImageAlphaType};
+    use hayro::vello_cpu::{color::palette::css::TRANSPARENT, peniko::ImageAlphaType};
     // Without the layers turned off for it (ULAYERS).
     let data = pdf_layers::read_pdf(path).map_err(|e| e.to_string())?;
     let pdf = hayro::hayro_syntax::Pdf::new(data).map_err(|e| format!("not a readable PDF ({e:?})"))?;
     let p = pdf.pages().get(page).ok_or("no such page")?;
     let (w, h) = p.render_dimensions();
     let scale = (max_side.min(16_000) as f32 / w.max(h)).min(200.0 / 72.0);
-    let settings = hayro::PixmapSettings { x_scale: scale, y_scale: scale, bg_color: WHITE };
+    let settings = hayro::PixmapSettings { x_scale: scale, y_scale: scale, bg_color: TRANSPARENT };
     let interpreter = hayro::hayro_interpret::InterpreterSettings::default();
     let pixmap =
         hayro::render(p, &hayro::RenderCache::new(), &interpreter, &hayro::RenderSettings::default(), &settings);
     let (width, height) = (u32::from(pixmap.width()), u32::from(pixmap.height()));
-    Ok(Pixels { width, height, rgba: pixmap.take_rgba8(ImageAlphaType::AlphaPremultiplied) })
+    Ok(Pixels { width, height, rgba: pixmap.take_rgba8(ImageAlphaType::Alpha) })
 }
 
 #[cfg(test)]
@@ -531,7 +532,11 @@ mod tests {
         assert_eq!((info.width, info.height, info.pages), (200.0, 100.0, 1));
         let px = decode(&path, 0, 400).unwrap();
         assert_eq!((px.width, px.height), (400, 200));
-        let at = |x: u32, y: u32| px.rgba[((y * px.width + x) * 4) as usize];
-        assert_eq!((at(5, 5), at(200, 100)), (255, 0), "white page, black rectangle");
+        // A clear page, as an underlay shows it; a black rectangle on it.
+        let at = |x: u32, y: u32| {
+            let i = ((y * px.width + x) * 4) as usize;
+            (px.rgba[i], px.rgba[i + 3])
+        };
+        assert_eq!((at(5, 5).1, at(200, 100)), (0, (0, 255)), "clear page, black rectangle");
     }
 }

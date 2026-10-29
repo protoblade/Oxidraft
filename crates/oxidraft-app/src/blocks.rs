@@ -16,7 +16,7 @@ const TILE: Vec2 = vec2(96.0, 80.0);
 
 /// What's drawn of `items` (curves, and text and fills as their outlines)
 /// fitted into `rect`.
-fn paint_preview(ui: &Ui, rect: Rect, items: &[Styled]) {
+pub(crate) fn paint_preview(ui: &Ui, rect: Rect, items: &[Styled]) {
     let Some(b) = items.iter().map(|s| s.geometry.bounds()).reduce(Aabb::union) else { return };
     let inner = rect.shrink(6.0);
     let scale = (f64::from(inner.width()) / b.width().max(1e-9)).min(f64::from(inner.height()) / b.height().max(1e-9));

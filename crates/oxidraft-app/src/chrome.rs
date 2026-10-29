@@ -244,6 +244,13 @@ impl OxidraftApp {
                 if icon_button(ui, Icon::Redo, 18.0, self.doc.can_redo(), "Redo (Shift+Cmd+Z)").clicked() {
                     self.run("REDO");
                 }
+                // Commands added to the Quick Access Toolbar (CUI).
+                for command in self.settings.quick_access.clone() {
+                    let label = egui::RichText::new(command.to_ascii_lowercase()).size(11.5).color(theme::text());
+                    if ui.add(egui::Button::new(label).frame(false)).on_hover_text(&command).clicked() {
+                        self.run(&command);
+                    }
+                }
                 let dirty = if self.is_dirty() { "*" } else { "" };
                 let title = format!("Oxidraft    {}{dirty}", self.file_name());
                 let rect = ui.max_rect();
@@ -578,6 +585,12 @@ impl OxidraftApp {
                     Some("ADCENTER"),
                     "Opens DesignCenter: other drawings' blocks, layers and styles (ADC, Cmd+2)",
                 ),
+                tool(
+                    Icon::PageSetup,
+                    "Sheet Set\nManager",
+                    Some("SHEETSET"),
+                    "Sheets from drawings' layouts, published and archived together (SSM)",
+                ),
             ] {
                 self.large_tool(ui, &t);
             }
@@ -591,6 +604,15 @@ impl OxidraftApp {
             if self.toggle_tool(ui, Icon::LayoutTabs, "Layout\nTabs", layouts, "Shows the Model and layout tabs") {
                 self.show_layout_tabs = !layouts;
             }
+            ui.vertical(|ui| {
+                for t in [
+                    tool(Icon::FileTabs, "Switch Windows", Some("SWITCHWINDOWS"), "The next open drawing (Ctrl+Tab)"),
+                    tool(Icon::FileTabs, "Tile Vertically", Some("SYSWINDOWS V"), "The open drawings side by side"),
+                    tool(Icon::FileTabs, "Cascade", Some("SYSWINDOWS C"), "The open drawings cascaded"),
+                ] {
+                    self.small_tool(ui, &t);
+                }
+            });
         });
     }
 
@@ -609,6 +631,28 @@ impl OxidraftApp {
             );
             let exit = tool(Icon::CompareExit, "Exit\nCompare", Some("COMPAREEXIT"), "Stops comparing (COMPAREEXIT)");
             self.large_tool(ui, &exit);
+        });
+        ribbon_panel(ui, "Share", |ui| {
+            self.large_tool(
+                ui,
+                &tool(
+                    Icon::Pdf,
+                    "Share",
+                    Some("SHARE"),
+                    "Packs the drawing, a PDF of its sheets and its files to send",
+                ),
+            );
+        });
+        ribbon_panel(ui, "Markup", |ui| {
+            self.large_tool(
+                ui,
+                &tool(
+                    Icon::Pdf,
+                    "Markup\nImport",
+                    Some("MARKUP"),
+                    "Lays a marked-up plot (PDF or image) over its sheet, on layer MARKUP",
+                ),
+            );
         });
         ribbon_panel(ui, "Count", |ui| {
             self.large_tool(
@@ -640,7 +684,20 @@ impl OxidraftApp {
             }
         });
         ribbon_panel(ui, "Customization", |ui| {
+            self.large_tool(
+                ui,
+                &tool(
+                    Icon::Properties,
+                    "User\nInterface",
+                    Some("CUI"),
+                    "Keyboard shortcuts and the Quick Access Toolbar",
+                ),
+            );
             self.large_tool(ui, &tool(Icon::Aliases, "Edit\nAliases", Some("ALIASEDIT"), "Your own command aliases"));
+            self.large_tool(
+                ui,
+                &tool(Icon::Properties, "Workspace", Some("WORKSPACE"), "Make a workspace current, save or delete one"),
+            );
         });
     }
 
@@ -1197,27 +1254,46 @@ impl OxidraftApp {
     /// Drawing tabs under the ribbon.
     pub(crate) fn file_tabs(&mut self, ui: &mut Ui) {
         let frame = Frame::NONE.fill(theme::strip()).inner_margin(Margin { left: 6, right: 6, top: 3, bottom: 0 });
+        // Every drawing open in the window, or this one alone.
+        let tabs = if self.tabs.is_empty() { vec![(self.file_name(), self.is_dirty())] } else { self.tabs.clone() };
+        let current = if self.tabs.is_empty() { 0 } else { self.tab };
         egui::Panel::top("file_tabs").frame(frame).exact_size(28.0).show_separator_line(false).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                let dirty = if self.is_dirty() { "*" } else { "" };
-                let label = format!("{}{dirty}", self.file_name());
-                let galley = ui.painter().layout_no_wrap(label, FontId::proportional(12.0), theme::text());
-                let (rect, _) = ui.allocate_exact_size(vec2(galley.size().x + 44.0, 25.0), Sense::hover());
-                ui.painter().rect_filled(rect, CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, theme::tab());
-                ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(2.0, theme::accent()));
-                ui.painter().galley(
-                    pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0),
-                    galley,
-                    theme::text(),
-                );
-                ui.painter().text(
-                    pos2(rect.right() - 14.0, rect.center().y),
-                    Align2::CENTER_CENTER,
-                    "×",
-                    FontId::proportional(13.0),
-                    theme::text_dim(),
-                );
+                for (i, (name, dirty)) in tabs.iter().enumerate() {
+                    let label = format!("{name}{}", if *dirty { "*" } else { "" });
+                    let active = i == current;
+                    let color = if active { theme::text() } else { theme::text_dim() };
+                    let galley = ui.painter().layout_no_wrap(label.clone(), FontId::proportional(12.0), color);
+                    let (rect, response) = ui.allocate_exact_size(vec2(galley.size().x + 44.0, 25.0), Sense::click());
+                    let close = Rect::from_center_size(pos2(rect.right() - 14.0, rect.center().y), vec2(16.0, 16.0));
+                    let over_close = response.hover_pos().is_some_and(|p| close.contains(p));
+                    let fill = if active || response.hovered() { theme::tab() } else { theme::strip() };
+                    ui.painter().rect_filled(rect, CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, fill);
+                    if active {
+                        ui.painter()
+                            .line_segment([rect.left_top(), rect.right_top()], Stroke::new(2.0, theme::accent()));
+                    }
+                    ui.painter().galley(
+                        pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0),
+                        galley,
+                        color,
+                    );
+                    let x = if over_close { theme::text() } else { theme::text_dim() };
+                    ui.painter().text(close.center(), Align2::CENTER_CENTER, "×", FontId::proportional(13.0), x);
+                    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, active, &label));
+                    if response.clicked() {
+                        use crate::drawings::TabRequest;
+                        self.tab_request = Some(match (over_close, active) {
+                            (true, true) => {
+                                self.run("CLOSE");
+                                continue;
+                            }
+                            (true, false) => TabRequest::CloseAsking(i),
+                            (false, _) => TabRequest::Switch(i),
+                        });
+                    }
+                }
                 ui.add_space(4.0);
                 if ui.add(egui::Button::new("+").frame(false)).on_hover_text("New drawing").clicked() {
                     self.run("NEW");
@@ -1304,6 +1380,8 @@ impl OxidraftApp {
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     self.update_badge(ui);
+                    self.workspace_menu(ui);
+                    ui.add_space(6.0);
                     // The annotation scale (CANNOSCALE), and its two toggles.
                     let name = oxidraft_model::annoscale::scale_name(self.doc.anno_scale());
                     let menu = ui.menu_button(egui::RichText::new(name).color(theme::text_dim()), |ui| {

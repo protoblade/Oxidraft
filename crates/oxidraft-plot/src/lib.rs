@@ -9,7 +9,7 @@ pub mod setup;
 pub mod sheet;
 pub mod shx;
 pub mod wmf;
-mod zip;
+pub mod zip;
 
 pub use pdf::{pdf, pdf_pages};
 pub use setup::{

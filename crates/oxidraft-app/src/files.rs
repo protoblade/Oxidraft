@@ -33,6 +33,8 @@ impl OxidraftApp {
 
     fn proceed(&mut self, then: Then) {
         match then {
+            // In a window of several drawings, its tab closes.
+            Then::Close if self.in_tabs() => self.tab_request = Some(crate::drawings::TabRequest::Close(self.tab)),
             Then::New | Then::Close => self.new_drawing(),
             Then::Open => self.open_dialog(),
             Then::Recover => self.recover_dialog(),

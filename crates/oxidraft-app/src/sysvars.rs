@@ -402,6 +402,7 @@ fn vars() -> Vec<Var> {
             a.doc.set_wipeout_frame(parse_int(v, 0, 2)? as u8);
             Ok(())
         }),
+        var!("WSCURRENT", |a| a.current_workspace(), |a, v| a.set_workspace(v)),
     ]
 }
 
