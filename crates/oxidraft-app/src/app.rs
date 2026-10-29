@@ -119,6 +119,9 @@ pub struct OxidraftApp {
     pub(crate) rename: Option<crate::manage::RenameDialog>,
     pub(crate) wblock: Option<crate::wblock::WblockDialog>,
     pub(crate) quickcalc: Option<crate::quickcalc::QuickCalc>,
+    pub(crate) color_dialog: Option<crate::object_props::ColorDialog>,
+    pub(crate) linetype_manager: Option<crate::object_props::LinetypeManager>,
+    pub(crate) lineweight_dialog: Option<crate::object_props::LineweightDialog>,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
     pub(crate) ribbon_space: oxidraft_model::Space,
@@ -264,6 +267,9 @@ impl OxidraftApp {
             rename: None,
             wblock: None,
             quickcalc: None,
+            color_dialog: None,
+            linetype_manager: None,
+            lineweight_dialog: None,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
@@ -577,6 +583,9 @@ impl OxidraftApp {
             "RENAME" | "REN" => self.open_rename(),
             "WBLOCK" | "W" => self.open_wblock(),
             "QUICKCALC" | "QC" => self.open_quickcalc(),
+            "COLOR" | "COL" | "COLOUR" => self.open_color(Vec::new()),
+            "LINETYPE" | "LT" | "LTYPE" => self.open_linetype_manager(),
+            "LWEIGHT" | "LW" | "LINEWEIGHT" => self.open_lineweight_settings(),
             "COMPARE" => self.compare_command(),
             "DIMSTYLE" | "D" | "DST" => self.open_dim_style(),
             "FIND" => self.find_replace = Some(Default::default()),
@@ -937,6 +946,9 @@ impl eframe::App for OxidraftApp {
         self.rename_dialog(&ctx);
         self.wblock_dialog(&ctx);
         self.quickcalc_palette(&ctx);
+        self.color_dialog(&ctx);
+        self.linetype_manager_dialog(&ctx);
+        self.lineweight_dialog(&ctx);
         self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);

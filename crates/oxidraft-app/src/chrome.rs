@@ -836,12 +836,7 @@ impl OxidraftApp {
                     "Copies layer and color to other objects (MA)",
                 ),
             );
-            ui.vertical(|ui| {
-                self.small_tool(
-                    ui,
-                    &tool(Icon::Properties, "Properties", Some("PROPERTIES"), "Shows the Properties palette (Cmd+1)"),
-                );
-            });
+            self.property_combos(ui);
         });
         ribbon_panel(ui, "Groups", |ui| {
             self.large_tool(ui, &tool(Icon::Group, "Group", Some("GROUP"), "Makes the selected objects a group (G)"));

@@ -20,6 +20,7 @@ mod circle;
 mod cleanup;
 mod clipboard;
 mod common;
+pub mod current_props;
 mod dims;
 mod dims_more;
 mod donut;

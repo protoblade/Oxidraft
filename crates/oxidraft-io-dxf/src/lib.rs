@@ -666,6 +666,9 @@ fn build(doc: &Document) -> Built {
     drawing.header.dimension_unit_tolerance_decimal_places = dim.decimals as i16;
     drawing.header.insertion_base = to_dxf(doc.insbase());
     write_units(&mut drawing.header, doc.units());
+    let current = doc.current_props();
+    drawing.header.current_entity_color = to_dxf_color(current.color);
+    drawing.header.current_entity_line_type = linetype_to_dxf(&current.linetype);
     drawing.header.point_display_mode = doc.pdmode();
     drawing.header.point_display_size = doc.pdsize();
     drawing.header.attribute_visibility = match doc.attdisp() {
@@ -673,12 +676,14 @@ fn build(doc: &Document) -> Built {
         AttributeDisplay::Normal => AttributeVisibility::Normal,
         AttributeDisplay::On => AttributeVisibility::All,
     };
-    // Define every linetype in use (Drawing::new() has ByLayer, ByBlock, Continuous).
+    // Define every linetype loaded or in use, in any space (Drawing::new()
+    // has ByLayer, ByBlock, Continuous).
     let used = doc
-        .layers()
-        .iter()
-        .map(|l| l.linetype.clone())
-        .chain(doc.entities().map(|e| e.linetype.clone()))
+        .own_linetypes()
+        .into_iter()
+        .chain(std::iter::once(doc.current_props().linetype.clone()))
+        .chain(doc.layers().iter().map(|l| l.linetype.clone()))
+        .chain(doc.all_entities().map(|e| e.linetype.clone()))
         .chain(doc.blocks().flat_map(|b| b.entities.iter().map(|e| e.linetype.clone())));
     let mut defined: Vec<String> = Vec::new();
     // What came from xrefs is read from them again, so it isn't saved.
@@ -1188,6 +1193,11 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
     }
     doc.set_insbase(from_dxf(&drawing.header.insertion_base));
     doc.set_units(read_units(&drawing.header));
+    doc.set_current_props(oxidraft_model::CurrentProps {
+        color: from_dxf_color(&drawing.header.current_entity_color),
+        linetype: linetype_from_dxf(&drawing.header.current_entity_line_type),
+        lineweight: lineweight_from_dxf(drawing.header.new_object_line_weight.raw_value()),
+    });
     let h = &drawing.header;
     let positive = |v: f64, default: f64| if v > 0.0 && v.is_finite() { v } else { default };
     let d = oxidraft_model::annotation::DEFAULT_DIM_STYLE;
@@ -1599,10 +1609,35 @@ pub fn write_with_handles<W: Write>(doc: &Document, writer: &mut W) -> Result<Ha
         })
         .collect();
     let fixed = fix_tables(&fix_attributes(&buf, &styles), &layers);
+    // The dxf crate can only write ByLayer or ByBlock here.
+    let celweight = doc.current_props().lineweight.to_dxf().to_string();
+    let fixed = set_header_value(&fixed, "$CELWEIGHT", &celweight);
     let fixed = underlay_dxf::rename_type(&fixed, "UNDERLAYDEFINITION", "PDFDEFINITION");
     let fixed = clip_dxf::drop_unused_planes(&fixed);
     writer.write_all(&hatch_dxf::insert_hatches(&fixed, &hatches)).map_err(Error::IoError)?;
     Ok(handles)
+}
+
+/// The DXF with header variable `name`'s value replaced (its first value
+/// line after the name).
+fn set_header_value(dxf: &[u8], name: &str, value: &str) -> Vec<u8> {
+    let text = String::from_utf8_lossy(dxf);
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let Some(at) = lines.chunks(2).position(|p| p[0].trim() == "9" && p.get(1).is_some_and(|v| v.trim() == name))
+    else {
+        return dxf.to_vec();
+    };
+    let value_line = at * 2 + 3;
+    let mut out = String::with_capacity(text.len());
+    for (i, line) in lines.iter().enumerate() {
+        if i == value_line {
+            out.push_str(value);
+            out.push_str(eol(line));
+        } else {
+            out.push_str(line);
+        }
+    }
+    out.into_bytes()
 }
 
 /// The line ending of a code or value line.

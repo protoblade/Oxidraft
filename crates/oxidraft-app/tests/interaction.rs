@@ -15,7 +15,12 @@ fn app_with_line() -> Harness<'static, OxidraftApp> {
 
 /// The test app, with `step_dt` seconds between frames.
 fn app_with_line_at(step_dt: f32) -> Harness<'static, OxidraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(step_dt).build_eframe(|cc| {
+    app_sized(step_dt, 1200.0)
+}
+
+/// The test app in a window `width` wide.
+fn app_sized(step_dt: f32, width: f32) -> Harness<'static, OxidraftApp> {
+    let mut h = Harness::builder().with_size(vec2(width, 800.0)).with_step_dt(step_dt).build_eframe(|cc| {
         let mut app = OxidraftApp::new(cc);
         let mut doc = Document::new();
         doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(100.0, 0.0) });
@@ -1954,4 +1959,59 @@ fn quickcalc_works_out_and_pastes_to_the_command_line() {
     h.get_by_label("Paste value to command line").click();
     h.run_steps(2);
     assert_eq!(h.state().command_text(), "42");
+}
+
+#[test]
+fn current_color_linetype_and_lineweight_from_the_ribbon_and_dialogs() {
+    use oxidraft_model::{Color, Lineweight};
+    // Wide enough for the Home tab's Properties panel.
+    let mut h = app_sized(1.0 / 4.0, 1600.0);
+    let current = |h: &mut Harness<'_, OxidraftApp>| h.state_mut().document_mut().current_props().clone();
+    // Nothing selected: the Properties panel sets what new objects get.
+    h.get_by_role_and_label(Role::ComboBox, "Object color").click();
+    h.run_steps(2);
+    h.get_by_label("Red").click();
+    h.run_steps(2);
+    assert_eq!(current(&mut h).color, Color::Index(1));
+    type_all(&mut h, &["line", "0,30", "40,30", ""]);
+    let line = h.state_mut().document_mut().entities().last().map(|e| e.color);
+    assert_eq!(line, Some(Color::Index(1)), "new objects get it");
+
+    // COLOR: any of the 255.
+    type_all(&mut h, &["col"]);
+    h.run_steps(2);
+    h.get_by_label("Color 30").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(current(&mut h).color, Color::Index(30));
+
+    // LINETYPE: load CENTER, make it current.
+    type_all(&mut h, &["lt"]);
+    h.run_steps(2);
+    h.get_by_label("Load...").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::CheckBox, "CENTER").click();
+    h.run_steps(1);
+    h.get_all_by_label("OK").last().unwrap().click();
+    h.run_steps(2);
+    assert!(h.state_mut().document_mut().own_linetypes().iter().any(|n| n == "CENTER"));
+    h.get_by_label("CENTER").click();
+    h.run_steps(1);
+    h.get_by_label("Current").click();
+    h.run_steps(2);
+    assert_eq!(current(&mut h).linetype, "CENTER");
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+
+    // LWEIGHT: 0.13 mm, shown.
+    type_all(&mut h, &["lw"]);
+    h.run_steps(2);
+    h.get_by_label("0.13 mm").click();
+    h.run_steps(1);
+    h.get_by_label("Display Lineweight").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(current(&mut h).lineweight, Lineweight::Hundredths(13));
 }

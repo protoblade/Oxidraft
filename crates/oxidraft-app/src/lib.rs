@@ -15,6 +15,7 @@ mod layers;
 mod layouts;
 mod manage;
 mod named_views;
+mod object_props;
 mod plot;
 mod properties;
 mod publish;

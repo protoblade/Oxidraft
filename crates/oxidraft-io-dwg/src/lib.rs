@@ -103,6 +103,10 @@ fn cad(doc: &Document) -> Result<CadDocument, Error> {
     let mut cad = DxfReader::from_reader(Cursor::new(dxf)).and_then(|r| r.read()).map_err(|e| e.to_string())?;
     layouts::finish(&mut cad, doc);
     groups::finish(&mut cad, doc, &handles);
+    // DWG keeps CELTYPE as its linetype's handle; acadrust reads only the name.
+    if let Some(lt) = cad.line_types.get(&cad.header.current_linetype_name) {
+        cad.header.current_linetype_handle = lt.handle;
+    }
     Ok(cad)
 }
 
@@ -467,6 +471,44 @@ mod tests {
         }
         let dxf = write_dxf(&doc).unwrap();
         check(&oxidraft_io_dxf::read(&mut dxf.as_slice()).unwrap().document, "DXF");
+    }
+
+    #[test]
+    fn current_properties_survive() {
+        let mut doc = Document::new();
+        doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });
+        let current = oxidraft_model::CurrentProps {
+            color: oxidraft_model::Color::Index(3),
+            linetype: "HIDDEN".into(),
+            lineweight: oxidraft_model::Lineweight::Hundredths(35),
+        };
+        doc.set_current_props(current.clone());
+        let dxf = oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document;
+        assert_eq!(dxf.current_props(), &current, "DXF");
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        let back = oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document;
+        assert_eq!(back.current_props(), &current, "Oxidraft's own DXF");
+        for version in [Version::R2018, Version::R2000] {
+            let back = read(&write(&doc, version).unwrap()).unwrap().imported.document;
+            assert_eq!(back.current_props(), &current, "{version:?}");
+        }
+        // A linetype used only on a layout, and one loaded but unused, are kept too.
+        let mut doc = Document::new();
+        let sheet = doc.new_layout("Layout1").unwrap();
+        doc.set_space(sheet);
+        let line = doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });
+        doc.update(line, |e| e.linetype = "CENTER".into());
+        doc.set_space(oxidraft_model::MODEL);
+        doc.load_linetype(oxidraft_model::Linetype::new("MINE", "Mine", &[2.0, -1.0]));
+        for version in [Version::R2018, Version::R2000] {
+            let back = read(&write(&doc, version).unwrap()).unwrap().imported.document;
+            let own = back.own_linetypes();
+            assert!(own.iter().any(|n| n == "CENTER") && own.iter().any(|n| n == "MINE"), "{version:?}: {own:?}");
+        }
+        // Unset: ByLayer.
+        let plain = read(&write(&Document::new(), Version::R2018).unwrap()).unwrap().imported.document;
+        assert_eq!(plain.current_props(), &oxidraft_model::CurrentProps::by_layer());
     }
 
     #[test]

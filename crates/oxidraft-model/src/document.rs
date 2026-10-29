@@ -272,6 +272,10 @@ enum Change {
         before: crate::units::Units,
         after: crate::units::Units,
     },
+    Current {
+        before: CurrentProps,
+        after: CurrentProps,
+    },
     /// REFEDIT's session: started, its working set changed, or ended.
     RefEdit {
         before: Option<Box<RefEdit>>,
@@ -338,6 +342,8 @@ pub struct Document {
     dim_style: crate::annotation::DimStyle,
     /// UNITS: how lengths and angles show, and what a unit is.
     units: crate::units::Units,
+    /// New objects' color, linetype and lineweight.
+    current: CurrentProps,
     /// The layer settings before each change, latest last (LAYERP).
     previous_layers: Vec<LayerTable>,
 }
@@ -354,6 +360,21 @@ pub struct Group {
 impl Group {
     pub fn is_unnamed(&self) -> bool {
         self.name.starts_with('*')
+    }
+}
+
+/// What new objects get besides the current layer: CECOLOR, CELTYPE and
+/// CELWEIGHT (ByLayer unless set).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CurrentProps {
+    pub color: Color,
+    pub linetype: String,
+    pub lineweight: Lineweight,
+}
+
+impl CurrentProps {
+    pub fn by_layer() -> Self {
+        Self { color: Color::ByLayer, linetype: linetype::BYLAYER.into(), lineweight: Lineweight::ByLayer }
     }
 }
 
@@ -403,6 +424,7 @@ impl Document {
             groups: Vec::new(),
             dim_style: crate::annotation::DEFAULT_DIM_STYLE,
             units: crate::units::DEFAULT_UNITS,
+            current: CurrentProps::by_layer(),
             previous_layers: Vec::new(),
         }
     }
@@ -478,6 +500,30 @@ impl Document {
         if units != self.units {
             let before = std::mem::replace(&mut self.units, units);
             self.record(Change::Units { before, after: units });
+        }
+    }
+
+    /// CECOLOR, CELTYPE and CELWEIGHT: what new objects get.
+    pub fn current_props(&self) -> &CurrentProps {
+        &self.current
+    }
+
+    pub fn set_current_props(&mut self, props: CurrentProps) {
+        if props != self.current {
+            let before = std::mem::replace(&mut self.current, props.clone());
+            self.record(Change::Current { before, after: props });
+        }
+    }
+
+    /// Loads a linetype into the drawing (LINETYPE's Load), undoably.
+    pub fn load_linetype(&mut self, l: Linetype) {
+        if l.name.eq_ignore_ascii_case(CONTINUOUS) {
+            return;
+        }
+        let key = l.name.to_ascii_uppercase();
+        let before = self.linetypes.insert(key.clone(), l.clone());
+        if before.as_ref() != Some(&l) {
+            self.record(Change::Linetype { key, before, after: Some(l) });
         }
     }
 
@@ -1470,9 +1516,12 @@ impl Document {
     // ---- edits ---------------------------------------------------------
 
     /// Adds an entity on the current layer.
+    /// Adds an entity on the current layer with the current color,
+    /// linetype and lineweight.
     pub fn add(&mut self, geometry: Geometry) -> EntityId {
         let layer = self.table.current.clone();
-        self.add_on_layer(geometry, &layer, Color::ByLayer)
+        let CurrentProps { color, linetype, lineweight } = self.current.clone();
+        self.add_styled(geometry, &layer, color, &linetype, lineweight)
     }
 
     /// Adds an entity on a specific layer (created with color 7 if missing).
@@ -1784,6 +1833,7 @@ impl Document {
                     Change::Groups { .. } => "Group",
                     Change::DimStyle { .. } => "Dimension style",
                     Change::Units { .. } => "Units",
+                    Change::Current { .. } => "Current properties",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -1839,6 +1889,7 @@ impl Document {
             Change::Groups { before, after } => self.groups = if forward { after } else { before }.clone(),
             Change::DimStyle { before, after } => self.dim_style = if forward { *after } else { *before },
             Change::Units { before, after } => self.units = if forward { *after } else { *before },
+            Change::Current { before, after } => self.current = if forward { after } else { before }.clone(),
             Change::Linetype { key, before, after } => {
                 match if forward { after } else { before } {
                     Some(l) => self.linetypes.insert(key.clone(), l.clone()),

@@ -137,14 +137,15 @@ pub fn color_menu(ui: &mut Ui, current: u8, id_salt: impl std::hash::Hash + std:
     chosen
 }
 
-/// A dropdown of linetype names, `width` wide (a long name cut short).
-/// Returns the one picked, if any.
+/// A dropdown of linetype names, `width` wide (a long name cut short),
+/// named `label` for screen readers. Returns the one picked, if any.
 pub(crate) fn linetype_menu(
     ui: &mut Ui,
     current: Option<&str>,
     names: &[String],
     salt: impl std::hash::Hash + std::fmt::Debug,
     width: f32,
+    label: &str,
 ) -> Option<String> {
     let mut chosen = None;
     let menu = egui::ComboBox::from_id_salt(salt).width(width).truncate();
@@ -156,18 +157,19 @@ pub(crate) fn linetype_menu(
             }
         }
     });
-    shown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Linetype"));
+    shown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, label));
     chosen
 }
 
 /// A dropdown of lineweights, starting with `special` (ByLayer, ByBlock,
-/// Default as fits). Returns the one picked, if any.
+/// Default as fits), named `label`. Returns the one picked, if any.
 pub(crate) fn lineweight_menu(
     ui: &mut Ui,
     current: Option<Lineweight>,
     special: &[Lineweight],
     salt: impl std::hash::Hash + std::fmt::Debug,
     width: f32,
+    label: &str,
 ) -> Option<Lineweight> {
     let mut chosen = None;
     let text = current.map_or("*VARIES*".into(), Lineweight::label);
@@ -179,7 +181,7 @@ pub(crate) fn lineweight_menu(
             }
         }
     });
-    shown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Lineweight"));
+    shown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, label));
     chosen
 }
 
@@ -356,12 +358,14 @@ impl OxidraftApp {
                     self.change_layers(&layer.name, |l| l.color = color);
                 }
                 let salt = ("layer_linetype", &layer.name);
-                if let Some(linetype) = linetype_menu(ui, Some(&layer.linetype), &linetypes, salt, linetype_width) {
+                if let Some(linetype) =
+                    linetype_menu(ui, Some(&layer.linetype), &linetypes, salt, linetype_width, "Linetype")
+                {
                     self.change_layers(&layer.name, |l| l.linetype = linetype.clone());
                 }
                 let salt = ("layer_lineweight", &layer.name);
                 if let Some(lineweight) =
-                    lineweight_menu(ui, Some(layer.lineweight), &[Lineweight::Default], salt, 90.0)
+                    lineweight_menu(ui, Some(layer.lineweight), &[Lineweight::Default], salt, 90.0, "Lineweight")
                 {
                     self.change_layers(&layer.name, |l| l.lineweight = lineweight);
                 }

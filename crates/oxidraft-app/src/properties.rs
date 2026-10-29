@@ -4,7 +4,7 @@
 use eframe::egui::{self, Align, CursorIcon, Frame, Id, Layout, Margin, RichText, Sense, Stroke, Ui, vec2};
 use oxidraft_geom::{Point, curve::ArcSeg};
 use oxidraft_model::{
-    Color, Entity, EntityId, Geometry, HatchPattern, Lineweight,
+    Color, CurrentProps, Entity, EntityId, Geometry, HatchPattern, Lineweight,
     annotation::{angular_measurement, format_angle, format_measurement, measurement, radial_value},
     hatch, linetype,
 };
@@ -217,38 +217,41 @@ impl OxidraftApp {
 
     fn general_rows(&mut self, ui: &mut Ui, selected: &[Entity], width: f32) {
         egui::Grid::new("props_general").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-            // Color
+            // Color, linetype and lineweight: with nothing selected, what new
+            // objects get (CECOLOR, CELTYPE, CELWEIGHT), as in AutoCAD.
+            let current = self.doc.current_props().clone();
+            let none = selected.is_empty();
             label_cell(ui, "Color");
-            let common_color = common(selected.iter().map(|e| e.color));
-            let text = match (selected.is_empty(), common_color) {
-                (true, _) | (false, Some(Color::ByLayer)) => "ByLayer".to_string(),
-                (false, Some(Color::ByBlock)) => "ByBlock".to_string(),
-                (false, Some(Color::Index(i))) => color_name(i),
-                (false, None) => VARIES.to_string(),
+            let common_color = if none { Some(current.color) } else { common(selected.iter().map(|e| e.color)) };
+            let text = match common_color {
+                Some(Color::ByLayer) => "ByLayer".to_string(),
+                Some(Color::ByBlock) => "ByBlock".to_string(),
+                Some(Color::Index(i)) => color_name(i),
+                None => VARIES.to_string(),
             };
             let mut chosen = None;
-            ui.add_enabled_ui(!selected.is_empty(), |ui| {
-                let shown =
-                    egui::ComboBox::from_id_salt("props_color").width(width).selected_text(text).show_ui(ui, |ui| {
-                        if ui.selectable_label(common_color == Some(Color::ByLayer), "ByLayer").clicked() {
-                            chosen = Some(Color::ByLayer);
-                        }
-                        if ui.selectable_label(common_color == Some(Color::ByBlock), "ByBlock").clicked() {
-                            chosen = Some(Color::ByBlock);
-                        }
-                        for &(index, name) in NAMED_COLORS {
-                            ui.horizontal(|ui| {
-                                swatch(ui, index);
-                                if ui.selectable_label(common_color == Some(Color::Index(index)), name).clicked() {
-                                    chosen = Some(Color::Index(index));
-                                }
-                            });
-                        }
-                    });
-                shown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Color"));
-            });
-            if let Some(color) = chosen {
-                self.edit(selected.iter().map(|e| e.id), |e| e.color = color);
+            let shown =
+                egui::ComboBox::from_id_salt("props_color").width(width).selected_text(text).show_ui(ui, |ui| {
+                    if ui.selectable_label(common_color == Some(Color::ByLayer), "ByLayer").clicked() {
+                        chosen = Some(Color::ByLayer);
+                    }
+                    if ui.selectable_label(common_color == Some(Color::ByBlock), "ByBlock").clicked() {
+                        chosen = Some(Color::ByBlock);
+                    }
+                    for &(index, name) in NAMED_COLORS {
+                        ui.horizontal(|ui| {
+                            swatch(ui, index);
+                            if ui.selectable_label(common_color == Some(Color::Index(index)), name).clicked() {
+                                chosen = Some(Color::Index(index));
+                            }
+                        });
+                    }
+                });
+            shown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Color"));
+            match chosen {
+                Some(color) if none => self.set_current(CurrentProps { color, ..current.clone() }),
+                Some(color) => self.edit(selected.iter().map(|e| e.id), |e| e.color = color),
+                None => {}
             }
             ui.end_row();
 
@@ -282,38 +285,29 @@ impl OxidraftApp {
             }
             ui.end_row();
 
-            // Linetype and lineweight; new objects are always ByLayer.
             label_cell(ui, "Linetype");
             let names: Vec<String> = [linetype::BYLAYER, linetype::BYBLOCK]
                 .into_iter()
                 .map(String::from)
                 .chain(self.doc.linetypes().into_iter().map(|l| l.name))
                 .collect();
-            let common_linetype = if selected.is_empty() {
-                Some(linetype::BYLAYER.into())
-            } else {
-                common(selected.iter().map(|e| e.linetype.clone()))
-            };
-            let picked = ui.add_enabled_ui(!selected.is_empty(), |ui| {
-                linetype_menu(ui, common_linetype.as_deref(), &names, "props_linetype", width)
-            });
-            if let Some(linetype) = picked.inner {
-                self.edit(selected.iter().map(|e| e.id), |e| e.linetype = linetype.clone());
+            let common_linetype =
+                if none { Some(current.linetype.clone()) } else { common(selected.iter().map(|e| e.linetype.clone())) };
+            match linetype_menu(ui, common_linetype.as_deref(), &names, "props_linetype", width, "Linetype") {
+                Some(linetype) if none => self.set_current(CurrentProps { linetype, ..current.clone() }),
+                Some(linetype) => self.edit(selected.iter().map(|e| e.id), |e| e.linetype = linetype.clone()),
+                None => {}
             }
             ui.end_row();
 
             label_cell(ui, "Lineweight");
-            let common_weight = if selected.is_empty() {
-                Some(Lineweight::ByLayer)
-            } else {
-                common(selected.iter().map(|e| e.lineweight))
-            };
+            let common_weight =
+                if none { Some(current.lineweight) } else { common(selected.iter().map(|e| e.lineweight)) };
             let special = [Lineweight::ByLayer, Lineweight::ByBlock, Lineweight::Default];
-            let picked = ui.add_enabled_ui(!selected.is_empty(), |ui| {
-                lineweight_menu(ui, common_weight, &special, "props_lineweight", width)
-            });
-            if let Some(lineweight) = picked.inner {
-                self.edit(selected.iter().map(|e| e.id), |e| e.lineweight = lineweight);
+            match lineweight_menu(ui, common_weight, &special, "props_lineweight", width, "Lineweight") {
+                Some(lineweight) if none => self.set_current(CurrentProps { lineweight, ..current.clone() }),
+                Some(lineweight) => self.edit(selected.iter().map(|e| e.id), |e| e.lineweight = lineweight),
+                None => {}
             }
             ui.end_row();
         });
@@ -643,6 +637,13 @@ impl OxidraftApp {
     }
 
     /// Applies one undoable edit to several objects.
+    /// What new objects get, as one undoable step.
+    pub(crate) fn set_current(&mut self, props: CurrentProps) {
+        self.doc.begin("Current properties");
+        self.doc.set_current_props(props);
+        self.doc.commit();
+    }
+
     pub(crate) fn edit(&mut self, ids: impl IntoIterator<Item = EntityId>, f: impl Fn(&mut Entity)) {
         self.doc.begin("PROPERTIES");
         for id in ids {
