@@ -50,7 +50,7 @@ use crate::{
     layer::LayIso,
     layer::LayMcur,
     layer::LayerPick,
-    layer_tools::{LayCur, LayDel, LayMrg, ToLayer},
+    layer_tools::{LayCur, LayDel, LayMrg, LayVpi, ToLayer},
     layouts::LayoutCommand,
     leader_edit::{MLeaderAlign, MLeaderEdit},
     lengthen::Lengthen,
@@ -675,6 +675,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         name: "PUBLISH",
         aliases: &[],
         description: "Plot several sheets, from this drawing and others, to one PDF (Batch Plot)",
+        make: None,
+    },
+    CommandInfo {
+        name: "LAYVPI",
+        aliases: &[],
+        description: "Freeze the selected objects' layers in every viewport but one",
+        make: Some(|| Box::new(LayVpi::default())),
+    },
+    CommandInfo {
+        name: "LAYERSTATE",
+        aliases: &["LAS"],
+        description: "Save and restore named layer settings (Layer States Manager)",
         make: None,
     },
     CommandInfo {

@@ -752,6 +752,9 @@ const TRANSPARENCY_APP: &str = "AcCmTransparency";
 /// key (1) and value (40) pairs.
 pub const SETTINGS_RECORD: &str = "OXIDRAFT_SETTINGS";
 
+/// The XRECORD the drawing's layer states are kept in (see the DWG writer).
+pub const LAYER_STATES_RECORD: &str = "OXIDRAFT_LAYER_STATES";
+
 /// The settings worth keeping that DXF has no place for: the multileader
 /// and table styles, as key and value pairs.
 pub fn settings_of(doc: &Document) -> Vec<(&'static str, f64)> {
@@ -767,7 +770,42 @@ pub fn settings_of(doc: &Document) -> Vec<(&'static str, f64)> {
     ]
 }
 
+fn read_layer_states(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
+    let Some(handle) = raw.dictionaries.values().flatten().find(|(n, _)| n == LAYER_STATES_RECORD).map(|(_, h)| *h)
+    else {
+        return;
+    };
+    let Some(pairs) = raw.xrecords.get(&handle) else { return };
+    let mut states: Vec<oxidraft_model::LayerState> = Vec::new();
+    for (code, value) in pairs {
+        let state = states.last_mut();
+        let layer = state.and_then(|s| s.layers.last_mut());
+        let int = || value.trim().parse::<i32>().unwrap_or(0);
+        match (code, layer) {
+            (1, _) => states.push(oxidraft_model::LayerState {
+                name: value.clone(),
+                description: String::new(),
+                layers: Vec::new(),
+                current: "0".into(),
+            }),
+            (3, _) => states.last_mut().into_iter().for_each(|s| s.description = value.clone()),
+            (2, _) => states.last_mut().into_iter().for_each(|s| s.current = value.clone()),
+            (8, _) => states.last_mut().into_iter().for_each(|s| s.layers.push(Layer::new(value.clone(), 7))),
+            (90, Some(l)) => (l.on, l.frozen, l.locked) = (int() & 1 != 0, int() & 2 != 0, int() & 4 != 0),
+            (62, Some(l)) => l.color = int().clamp(1, 255) as u8,
+            (6, Some(l)) => l.linetype = value.clone(),
+            (370, Some(l)) => l.lineweight = Lineweight::from_dxf(int() as i16),
+            (440, Some(l)) => l.transparency = int().clamp(0, 90) as u8,
+            _ => {}
+        }
+    }
+    for s in states {
+        doc.add_layer_state(s);
+    }
+}
+
 fn read_settings(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
+    read_layer_states(doc, raw);
     let Some(handle) = raw.dictionaries.values().flatten().find(|(n, _)| n == SETTINGS_RECORD).map(|(_, h)| *h) else {
         return;
     };

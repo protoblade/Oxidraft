@@ -157,6 +157,8 @@ const LAYERS_MORE: &[Tool] = &[
     tool(Icon::Join, "Merge", Some("LAYMRG"), "Merges layers into another; their objects move (LAYMRG)"),
     tool(Icon::Erase, "Delete", Some("LAYDEL"), "Deletes a layer and everything on it (LAYDEL)"),
     tool(Icon::Undo, "Previous", Some("LAYERP"), "Puts back the layer settings before the last change (LAYP)"),
+    tool(Icon::LayerProperties, "Layer States...", Some("LAYERSTATE"), "Saves and restores named layer settings (LAS)"),
+    tool(Icon::Viewport, "Isolate to Current Viewport", Some("LAYVPI"), "Freezes layers in every other viewport"),
 ];
 const ANNOTATION_LARGE: &[Tool] = &[
     tool(Icon::Text, "Text", Some("MTEXT"), "Creates multiline text (T); single-line text is DT"),

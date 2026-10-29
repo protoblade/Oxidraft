@@ -23,8 +23,8 @@ mod xref;
 pub use annotation::{Attach, TextLook, TextStyle};
 pub use clip::clip_to_convex;
 pub use document::{
-    AttributeDisplay, Block, BlockEntity, CurrentProps, Document, Group, Layer, NamedView, Styled, check_name,
-    sanitize_name,
+    AttributeDisplay, Block, BlockEntity, CurrentProps, Document, Group, Layer, LayerState, NamedView, Styled,
+    check_name, sanitize_name,
 };
 pub use entity::{
     Attribute, Color, Entity, EntityId, FAR, Geometry, Placement, Vertex, XClip, constant_width, viewport_corners,

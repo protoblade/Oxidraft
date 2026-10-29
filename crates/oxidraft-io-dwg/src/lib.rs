@@ -700,6 +700,32 @@ mod tests {
     }
 
     #[test]
+    fn layer_states_survive() {
+        use oxidraft_model::Layer;
+        let mut doc = Document::new();
+        doc.add_layer(Layer { linetype: "DASHED".into(), transparency: 20, ..Layer::new("Walls", 1) });
+        doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });
+        doc.save_layer_state("All on", "everything").unwrap();
+        let mut walls = doc.layer("Walls").cloned().unwrap();
+        walls.on = false;
+        walls.color = 3;
+        doc.update_layer(walls);
+        doc.save_layer_state("Walls off", "").unwrap();
+        let check = |back: &Document, how: &str| {
+            assert_eq!(back.layer_states(), doc.layer_states(), "{how}");
+        };
+        check(&oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+        // Restoring one puts the layers back.
+        let mut back = read(&write(&doc, Version::R2018).unwrap()).unwrap().imported.document;
+        back.restore_layer_state("All on").unwrap();
+        let w = back.layer("Walls").unwrap();
+        assert!(w.on && w.color == 1);
+    }
+
+    #[test]
     fn units_survive() {
         let mut doc = Document::new();
         doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });

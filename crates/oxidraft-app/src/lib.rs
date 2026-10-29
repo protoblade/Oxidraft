@@ -13,6 +13,7 @@ mod compare;
 mod drafting;
 mod drawing_units;
 mod icons;
+mod layer_states;
 mod layer_walk;
 mod layers;
 mod layouts;

@@ -254,6 +254,83 @@ impl Command for LayDel {
     }
 }
 
+/// LAYVPI: the selected objects' layers seen only in one viewport: frozen
+/// in every other viewport, on every layout.
+#[derive(Default)]
+pub struct LayVpi {
+    layers: Option<Vec<String>>,
+}
+
+impl Command for LayVpi {
+    fn prompt(&self) -> Prompt {
+        match self.layers {
+            None => Prompt::new("Select objects on the layers to be isolated in a viewport"),
+            Some(_) => Prompt::new("Select the viewport they stay seen in"),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (&self.layers, input) {
+            (None, Input::Selection(s)) => {
+                let mut layers: Vec<String> =
+                    s.ids.iter().filter_map(|id| ctx.doc.entity(*id)).map(|e| e.layer.clone()).collect();
+                layers.sort();
+                layers.dedup();
+                if layers.is_empty() {
+                    return Ok(Step::Done);
+                }
+                self.layers = Some(layers);
+                Ok(Step::Continue)
+            }
+            (Some(layers), Input::Pick { at, .. }) => {
+                let keep = ctx
+                    .pick(at)
+                    .filter(|id| {
+                        matches!(
+                            ctx.doc.entity(*id).map(|e| &e.geometry),
+                            Some(oxidraft_model::Geometry::Viewport { .. })
+                        )
+                    })
+                    .ok_or("Select a viewport's frame.")?;
+                let others: Vec<EntityId> = ctx
+                    .doc
+                    .all_entities()
+                    .filter(|e| e.id != keep && matches!(e.geometry, oxidraft_model::Geometry::Viewport { .. }))
+                    .map(|e| e.id)
+                    .collect();
+                let layers = layers.clone();
+                for id in &others {
+                    ctx.doc.update(*id, |e| {
+                        if let oxidraft_model::Geometry::Viewport { frozen, .. } = &mut e.geometry {
+                            for l in &layers {
+                                if !frozen.iter().any(|f| f.eq_ignore_ascii_case(l)) {
+                                    frozen.push(l.clone());
+                                }
+                            }
+                        }
+                    });
+                }
+                ctx.messages.push(format!(
+                    "{} layer(s) isolated: frozen in {} other viewport(s).",
+                    layers.len(),
+                    others.len()
+                ));
+                Ok(Step::Done)
+            }
+            (_, Input::Enter) => Ok(Step::Done),
+            _ => Err("Select objects, then a viewport.".into()),
+        }
+    }
+
+    fn wants_selection(&self) -> bool {
+        self.layers.is_none()
+    }
+
+    fn wants_pick(&self) -> bool {
+        self.layers.is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Engine;
@@ -329,5 +406,37 @@ mod tests {
         e.select_all(&d);
         run(&mut e, &mut d, &["laycur"]);
         assert!(d.entities().all(|x| x.layer == "0"));
+    }
+
+    #[test]
+    fn layvpi_freezes_layers_in_the_other_viewports() {
+        let (mut e, mut d) = (Engine::new(), doc());
+        let sheet = d.new_layout("Layout1").unwrap();
+        d.set_space(sheet);
+        let viewport = |x: f64| Geometry::Viewport {
+            center: Point::new(x, 50.0),
+            width: 40.0,
+            height: 40.0,
+            view_center: Point::ORIGIN,
+            view_height: 20.0,
+            twist: 0.0,
+            frozen: Vec::new(),
+            locked: false,
+            on: true,
+            clip: Vec::new(),
+        };
+        let (a, b) = (d.add(viewport(50.0)), d.add(viewport(150.0)));
+        d.set_space(oxidraft_model::MODEL);
+        run(&mut e, &mut d, &["layvpi"]);
+        click(&mut e, &mut d, 5.0, 0.0);
+        run(&mut e, &mut d, &[""]);
+        d.set_space(sheet);
+        click(&mut e, &mut d, 30.0, 50.0);
+        let frozen = |d: &Document, id| match &d.entity(id).unwrap().geometry {
+            Geometry::Viewport { frozen, .. } => frozen.clone(),
+            _ => Vec::new(),
+        };
+        assert!(frozen(&d, a).is_empty(), "kept in the picked one");
+        assert_eq!(frozen(&d, b), ["Walls"]);
     }
 }

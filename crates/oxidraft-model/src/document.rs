@@ -280,6 +280,10 @@ enum Change {
         before: CurrentProps,
         after: CurrentProps,
     },
+    LayerStates {
+        before: Vec<LayerState>,
+        after: Vec<LayerState>,
+    },
     /// The multileader and table styles.
     AnnotationStyles {
         before: (crate::annotation::LeaderStyle, crate::table::TableStyle),
@@ -358,6 +362,8 @@ pub struct Document {
     units: crate::units::Units,
     /// New objects' color, linetype and lineweight.
     current: CurrentProps,
+    /// LAYERSTATE: named layer settings.
+    layer_states: Vec<LayerState>,
     /// MLEADERSTYLE and TABLESTYLE.
     leader_style: crate::annotation::LeaderStyle,
     table_style: crate::table::TableStyle,
@@ -381,6 +387,17 @@ impl Group {
     pub fn is_unnamed(&self) -> bool {
         self.name.starts_with('*')
     }
+}
+
+/// A named snapshot of the layers' settings (LAYERSTATE): each layer's on,
+/// frozen and locked states, color, linetype, lineweight and transparency,
+/// and which was current.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerState {
+    pub name: String,
+    pub description: String,
+    pub layers: Vec<Layer>,
+    pub current: String,
 }
 
 /// What new objects get besides the current layer: CECOLOR, CELTYPE and
@@ -452,6 +469,7 @@ impl Document {
             dim_style: crate::annotation::DEFAULT_DIM_STYLE,
             units: crate::units::DEFAULT_UNITS,
             current: CurrentProps::by_layer(),
+            layer_states: Vec::new(),
             leader_style: crate::annotation::DEFAULT_LEADER_STYLE,
             table_style: crate::table::DEFAULT_TABLE_STYLE,
             text_styles: vec![crate::annotation::TextStyle::standard()],
@@ -544,6 +562,85 @@ impl Document {
             let before = std::mem::replace(&mut self.current, props.clone());
             self.record(Change::Current { before, after: props });
         }
+    }
+
+    /// LAYERSTATE: the saved layer states, by name.
+    pub fn layer_states(&self) -> &[LayerState] {
+        &self.layer_states
+    }
+
+    fn set_layer_states(&mut self, after: Vec<LayerState>) {
+        if after != self.layer_states {
+            let before = std::mem::replace(&mut self.layer_states, after.clone());
+            self.record(Change::LayerStates { before, after });
+        }
+    }
+
+    /// Saves the layers' settings now as `name` (replacing one so named).
+    pub fn save_layer_state(&mut self, name: &str, description: &str) -> Result<(), String> {
+        check_name(name.trim())?;
+        let state = LayerState {
+            name: name.trim().into(),
+            description: description.into(),
+            layers: self.table.layers.clone(),
+            current: self.table.current.clone(),
+        };
+        self.add_layer_state(state);
+        Ok(())
+    }
+
+    /// Adds a layer state (from a file), replacing one with its name.
+    pub fn add_layer_state(&mut self, state: LayerState) {
+        let mut states: Vec<LayerState> =
+            self.layer_states.iter().filter(|s| !s.name.eq_ignore_ascii_case(&state.name)).cloned().collect();
+        states.push(state);
+        states.sort_by_key(|s| s.name.to_lowercase());
+        self.set_layer_states(states);
+    }
+
+    /// Puts the layers back as state `name` had them; layers it doesn't
+    /// know stay as they are.
+    pub fn restore_layer_state(&mut self, name: &str) -> Result<(), String> {
+        let state = self.layer_states.iter().find(|s| s.name.eq_ignore_ascii_case(name.trim())).cloned();
+        let state = state.ok_or_else(|| format!("Layer state \"{}\" not found.", name.trim()))?;
+        let mut table = self.table.clone();
+        for l in &mut table.layers {
+            if let Some(saved) = state.layers.iter().find(|s| s.name.eq_ignore_ascii_case(&l.name)) {
+                *l = Layer { name: l.name.clone(), ..saved.clone() };
+            }
+        }
+        if table.layers.iter().any(|l| l.name.eq_ignore_ascii_case(&state.current)) {
+            table.current = table
+                .layers
+                .iter()
+                .find(|l| l.name.eq_ignore_ascii_case(&state.current))
+                .map(|l| l.name.clone())
+                .unwrap_or(table.current);
+        }
+        self.set_table(table);
+        Ok(())
+    }
+
+    pub fn delete_layer_state(&mut self, name: &str) -> bool {
+        let states: Vec<LayerState> =
+            self.layer_states.iter().filter(|s| !s.name.eq_ignore_ascii_case(name.trim())).cloned().collect();
+        let found = states.len() != self.layer_states.len();
+        self.set_layer_states(states);
+        found
+    }
+
+    pub fn rename_layer_state(&mut self, old: &str, new: &str) -> Result<(), String> {
+        check_name(new.trim())?;
+        if !old.eq_ignore_ascii_case(new.trim())
+            && self.layer_states.iter().any(|s| s.name.eq_ignore_ascii_case(new.trim()))
+        {
+            return Err(format!("A layer state named \"{}\" already exists.", new.trim()));
+        }
+        let mut states = self.layer_states.clone();
+        let s = states.iter_mut().find(|s| s.name.eq_ignore_ascii_case(old.trim())).ok_or("Layer state not found.")?;
+        s.name = new.trim().into();
+        self.set_layer_states(states);
+        Ok(())
     }
 
     /// MLEADERSTYLE: how multileaders look.
@@ -2054,6 +2151,7 @@ impl Document {
                     Change::Current { .. } => "Current properties",
                     Change::TextStyles { .. } => "Text style",
                     Change::AnnotationStyles { .. } => "Style",
+                    Change::LayerStates { .. } => "Layer state",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -2110,6 +2208,9 @@ impl Document {
             Change::DimStyle { before, after } => self.dim_style = if forward { *after } else { *before },
             Change::Units { before, after } => self.units = if forward { *after } else { *before },
             Change::Current { before, after } => self.current = if forward { after } else { before }.clone(),
+            Change::LayerStates { before, after } => {
+                self.layer_states = if forward { after } else { before }.clone();
+            }
             Change::AnnotationStyles { before, after } => {
                 (self.leader_style, self.table_style) = if forward { *after } else { *before };
             }

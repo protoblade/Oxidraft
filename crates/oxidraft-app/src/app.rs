@@ -130,6 +130,7 @@ pub struct OxidraftApp {
     pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
     pub(crate) style_dialog: Option<crate::annotation_styles::StyleDialog>,
     pub(crate) attribute_manager: Option<crate::battman::AttributeManager>,
+    pub(crate) layer_states_dialog: Option<crate::layer_states::LayerStatesDialog>,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
     pub(crate) ribbon_space: oxidraft_model::Space,
@@ -285,6 +286,7 @@ impl OxidraftApp {
             tolerance_dialog: None,
             style_dialog: None,
             attribute_manager: None,
+            layer_states_dialog: None,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
@@ -609,6 +611,7 @@ impl OxidraftApp {
             "TOLERANCE" | "TOL" => self.open_tolerance(),
             "MLEADERSTYLE" | "MLS" => self.open_leader_style(),
             "BATTMAN" => self.open_attribute_manager(),
+            "LAYERSTATE" | "LAS" => self.open_layer_states(),
             "TABLESTYLE" | "TS" => self.open_table_style(),
             "SELECTALL" | "AI_SELALL" => self.engine.select_all(&self.doc),
             "COMPARE" => self.compare_command(),
@@ -980,6 +983,7 @@ impl eframe::App for OxidraftApp {
         self.tolerance_dialog(&ctx);
         self.annotation_style_dialog(&ctx);
         self.attribute_manager_dialog(&ctx);
+        self.layer_states_dialog(&ctx);
         self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);

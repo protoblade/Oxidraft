@@ -2218,3 +2218,29 @@ fn transparency_from_the_properties_palette() {
         .map(|e| e.transparency);
     assert_eq!(t, Some(oxidraft_model::Transparency::ByBlock));
 }
+
+#[test]
+fn layer_states_manager_saves_and_restores() {
+    let mut h = app_with_line();
+    h.state_mut().document_mut().add_layer(oxidraft_model::Layer::new("Walls", 1));
+    type_all(&mut h, &["las"]);
+    h.run_steps(2);
+    h.get_by_label("New...").click();
+    h.run_steps(2);
+    let at = h.get_by_role_and_label(Role::TextInput, "New layer state name:").rect().center();
+    click(&mut h, at);
+    h.get_by_role_and_label(Role::TextInput, "New layer state name:").type_text("Plan");
+    h.run_steps(1);
+    let save = h.get_by_label("Save New").rect().center();
+    click(&mut h, save);
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().layer_states().len(), 1);
+    // Walls off, then the state brings it back on.
+    let doc = h.state_mut().document_mut();
+    let walls = doc.layer("Walls").cloned().unwrap();
+    doc.update_layer(oxidraft_model::Layer { on: false, ..walls });
+    h.run_steps(1);
+    h.get_by_label("Restore").click();
+    h.run_steps(2);
+    assert!(h.state_mut().document_mut().layer("Walls").unwrap().on);
+}
