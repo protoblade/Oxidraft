@@ -105,8 +105,10 @@ pub struct OxidraftApp {
     /// `Some(Some(kind))` snaps only to `kind`, `Some(None)` doesn't snap.
     pub(crate) snap_override: Option<Option<oxidraft_model::snap::SnapKind>>,
     pub(crate) properties_open: bool,
-    /// Row selected in the Layer Properties Manager.
-    pub(crate) selected_layer: Option<String>,
+    /// Rows selected in the Layer Properties Manager.
+    pub(crate) selected_layers: Vec<String>,
+    /// Where a Shift-click's run of layers starts.
+    pub(crate) layer_anchor: Option<String>,
     /// Layer being renamed: (old name, edit buffer).
     pub(crate) renaming_layer: Option<(String, String)>,
     /// Text fields drawn this frame (palettes, dialogs); the command line
@@ -183,7 +185,8 @@ impl OxidraftApp {
             layer_manager_open: false,
             snap_override: None,
             properties_open: false,
-            selected_layer: None,
+            selected_layers: Vec::new(),
+            layer_anchor: None,
             renaming_layer: None,
             text_fields: Vec::new(),
             prev_text_fields: Vec::new(),

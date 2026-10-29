@@ -225,13 +225,34 @@ fn main() {
     h.run_steps(3);
     save(&mut h, &dir, "12-update-available");
 
-    // Layer Properties Manager, with the Columns layer locked (drawn faded).
+    // Layer Properties Manager, with the Columns layer locked (drawn faded),
+    // long survey layer names and a long linetype name, and three layers
+    // picked with Shift to change together.
     let mut h = harness();
     let mut columns = h.state_mut().document_mut().layer("Columns").unwrap().clone();
     columns.locked = true;
     h.state_mut().document_mut().update_layer(columns);
+    {
+        let doc = h.state_mut().document_mut();
+        doc.define_linetype(oxidraft_model::Linetype {
+            name: "Полумасивна ограда обща за двата имота".into(),
+            description: String::new(),
+            pattern: vec![2.0, -1.0],
+        });
+        for name in
+            ["CAD_BORDER_Half_Mass_Fence_common", "CAD_BORDER_Massive_Fence_L_R", "CarevaLivada_VARBANOVO1_modifiedG"]
+        {
+            doc.add_layer(Layer {
+                linetype: "Полумасивна ограда обща за двата имота".into(), ..Layer::new(name, 250)
+            });
+        }
+    }
     h.state_mut().type_command("la");
     h.run_steps(3);
+    h.get_by_label("CAD_BORDER_Half_Mass_Fence_common").click();
+    h.run_steps(1);
+    h.get_by_label("CarevaLivada_VARBANOVO1_modifiedG").click_modifiers(eframe::egui::Modifiers::SHIFT);
+    h.run_steps(2);
     save(&mut h, &dir, "13-layer-manager");
 
     // Properties palette for a selected wall.

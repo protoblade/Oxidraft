@@ -95,16 +95,22 @@ pub fn swatch(ui: &mut Ui, aci: u8) -> Response {
 
 /// The on/freeze/lock icons for a layer. Returns the changed layer, if any.
 pub fn layer_state_icons(ui: &mut Ui, layer: &Layer) -> Option<Layer> {
+    // Named for screen readers by what a click does, and to which layer.
+    let icon = |ui: &mut Ui, kind, on, tip: &str| {
+        let response = state_icon(ui, kind, on, tip);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{tip}: {}", layer.name)));
+        response.clicked()
+    };
     let mut changed = None;
-    if state_icon(ui, LayerToggle::On, layer.on, if layer.on { "Turn off" } else { "Turn on" }).clicked() {
+    if icon(ui, LayerToggle::On, layer.on, if layer.on { "Turn off" } else { "Turn on" }) {
         changed = Some(Layer { on: !layer.on, ..layer.clone() });
     }
     let thawed = !layer.frozen;
-    if state_icon(ui, LayerToggle::Thawed, thawed, if thawed { "Freeze" } else { "Thaw" }).clicked() {
+    if icon(ui, LayerToggle::Thawed, thawed, if thawed { "Freeze" } else { "Thaw" }) {
         changed = Some(Layer { frozen: !layer.frozen, ..layer.clone() });
     }
     let unlocked = !layer.locked;
-    if state_icon(ui, LayerToggle::Unlocked, unlocked, if unlocked { "Lock" } else { "Unlock" }).clicked() {
+    if icon(ui, LayerToggle::Unlocked, unlocked, if unlocked { "Lock" } else { "Unlock" }) {
         changed = Some(Layer { locked: !layer.locked, ..layer.clone() });
     }
     changed
@@ -138,18 +144,27 @@ pub(crate) fn linetype_menu(
     names: &[String],
     salt: impl std::hash::Hash + std::fmt::Debug,
 ) -> Option<String> {
+    linetype_menu_sized(ui, current, names, salt, 120.0)
+}
+
+/// A linetype dropdown `width` wide, its text cut short to fit.
+pub(crate) fn linetype_menu_sized(
+    ui: &mut Ui,
+    current: Option<&str>,
+    names: &[String],
+    salt: impl std::hash::Hash + std::fmt::Debug,
+    width: f32,
+) -> Option<String> {
     let mut chosen = None;
-    let shown = egui::ComboBox::from_id_salt(salt).width(120.0).selected_text(current.unwrap_or("*VARIES*")).show_ui(
-        ui,
-        |ui| {
-            for name in names {
-                let on = current.is_some_and(|c| c.eq_ignore_ascii_case(name));
-                if ui.selectable_label(on, name).clicked() {
-                    chosen = Some(name.clone());
-                }
+    let menu = egui::ComboBox::from_id_salt(salt).width(width).truncate();
+    let shown = menu.selected_text(current.unwrap_or("*VARIES*")).show_ui(ui, |ui| {
+        for name in names {
+            let on = current.is_some_and(|c| c.eq_ignore_ascii_case(name));
+            if ui.selectable_label(on, name).clicked() {
+                chosen = Some(name.clone());
             }
-        },
-    );
+        }
+    });
     shown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Linetype"));
     chosen
 }
@@ -174,6 +189,10 @@ pub(crate) fn lineweight_menu(
     });
     shown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Lineweight"));
     chosen
+}
+
+fn name_font() -> egui::FontId {
+    egui::FontId::proportional(12.5)
 }
 
 /// The Layer Properties Manager window's id.
@@ -221,31 +240,94 @@ impl OxidraftApp {
             if ui.button("New Layer").on_hover_text("Creates a new layer").clicked() {
                 let name = self.doc.unused_layer_name();
                 self.doc.add_layer(Layer::new(name.clone(), 7));
-                self.selected_layer = Some(name.clone());
+                self.selected_layers = vec![name.clone()];
                 self.renaming_layer = Some((name.clone(), name));
             }
-            let selected = self.selected_layer.clone();
-            let can_delete = selected.as_deref().is_some_and(|n| n != "0" && n != self.doc.current_layer());
-            if ui.add_enabled(can_delete, egui::Button::new("Delete Layer")).clicked()
-                && let Some(name) = &selected
-            {
-                match self.doc.delete_layer(name) {
-                    Ok(()) => self.selected_layer = None,
-                    Err(e) => self.engine.log(e),
-                }
+            let selected = self.selected_layers.clone();
+            let current = self.doc.current_layer().to_string();
+            let can_delete = selected.iter().any(|n| n != "0" && *n != current);
+            let delete = egui::Button::new("Delete Layer");
+            if ui.add_enabled(can_delete, delete).on_hover_text("Deletes the selected layers").clicked() {
+                self.delete_layers(&selected);
             }
-            if ui.add_enabled(selected.is_some(), egui::Button::new("Set Current")).clicked()
-                && let Some(name) = &selected
-            {
-                self.doc.set_current_layer(name);
+            if let [one] = selected.as_slice() {
+                if ui.button("Set Current").clicked() {
+                    self.doc.set_current_layer(one);
+                }
+            } else {
+                ui.add_enabled(false, egui::Button::new("Set Current"));
+            }
+            if selected.len() > 1 {
+                ui.colored_label(theme::text_dim(), format!("{} layers selected", selected.len()));
             }
         });
     }
 
+    /// Delete Layer: deletes the selected layers it can, as one undo step,
+    /// and says why it can't delete the others.
+    fn delete_layers(&mut self, names: &[String]) {
+        self.doc.begin("LAYER");
+        for name in names {
+            match self.doc.delete_layer(name) {
+                Ok(()) => self.selected_layers.retain(|s| s != name),
+                Err(e) => self.engine.log(e),
+            }
+        }
+        self.doc.commit();
+    }
+
+    /// A change made on `name`'s row: to every selected layer if it's one of
+    /// them, as in AutoCAD, else to it alone (which becomes the selection).
+    /// One undo step.
+    fn change_layers(&mut self, name: &str, f: impl Fn(&mut Layer)) {
+        if !self.selected_layers.iter().any(|s| s == name) {
+            self.selected_layers = vec![name.to_string()];
+        }
+        self.doc.begin("LAYER");
+        for n in self.selected_layers.clone() {
+            if let Some(mut layer) = self.doc.layer(&n).cloned() {
+                f(&mut layer);
+                self.doc.update_layer(layer);
+            }
+        }
+        self.doc.commit();
+    }
+
+    /// A click on a layer's name: selects it alone; with Cmd (Ctrl) adds or
+    /// removes it; with Shift selects the run from the last one clicked.
+    fn click_layer(&mut self, ui: &Ui, name: &str, order: &[String]) {
+        let (toggle, range) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+        let anchor = self.layer_anchor.clone().filter(|a| order.contains(a));
+        if range && let Some(anchor) = anchor {
+            let (a, b) = (order.iter().position(|n| *n == anchor), order.iter().position(|n| n == name));
+            if let (Some(a), Some(b)) = (a, b) {
+                self.selected_layers = order[a.min(b)..=a.max(b)].to_vec();
+            }
+            return;
+        }
+        if toggle {
+            if self.selected_layers.iter().any(|s| s == name) {
+                self.selected_layers.retain(|s| s != name);
+            } else {
+                self.selected_layers.push(name.to_string());
+            }
+        } else {
+            self.selected_layers = vec![name.to_string()];
+        }
+        self.layer_anchor = Some(name.to_string());
+    }
+
     fn layer_table(&mut self, ui: &mut Ui) {
         let layers: Vec<Layer> = self.doc.layers().to_vec();
+        let order: Vec<String> = layers.iter().map(|l| l.name.clone()).collect();
         let current = self.doc.current_layer().to_string();
         let linetypes: Vec<String> = self.doc.linetypes().into_iter().map(|l| l.name).collect();
+        // Columns as wide as what's in them, up to a limit; longer names are
+        // cut short and shown whole on hover.
+        let text_width = |ui: &Ui, s: &str| ui.painter().layout_no_wrap(s.into(), name_font(), theme::text()).size().x;
+        let name_width = layers.iter().map(|l| text_width(ui, &l.name)).fold(0.0, f32::max).clamp(112.0, 360.0) + 10.0;
+        let in_use = layers.iter().map(|l| l.linetype.as_str());
+        let linetype_width = in_use.map(|n| text_width(ui, n)).fold(0.0, f32::max).clamp(96.0, 300.0) + 12.0;
         egui::Grid::new("layer_table").striped(true).num_columns(7).spacing([12.0, 4.0]).show(ui, |ui| {
             for title in ["Status", "Name", "On  Freeze  Lock", "Color", "Linetype", "Lineweight", "Objects"] {
                 ui.colored_label(theme::text_dim(), title);
@@ -253,7 +335,7 @@ impl OxidraftApp {
             ui.end_row();
             for layer in layers {
                 let is_current = layer.name == current;
-                let selected = self.selected_layer.as_deref() == Some(layer.name.as_str());
+                let selected = self.selected_layers.contains(&layer.name);
                 // Status: a green check on the current layer.
                 let (rect, status) = ui.allocate_exact_size(vec2(36.0, 18.0), Sense::click());
                 if is_current {
@@ -264,23 +346,31 @@ impl OxidraftApp {
                 if status.double_clicked() {
                     self.doc.set_current_layer(&layer.name);
                 }
-                self.layer_name_cell(ui, &layer, selected);
+                self.layer_name_cell(ui, &layer, selected, name_width, &order);
                 ui.horizontal(|ui| {
                     ui.add_space(4.0);
                     if let Some(changed) = layer_state_icons(ui, &layer) {
-                        self.doc.update_layer(changed);
+                        let name = &layer.name;
+                        if changed.on != layer.on {
+                            self.change_layers(name, |l| l.on = changed.on);
+                        } else if changed.frozen != layer.frozen {
+                            self.change_layers(name, |l| l.frozen = changed.frozen);
+                        } else if changed.locked != layer.locked {
+                            self.change_layers(name, |l| l.locked = changed.locked);
+                        }
                     }
                 });
                 if let Some(color) = color_menu(ui, layer.color, ("layer_color", &layer.name)) {
-                    self.doc.update_layer(Layer { color, ..layer.clone() });
+                    self.change_layers(&layer.name, |l| l.color = color);
                 }
                 let salt = ("layer_linetype", &layer.name);
-                if let Some(linetype) = linetype_menu(ui, Some(&layer.linetype), &linetypes, salt) {
-                    self.doc.update_layer(Layer { linetype, ..layer.clone() });
+                if let Some(linetype) = linetype_menu_sized(ui, Some(&layer.linetype), &linetypes, salt, linetype_width)
+                {
+                    self.change_layers(&layer.name, |l| l.linetype = linetype.clone());
                 }
                 let salt = ("layer_lineweight", &layer.name);
                 if let Some(lineweight) = lineweight_menu(ui, Some(layer.lineweight), &[Lineweight::Default], salt) {
-                    self.doc.update_layer(Layer { lineweight, ..layer.clone() });
+                    self.change_layers(&layer.name, |l| l.lineweight = lineweight);
                 }
                 ui.label(self.doc.layer_usage(&layer.name).to_string());
                 ui.end_row();
@@ -288,13 +378,14 @@ impl OxidraftApp {
         });
     }
 
-    /// The name column: click to select, double-click to rename, Enter to commit.
-    fn layer_name_cell(&mut self, ui: &mut Ui, layer: &Layer, selected: bool) {
+    /// The name column, `width` wide: click to select (Cmd and Shift for
+    /// several), double-click to rename, Enter to commit.
+    fn layer_name_cell(&mut self, ui: &mut Ui, layer: &Layer, selected: bool, width: f32, order: &[String]) {
         if let Some((old, buffer)) = &mut self.renaming_layer
             && *old == layer.name
         {
             let id = Id::unique(("layer_rename", &layer.name));
-            let response = ui.add(egui::TextEdit::singleline(buffer).id(id).desired_width(160.0));
+            let response = ui.add(egui::TextEdit::singleline(buffer).id(id).desired_width(width));
             self.text_fields.push(id);
             if !response.has_focus() && !response.lost_focus() {
                 response.request_focus();
@@ -307,29 +398,30 @@ impl OxidraftApp {
                     let result = self.doc.rename_layer(&old, &new);
                     self.doc.commit();
                     match result {
-                        Ok(()) => self.selected_layer = Some(new),
+                        Ok(()) => self.selected_layers = vec![new],
                         Err(e) => self.engine.log(e),
                     }
                 }
             }
             return;
         }
-        let (rect, label) = ui.allocate_exact_size(vec2(160.0, 18.0), Sense::click());
+        let (rect, label) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click());
         if selected {
             ui.painter().rect_filled(rect, 2.0, theme::accent().gamma_multiply(0.35));
         } else if label.hovered() {
             ui.painter().rect_filled(rect, 2.0, theme::ribbon_hover());
         }
-        ui.painter().text(
-            rect.left_center() + vec2(4.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            &layer.name,
-            egui::FontId::proportional(12.5),
-            theme::text(),
-        );
-        let label = label.on_hover_text("Double-click to rename");
+        // A name too long for the column is cut short with an ellipsis.
+        let mut job = egui::text::LayoutJob::simple_singleline(layer.name.clone(), name_font(), theme::text());
+        job.wrap = egui::text::TextWrapping::truncate_at_width(width - 8.0);
+        let galley = ui.painter().layout_job(job);
+        let cut = galley.elided;
+        ui.painter().galley(rect.left_center() + vec2(4.0, -galley.size().y / 2.0), galley, theme::text());
+        label.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &layer.name));
+        let tip = if cut { format!("{}\nDouble-click to rename", layer.name) } else { "Double-click to rename".into() };
+        let label = label.on_hover_text(tip);
         if label.clicked() {
-            self.selected_layer = Some(layer.name.clone());
+            self.click_layer(ui, &layer.name, order);
         }
         if label.double_clicked() && layer.name != "0" {
             self.renaming_layer = Some((layer.name.clone(), layer.name.clone()));

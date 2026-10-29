@@ -797,3 +797,48 @@ fn turning_on_a_missing_images_layer_lets_you_find_its_file() {
     assert!(h.state_mut().engine_mut().history().iter().any(|l| l.starts_with("Found 2 more missing image(s)")));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn layer_manager_fits_long_names_and_changes_several_layers_at_once() {
+    use oxidraft_model::Layer;
+    let long = "CAD_BORDER_Half_Mass_Fence_common_with_the_neighbour";
+    let names = [long, "Short", "CarevaLivada_VARBANOVO1_modifiedG"];
+    let mut h = app_with_line();
+    for n in names {
+        h.state_mut().document_mut().add_layer(Layer::new(n, 3));
+    }
+    h.state_mut().type_command("la");
+    h.run_steps(3);
+    // The name column is as wide as the longest name: no name runs under
+    // the On icon beside it.
+    for n in names {
+        let name = h.get_by_label(n).rect();
+        let bulb = h.get_by_label(&format!("Turn off: {n}")).rect();
+        assert!(name.max.x <= bulb.min.x, "{n}: {name:?} runs into {bulb:?}");
+    }
+    let layer = |h: &mut Harness<'_, OxidraftApp>, n: &str| h.state_mut().document_mut().layer(n).cloned().unwrap();
+    // Click the first, Shift-click the third: all three are selected, and
+    // turning one off turns them all off, as one undo step.
+    h.get_by_label(names[0]).click();
+    h.run_steps(1);
+    h.get_by_label(names[2]).click_modifiers(eframe::egui::Modifiers::SHIFT);
+    h.run_steps(1);
+    h.get_by_label(&format!("Turn off: {}", names[1])).click();
+    h.run_steps(2);
+    assert!(names.iter().all(|n| !layer(&mut h, n).on));
+    assert!(layer(&mut h, "0").on, "not selected");
+    h.state_mut().type_command("u");
+    h.run_steps(2);
+    assert!(names.iter().all(|n| layer(&mut h, n).on), "undone in one step");
+    // Cmd-click takes one out; freezing then leaves it alone.
+    h.get_by_label(names[1]).click_modifiers(eframe::egui::Modifiers::COMMAND);
+    h.run_steps(1);
+    h.get_by_label(&format!("Freeze: {}", names[0])).click();
+    h.run_steps(2);
+    assert!(layer(&mut h, names[0]).frozen && layer(&mut h, names[2]).frozen && !layer(&mut h, names[1]).frozen);
+    // A click on a row not selected changes it alone (the ribbon's layer
+    // control has a Lock for layer 0 too; the manager's comes after it).
+    h.get_all_by_label("Lock: 0").last().unwrap().click();
+    h.run_steps(2);
+    assert!(layer(&mut h, "0").locked && !layer(&mut h, names[0]).locked);
+}
