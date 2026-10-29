@@ -53,6 +53,7 @@ use crate::{
     line::Line,
     list::List,
     matchprop::MatchProp,
+    measuregeom::{Base, MeasureGeom},
     mirror::Mirror,
     move_copy::MoveCopy,
     mview::{Mview, VpClip, VpMax},
@@ -505,6 +506,38 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["-ST"],
         description: "Make or change a text style at the command line",
         make: Some(|| Box::new(StyleCmd::default())),
+    },
+    CommandInfo {
+        name: "MEASUREGEOM",
+        aliases: &["MEA"],
+        description: "Measure distances, radii, angles, areas and volumes",
+        make: Some(|| Box::new(MeasureGeom::default())),
+    },
+    CommandInfo {
+        name: "BASE",
+        aliases: &[],
+        description: "Set the point the drawing is inserted by (INSBASE)",
+        make: Some(|| Box::new(Base::default())),
+    },
+    CommandInfo { name: "OOPS", aliases: &[], description: "Bring back what the last ERASE erased", make: None },
+    CommandInfo { name: "SELECTALL", aliases: &["AI_SELALL"], description: "Select every object", make: None },
+    CommandInfo {
+        name: "DSETTINGS",
+        aliases: &["DS", "SE", "DDRMODES"],
+        description: "Snap and grid, polar tracking, object snaps and dynamic input (Drafting Settings)",
+        make: None,
+    },
+    CommandInfo {
+        name: "OSNAP",
+        aliases: &["OS", "DDOSNAP"],
+        description: "Choose the running object snaps (Drafting Settings' Object Snap tab)",
+        make: None,
+    },
+    CommandInfo {
+        name: "PTYPE",
+        aliases: &["DDPTYPE"],
+        description: "Choose how points look, and their size (Point Style)",
+        make: None,
     },
     CommandInfo {
         name: "EXPORTPDF",
@@ -2073,6 +2106,12 @@ impl Engine {
                     "LAYUNISO" => crate::layer::unisolate(doc, &mut self.vars),
                     _ => crate::layer::all_layers(doc, name == "LAYTHW"),
                 };
+                doc.commit();
+                msg
+            }
+            "OOPS" => {
+                doc.begin(name);
+                let msg = crate::measuregeom::oops(doc, &mut self.vars);
                 doc.commit();
                 msg
             }

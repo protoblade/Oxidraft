@@ -189,9 +189,14 @@ const ANNOTATE_DIMENSIONS: &[Tool] = &[
 const UTILITIES_LARGE: &[Tool] = &[tool(
     Icon::Measure,
     "Measure",
-    Some("DIST"),
-    "Measures the distance between two points (DI); also AREA (AA) and ID",
+    Some("MEASUREGEOM"),
+    "Measures distances, radii, angles, areas and volumes (MEA)",
 )];
+const UTILITIES_SMALL: &[Tool] = &[
+    tool(Icon::Properties, "Select All", Some("SELECTALL"), "Selects every object (Cmd+A)"),
+    tool(Icon::Point, "Point Style...", Some("PTYPE"), "How points look, and their size"),
+    tool(Icon::Measure, "Drafting Settings...", Some("DSETTINGS"), "Snap, grid, polar tracking, object snaps (DS)"),
+];
 
 const NOT_YET: &str = "Not available in Oxidraft yet";
 
@@ -872,6 +877,11 @@ impl OxidraftApp {
             for t in UTILITIES_LARGE {
                 self.large_tool(ui, t);
             }
+            ui.vertical(|ui| {
+                for t in UTILITIES_SMALL {
+                    self.small_tool(ui, t);
+                }
+            });
         });
     }
 
@@ -1173,6 +1183,10 @@ impl OxidraftApp {
                                     self.osnap = true;
                                 }
                             }
+                        }
+                        ui.separator();
+                        if ui.button("Object Snap Settings...").clicked() {
+                            self.open_drafting_settings(2);
                         }
                     });
                     let mut osnap = self.osnap;

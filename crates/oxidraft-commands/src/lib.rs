@@ -44,6 +44,7 @@ mod lengthen;
 mod line;
 mod list;
 mod matchprop;
+mod measuregeom;
 mod mirror;
 mod move_copy;
 mod mview;
@@ -239,6 +240,10 @@ pub struct Vars {
     pub revcloud_polygonal: bool,
     /// COLORTHEME: 0 dark, 1 light. The app keeps it; it's here for the prompt.
     pub color_theme: u8,
+    /// What the last ERASE took out, for OOPS to put back.
+    pub erased: Vec<oxidraft_model::Entity>,
+    /// The last area AREA or MEASUREGEOM measured (for Volume).
+    pub last_area: f64,
     /// SNAPMODE (F9) and SNAPUNIT: the cursor jumps to points this far
     /// apart, from the origin, when no object snap applies.
     pub snap: bool,
@@ -282,6 +287,8 @@ impl Default for Vars {
             revcloud_calligraphy: false,
             revcloud_polygonal: false,
             color_theme: 0,
+            erased: Vec::new(),
+            last_area: 0.0,
             snap: false,
             snap_spacing: 10.0,
             view_aspect: 1.5,

@@ -2050,3 +2050,34 @@ fn text_style_dialog_makes_a_style_that_new_text_gets() {
     h.run_steps(2);
     assert_eq!(h.state_mut().document_mut().current_text_style().name, "Standard");
 }
+
+#[test]
+fn drafting_settings_and_point_style() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["os"]);
+    h.run_steps(2);
+    // The Object Snap tab: Clear All, then Endpoint only.
+    h.get_by_label("Clear All").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(Role::CheckBox, "Endpoint").click();
+    h.run_steps(1);
+    h.get_by_label("Polar Tracking").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::ComboBox, "Increment angle").click();
+    h.run_steps(2);
+    h.get_by_label("30").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().engine_mut().polar_increment, 30.0);
+    type_all(&mut h, &["ptype"]);
+    h.run_steps(2);
+    h.get_by_label("PDMODE 35").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().pdmode(), 35);
+    // SELECTALL selects both lines.
+    type_all(&mut h, &["selectall"]);
+    assert_eq!(h.state_mut().engine_mut().selection().len(), 2);
+}

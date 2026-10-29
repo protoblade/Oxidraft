@@ -593,7 +593,11 @@ impl OxidraftApp {
 
     /// Adaptive grid: minor lines with a major line every 5 (GRIDMAJOR).
     pub(crate) fn draw_grid(&self, painter: &Painter, rect: Rect) {
-        let (minor, major) = self.view.grid_step(10.0);
+        // A set spacing while it's at least 4 pixels apart; else adaptive.
+        let (minor, major) = match self.grid_spacing {
+            Some(s) if s * self.view.scale >= 4.0 => (s, s * 5.0),
+            _ => self.view.grid_step(10.0),
+        };
         let min = self.view.to_world(rect, rect.left_bottom());
         let max = self.view.to_world(rect, rect.right_top());
         let ratio = (major / minor).round() as i64;
@@ -903,30 +907,7 @@ impl OxidraftApp {
             s if s < 0.0 => rect.height() * (-s) as f32 / 100.0,
             _ => rect.height() * 0.05,
         };
-        let h = full / 2.0;
-        match mode & 31 {
-            0 => {
-                painter.circle_filled(at, (stroke.width / 2.0).max(1.0), stroke.color);
-            }
-            2 => {
-                painter.line_segment([at - vec2(h, 0.0), at + vec2(h, 0.0)], stroke);
-                painter.line_segment([at - vec2(0.0, h), at + vec2(0.0, h)], stroke);
-            }
-            3 => {
-                painter.line_segment([at - vec2(h, h), at + vec2(h, h)], stroke);
-                painter.line_segment([at + vec2(-h, h), at + vec2(h, -h)], stroke);
-            }
-            4 => {
-                painter.line_segment([at, at - vec2(0.0, h)], stroke);
-            }
-            _ => {}
-        }
-        if mode & 32 != 0 {
-            painter.circle_stroke(at, h, stroke);
-        }
-        if mode & 64 != 0 {
-            painter.rect_stroke(Rect::from_center_size(at, vec2(full, full)), 0.0, stroke, StrokeKind::Middle);
-        }
+        paint_point(painter, at, mode, full, stroke);
     }
 
     /// Text at its attachment point. AutoCAD's text height is the capital
@@ -1320,6 +1301,34 @@ fn tooltip(painter: &Painter, at: Pos2, lines: &[String], fields: Option<&[Strin
             first_field = false;
         }
         painter.galley(pos, galley, theme::text());
+    }
+}
+
+/// A point's mark in PDMODE style `mode`, `full` pixels across.
+pub(crate) fn paint_point(painter: &Painter, at: Pos2, mode: i32, full: f32, stroke: Stroke) {
+    let h = full / 2.0;
+    match mode & 31 {
+        0 => {
+            painter.circle_filled(at, (stroke.width / 2.0).max(1.0), stroke.color);
+        }
+        2 => {
+            painter.line_segment([at - vec2(h, 0.0), at + vec2(h, 0.0)], stroke);
+            painter.line_segment([at - vec2(0.0, h), at + vec2(0.0, h)], stroke);
+        }
+        3 => {
+            painter.line_segment([at - vec2(h, h), at + vec2(h, h)], stroke);
+            painter.line_segment([at + vec2(-h, h), at + vec2(h, -h)], stroke);
+        }
+        4 => {
+            painter.line_segment([at, at - vec2(0.0, h)], stroke);
+        }
+        _ => {}
+    }
+    if mode & 32 != 0 {
+        painter.circle_stroke(at, h, stroke);
+    }
+    if mode & 64 != 0 {
+        painter.rect_stroke(Rect::from_center_size(at, vec2(full, full)), 0.0, stroke, StrokeKind::Middle);
     }
 }
 

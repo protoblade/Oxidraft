@@ -129,6 +129,7 @@ pub(crate) fn object_area(g: &Geometry) -> Option<(f64, f64, &'static str)> {
 
 impl Area {
     fn report(ctx: &mut Ctx, area: f64, perimeter: f64, word: &str) {
+        ctx.vars.last_area = area;
         ctx.messages.push(format!("Area = {}, {word} = {}", units::area(area), units::length(perimeter)));
     }
 

@@ -12,6 +12,7 @@ impl Command for Erase {
     fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
         match input {
             Input::Selection(selection) => {
+                ctx.vars.erased = selection.ids.iter().filter_map(|id| ctx.doc.entity(*id).cloned()).collect();
                 for id in selection.ids {
                     ctx.doc.remove(id);
                 }

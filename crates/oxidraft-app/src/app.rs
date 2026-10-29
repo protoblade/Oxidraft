@@ -22,6 +22,8 @@ pub struct OxidraftApp {
     pub(crate) osnap_modes: Vec<oxidraft_model::snap::SnapKind>,
     /// GRIDMODE (F7).
     pub(crate) grid: bool,
+    /// GRIDUNIT: the grid's spacing; `None` adapts to the zoom.
+    pub(crate) grid_spacing: Option<f64>,
     /// LWDISPLAY: draw lines as thick as their lineweight.
     pub(crate) show_lineweights: bool,
     pub(crate) command_text: String,
@@ -123,6 +125,8 @@ pub struct OxidraftApp {
     pub(crate) linetype_manager: Option<crate::object_props::LinetypeManager>,
     pub(crate) lineweight_dialog: Option<crate::object_props::LineweightDialog>,
     pub(crate) text_style_dialog: Option<crate::text_styles::TextStyleDialog>,
+    pub(crate) drafting_settings: Option<crate::drafting::DraftingSettings>,
+    pub(crate) point_style: Option<crate::drafting::PointStyle>,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
     pub(crate) ribbon_space: oxidraft_model::Space,
@@ -213,6 +217,7 @@ impl OxidraftApp {
             osnap: true,
             osnap_modes: oxidraft_model::snap::SnapKind::DEFAULT_RUNNING.to_vec(),
             grid: true,
+            grid_spacing: None,
             show_lineweights: false,
             command_text: String::new(),
             path: None,
@@ -272,6 +277,8 @@ impl OxidraftApp {
             linetype_manager: None,
             lineweight_dialog: None,
             text_style_dialog: None,
+            drafting_settings: None,
+            point_style: None,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
@@ -589,6 +596,10 @@ impl OxidraftApp {
             "LINETYPE" | "LT" | "LTYPE" => self.open_linetype_manager(),
             "LWEIGHT" | "LW" | "LINEWEIGHT" => self.open_lineweight_settings(),
             "STYLE" | "ST" | "DDSTYLE" => self.open_text_style(),
+            "DSETTINGS" | "DS" | "SE" | "DDRMODES" => self.open_drafting_settings(0),
+            "OSNAP" | "OS" | "DDOSNAP" => self.open_drafting_settings(2),
+            "PTYPE" | "DDPTYPE" => self.open_point_style(),
+            "SELECTALL" | "AI_SELALL" => self.engine.select_all(&self.doc),
             "COMPARE" => self.compare_command(),
             "DIMSTYLE" | "D" | "DST" => self.open_dim_style(),
             "FIND" => self.find_replace = Some(Default::default()),
@@ -953,6 +964,8 @@ impl eframe::App for OxidraftApp {
         self.linetype_manager_dialog(&ctx);
         self.lineweight_dialog(&ctx);
         self.text_style_dialog(&ctx);
+        self.drafting_settings_dialog(&ctx);
+        self.point_style_dialog(&ctx);
         self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);
