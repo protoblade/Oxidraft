@@ -8,7 +8,7 @@ use eframe::egui::{
 };
 use eframe::egui::{pos2, vec2};
 use oxidraft_geom::{Aabb, Point};
-use oxidraft_model::{Document, hatch};
+use oxidraft_model::{Document, MODEL, Space, hatch};
 use std::sync::Arc;
 
 use oxidraft_plot::{Item, PAPERS, Picture, PlotArea, PlotScale, PlotSettings, PlotStyle, SCALES, Sheet, scale_label};
@@ -27,6 +27,8 @@ pub(crate) struct PlotDialog {
     /// The sheet as last laid out, with the settings and drawing revision
     /// it was laid out for.
     sheet: Option<(PlotSettings, u64, Option<Sheet>)>,
+    /// Model space or the layout plotted.
+    space: Space,
 }
 
 impl PlotDialog {
@@ -36,7 +38,7 @@ impl PlotDialog {
     fn refresh(&mut self, doc: &Document, revision: u64, pictures: &dyn Fn(&str) -> Option<Arc<Picture>>) {
         let current = matches!(&self.sheet, Some((s, rev, _)) if *s == self.settings && *rev == revision);
         if !current {
-            let sheet = oxidraft_plot::render_with_pictures(doc, &self.settings, pictures);
+            let sheet = oxidraft_plot::render_with_pictures(doc, self.space, &self.settings, pictures);
             self.sheet = Some((self.settings, revision, sheet));
         }
     }
@@ -72,13 +74,25 @@ pub(crate) fn paint_sheet(
     painter.rect_filled(rect.translate(vec2(3.0, 3.0)), 0.0, Color32::from_black_alpha(90));
     painter.rect_filled(rect, 0.0, Color32::WHITE);
     if printable {
-        let p = l.printable();
+        let p = l.printable;
         let edge = Rect::from_two_pos(to(p.min), to(p.max));
         painter.rect_stroke(edge, 0.0, Stroke::new(1.0, Color32::from_gray(200)), egui::StrokeKind::Middle);
     }
     let clip = Rect::from_two_pos(to(l.clip.min), to(l.clip.max));
     let painter = painter.with_clip_rect(clip.intersect(painter.clip_rect()));
-    for item in &sheet.items {
+    paint_items(&painter, &sheet.items, &to, k, textures);
+}
+
+/// Paints plotted items; `to` puts a point of the sheet on screen, `k`
+/// screen points to the millimeter.
+fn paint_items(
+    painter: &Painter,
+    items: &[Item],
+    to: &dyn Fn(Point) -> Pos2,
+    k: f32,
+    textures: &dyn Fn(&str) -> Option<egui::TextureId>,
+) {
+    for item in items {
         match item {
             Item::Stroke { paths, width, color, .. } => {
                 let stroke = Stroke::new((*width as f32 * k).max(0.6), rgb(*color));
@@ -142,6 +156,10 @@ pub(crate) fn paint_sheet(
                 let pos = to(*at) - egui::emath::Rot2::from_angle(angle) * vec2(0.0, baseline);
                 painter.add(egui::epaint::TextShape::new(pos, galley, rgb(*color)).with_angle(angle));
             }
+            Item::Clipped { clip, items } => {
+                let clip = Rect::from_two_pos(to(clip.min), to(clip.max)).intersect(painter.clip_rect());
+                paint_items(&painter.with_clip_rect(clip), items, to, k, textures);
+            }
         }
     }
 }
@@ -163,21 +181,30 @@ fn section(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {
 }
 
 impl OxidraftApp {
-    /// The part of the drawing the drawing area shows.
+    /// The part of the drawing the drawing area shows (the sheet's part,
+    /// working in a viewport).
     fn displayed(&self) -> Aabb {
         let r = self.canvas_rect;
-        Aabb::from_points(self.view.to_world(r, r.left_bottom()), self.view.to_world(r, r.right_top()))
+        let view = self.active_viewport.filter(|a| !a.maximized).map_or(self.view, |a| a.page);
+        Aabb::from_points(view.to_world(r, r.left_bottom()), view.to_world(r, r.right_top()))
     }
 
     /// PLOT (or PREVIEW, straight to the preview), with the last plot's
-    /// settings; Display plots what's on screen now.
+    /// settings; Display plots what's on screen now. On a layout's tab it
+    /// plots the layout, as its page setup has it.
     pub(crate) fn open_plot(&mut self, preview: bool) {
         self.engine.cancel(&mut self.doc);
         let mut settings = self.plot_settings;
-        if let PlotArea::Display(_) = settings.area {
-            settings.area = PlotArea::Display(self.displayed());
+        let space = self.shown_space();
+        match settings.area {
+            PlotArea::Display(_) => settings.area = PlotArea::Display(self.displayed()),
+            PlotArea::Layout if space == MODEL => settings.area = PlotArea::Extents,
+            _ => {}
         }
-        self.plot = Some(PlotDialog { settings, picking: false, preview, preview_only: preview, sheet: None });
+        if space != MODEL {
+            settings.area = PlotArea::Layout;
+        }
+        self.plot = Some(PlotDialog { settings, picking: false, preview, preview_only: preview, sheet: None, space });
     }
 
     /// The Plot dialog's settings, while it's open.
@@ -194,10 +221,11 @@ impl OxidraftApp {
     /// Plots with the dialog's settings (or the last plot's) to a PDF at
     /// `path`, and closes the dialog.
     pub fn plot_to(&mut self, path: &Path) -> Result<(), String> {
-        let settings = self.plot.as_ref().map_or(self.plot_settings, |d| d.settings);
+        let (settings, space) =
+            self.plot.as_ref().map_or((self.plot_settings, self.shown_space()), |d| (d.settings, d.space));
         let sheet = {
             let pictures = self.plot_pictures(true);
-            oxidraft_plot::render_with_pictures(&self.doc, &settings, &pictures)
+            oxidraft_plot::render_with_pictures(&self.doc, space, &settings, &pictures)
         };
         let sheet = sheet.ok_or("There's nothing to plot.")?;
         let bytes = oxidraft_plot::pdf(&sheet, &self.file_name());
@@ -273,7 +301,10 @@ impl OxidraftApp {
         let (mut open, mut ok, mut cancel, mut preview, mut pick) = (true, false, false, false, false);
         let before = dialog.settings;
         let displayed = self.displayed();
-        egui::Window::new("Plot - Model")
+        let (space, layout) = (dialog.space, dialog.settings.area == PlotArea::Layout);
+        let title = self.doc.layout(space).map_or("Model".into(), |l| l.name.clone());
+        let paper_name = dialog.settings.paper_name(&self.doc, space);
+        egui::Window::new(format!("Plot - {title}"))
             .id(egui::Id::unique("plot_dialog"))
             .open(&mut open)
             .collapsible(false)
@@ -300,15 +331,18 @@ impl OxidraftApp {
                                 "Writes a PDF file: lines as vectors, text you can search.",
                             );
                         });
+                        // A layout plots on its page setup's paper.
                         section(ui, "Paper size", |ui| {
-                            egui::ComboBox::from_id_salt("plot_paper")
-                                .selected_text(s.paper.name)
-                                .width(ui.available_width())
-                                .show_ui(ui, |ui| {
-                                    for p in PAPERS {
-                                        ui.selectable_value(&mut s.paper, *p, p.name);
-                                    }
-                                });
+                            ui.add_enabled_ui(!layout, |ui| {
+                                egui::ComboBox::from_id_salt("plot_paper")
+                                    .selected_text(&paper_name)
+                                    .width(ui.available_width())
+                                    .show_ui(ui, |ui| {
+                                        for p in PAPERS {
+                                            ui.selectable_value(&mut s.paper, *p, p.name);
+                                        }
+                                    });
+                            });
                         });
                         section(ui, "Plot area", |ui| {
                             ui.horizontal(|ui| {
@@ -317,9 +351,13 @@ impl OxidraftApp {
                                     PlotArea::Display(_) => "Display",
                                     PlotArea::Extents => "Extents",
                                     PlotArea::Window(_) => "Window",
+                                    PlotArea::Layout => "Layout",
                                 };
                                 let area = egui::ComboBox::from_id_salt("plot_area").width(ui.available_width());
                                 area.selected_text(label).show_ui(ui, |ui| {
+                                    if space != MODEL && ui.selectable_label(label == "Layout", "Layout").clicked() {
+                                        s.area = PlotArea::Layout;
+                                    }
                                     if ui.selectable_label(label == "Display", "Display").clicked() {
                                         s.area = PlotArea::Display(displayed);
                                     }
@@ -337,17 +375,23 @@ impl OxidraftApp {
                             });
                         });
                         section(ui, "Plot offset (origin set to printable area)", |ui| {
-                            ui.horizontal(|ui| {
-                                ui.add_enabled_ui(!s.center, |ui| {
-                                    ui.label("X:");
-                                    ui.add(egui::DragValue::new(&mut s.offset.x).speed(0.5).suffix(" mm"));
-                                    ui.label("Y:");
-                                    ui.add(egui::DragValue::new(&mut s.offset.y).speed(0.5).suffix(" mm"));
-                                });
-                                ui.checkbox(&mut s.center, "Center the plot");
+                            ui.add_enabled_ui(!layout, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.add_enabled_ui(!s.center, |ui| {
+                                        ui.label("X:");
+                                        ui.add(egui::DragValue::new(&mut s.offset.x).speed(0.5).suffix(" mm"));
+                                        ui.label("Y:");
+                                        ui.add(egui::DragValue::new(&mut s.offset.y).speed(0.5).suffix(" mm"));
+                                    });
+                                    ui.checkbox(&mut s.center, "Center the plot");
+                                })
                             });
                         });
                         section(ui, "Plot scale", |ui| {
+                            if layout {
+                                ui.colored_label(theme::text_dim(), "1:1, as the layout's page setup has it.");
+                                return;
+                            }
                             let mut fit = s.scale == PlotScale::Fit;
                             if ui.checkbox(&mut fit, "Fit to paper").changed() {
                                 s.scale = if fit {
@@ -431,11 +475,17 @@ impl OxidraftApp {
                             ui.checkbox(&mut s.lineweights, "Plot object lineweights");
                         });
                         section(ui, "Drawing orientation", |ui| {
-                            ui.radio_value(&mut s.landscape, false, "Portrait");
-                            ui.radio_value(&mut s.landscape, true, "Landscape");
+                            ui.add_enabled_ui(!layout, |ui| {
+                                ui.radio_value(&mut s.landscape, false, "Portrait");
+                                ui.radio_value(&mut s.landscape, true, "Landscape");
+                            });
                         });
                         // A small preview of the sheet, as in AutoCAD's dialog.
-                        let (w, h) = s.sheet();
+                        let laid_out = dialog.sheet.as_ref().and_then(|(_, _, sh)| sh.as_ref());
+                        let (w, h) = match laid_out {
+                            Some(sheet) if layout => (sheet.layout.width, sheet.layout.height),
+                            _ => s.sheet(),
+                        };
                         let (space, _) = ui.allocate_exact_size(vec2(250.0, 170.0), Sense::hover());
                         ui.painter().rect_filled(space, 4.0, theme::input_bg());
                         let paper = paper_rect(space.shrink(10.0), w, h);

@@ -3,7 +3,7 @@
 //! the drawing on the paper.
 
 use oxidraft_geom::{Aabb, Point};
-use oxidraft_model::Document;
+use oxidraft_model::{Document, Space};
 
 /// A sheet size, in millimeters, portrait.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -43,6 +43,8 @@ pub enum PlotArea {
     Extents,
     /// A window picked in the drawing.
     Window(Aabb),
+    /// A layout's sheet as its page setup has it: on its own paper, at 1:1.
+    Layout,
 }
 
 /// How drawing units map to paper.
@@ -157,16 +159,13 @@ pub struct Layout {
     pub origin: Point,
     /// What's plotted: the window on the sheet, cut to the printable area.
     pub clip: Aabb,
+    /// The sheet's printable area.
+    pub printable: Aabb,
 }
 
 impl Layout {
     pub fn to_paper(&self, p: Point) -> Point {
         self.origin + (p - self.window.min) * self.scale
-    }
-
-    /// The sheet's printable area.
-    pub fn printable(&self) -> Aabb {
-        Aabb::from_points(Point::new(MARGIN, MARGIN), Point::new(self.width - MARGIN, self.height - MARGIN))
     }
 }
 
@@ -177,19 +176,24 @@ impl PlotSettings {
         if self.landscape { (w.max(h), w.min(h)) } else { (w.min(h), w.max(h)) }
     }
 
-    /// The part of the drawing to plot, or `None` when there's nothing to.
-    pub fn window(&self, doc: &Document) -> Option<Aabb> {
+    /// The part of `space` (model space or a layout) to plot, or `None`
+    /// when there's nothing to.
+    pub fn window(&self, doc: &Document, space: Space) -> Option<Aabb> {
         let w = match self.area {
             PlotArea::Display(b) | PlotArea::Window(b) => b,
-            PlotArea::Extents => doc.extents()?,
+            PlotArea::Extents => doc.space_extents(space)?,
+            PlotArea::Layout => doc.layout(space)?.paper.sheet_bounds().0,
         };
         (w.width() > 0.0 || w.height() > 0.0).then_some(w)
     }
 
-    /// Where the plotted part lands on the sheet, or `None` when there's
-    /// nothing to plot.
-    pub fn layout(&self, doc: &Document) -> Option<Layout> {
-        let window = self.window(doc)?;
+    /// Where the plotted part of `space` lands on the sheet, or `None` when
+    /// there's nothing to plot.
+    pub fn layout(&self, doc: &Document, space: Space) -> Option<Layout> {
+        if self.area == PlotArea::Layout {
+            return Self::sheet_layout(doc, space);
+        }
+        let window = self.window(doc, space)?;
         let (width, height) = self.sheet();
         let printable = Aabb::from_points(Point::new(MARGIN, MARGIN), Point::new(width - MARGIN, height - MARGIN));
         let scale = match self.scale {
@@ -208,7 +212,40 @@ impl PlotSettings {
             Point::new(placed.min.x.max(printable.min.x), placed.min.y.max(printable.min.y)),
             Point::new(placed.max.x.min(printable.max.x), placed.max.y.min(printable.max.y)),
         );
-        Some(Layout { width, height, window, scale, origin, clip })
+        Some(Layout { width, height, window, scale, origin, clip, printable })
+    }
+
+    /// A layout's sheet at 1:1 on its own paper, cut to its printable area.
+    fn sheet_layout(doc: &Document, space: Space) -> Option<Layout> {
+        let paper = &doc.layout(space)?.paper;
+        let (sheet, printable) = paper.sheet_bounds();
+        // Millimeters per paper unit.
+        let scale = if paper.millimeters { 1.0 } else { 25.4 };
+        let on_paper = |p: Point| (p - sheet.min) * scale;
+        let printable = Aabb::from_points(on_paper(printable.min), on_paper(printable.max));
+        Some(Layout {
+            width: sheet.width() * scale,
+            height: sheet.height() * scale,
+            window: sheet,
+            scale,
+            origin: Point::ORIGIN,
+            clip: printable,
+            printable,
+        })
+    }
+
+    /// The paper's name for the dialog: the layout's own for a layout plot.
+    pub fn paper_name(&self, doc: &Document, space: Space) -> String {
+        match (self.area, doc.layout(space)) {
+            (PlotArea::Layout, Some(l)) => {
+                let sheet = l.paper.sheet_bounds().0;
+                let (w, h) = (sheet.width(), sheet.height());
+                let units = if l.paper.millimeters { "MM" } else { "Inches" };
+                let name = l.paper.size_name.replace('_', " ");
+                if name.trim().is_empty() { format!("{w:.2} x {h:.2} {units}") } else { name }
+            }
+            _ => self.paper.name.to_string(),
+        }
     }
 }
 
@@ -234,9 +271,29 @@ mod tests {
     }
 
     #[test]
+    fn a_layout_plots_on_its_own_paper_at_one_to_one() {
+        let mut d = doc();
+        let paper = oxidraft_model::Paper {
+            width: 420.0,
+            height: 297.0,
+            margins: [5.0, 10.0, 5.0, 10.0],
+            millimeters: true,
+            ..Default::default()
+        };
+        let space = d.add_layout(oxidraft_model::layout::Layout { id: 0, name: "A3".into(), tab_order: 1, paper });
+        let s = PlotSettings { area: PlotArea::Layout, ..PlotSettings::default() };
+        let l = s.layout(&d, space).unwrap();
+        assert_eq!((l.width, l.height, l.scale), (420.0, 297.0, 1.0));
+        // The printable area's corner is the layout's origin.
+        assert!(l.to_paper(Point::ORIGIN).approx_eq(Point::new(5.0, 10.0)));
+        assert_eq!(l.clip, Aabb::from_points(Point::new(5.0, 10.0), Point::new(415.0, 287.0)));
+        assert!(s.layout(&d, oxidraft_model::MODEL).is_none(), "model space has no sheet");
+    }
+
+    #[test]
     fn fit_to_paper_centers_the_drawing() {
         let s = PlotSettings::default();
-        let l = s.layout(&doc()).unwrap();
+        let l = s.layout(&doc(), oxidraft_model::MODEL).unwrap();
         // A4 landscape: 287 x 200 printable; 100 x 50 fits at 2.87 mm per unit.
         assert_eq!((l.width, l.height), (297.0, 210.0));
         assert!((l.scale - 2.87).abs() < 1e-12);
@@ -254,12 +311,14 @@ mod tests {
             landscape: false,
             ..PlotSettings::default()
         };
-        let l = s.layout(&doc()).unwrap();
+        let l = s.layout(&doc(), oxidraft_model::MODEL).unwrap();
         assert_eq!(l.scale, 4.0);
         assert!(l.to_paper(Point::ORIGIN).approx_eq(Point::new(15.0, 5.0)));
         // 400 mm wide doesn't fit on portrait A4: plotted up to the margin.
         assert!((l.clip.max.x - 205.0).abs() < 1e-9);
-        assert!(PlotSettings { area: PlotArea::Extents, ..s }.layout(&Document::new()).is_none());
+        assert!(
+            PlotSettings { area: PlotArea::Extents, ..s }.layout(&Document::new(), oxidraft_model::MODEL).is_none()
+        );
     }
 
     #[test]

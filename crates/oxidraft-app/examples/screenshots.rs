@@ -679,6 +679,10 @@ fn main() {
     h.state_mut().type_command("pr");
     h.run_steps(4);
     save(&mut h, &dir, "35-viewport-properties");
+    // The layout's plot preview: its sheet at 1:1, the model cut to the viewport.
+    h.state_mut().type_command("preview");
+    h.run_steps(4);
+    save(&mut h, &dir, "36-layout-preview");
 
     // AutoComplete on the command line.
     let mut h = harness();

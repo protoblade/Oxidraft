@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use oxidraft_geom::{Aabb, Point, curve::Seg, intersect::clip_segment};
-use oxidraft_model::{Document, Geometry, HatchPattern, Styled, Vertex, constant_width, hatch, linetype};
+use oxidraft_model::{
+    Document, Entity, Geometry, HatchPattern, MODEL, Space, Styled, Vertex, constant_width, hatch, linetype,
+};
 
 use crate::{
     font::{self, FONT},
@@ -40,6 +42,8 @@ pub enum Item {
     /// `v`, inside `clip` when that has points; in grays for monochrome
     /// and grayscale pen tables.
     Image { name: String, origin: Point, u: Point, v: Point, clip: Vec<Point>, gray: bool },
+    /// What a layout viewport shows: `items` cut to its frame.
+    Clipped { clip: Aabb, items: Vec<Item> },
 }
 
 /// An image's pixels, RGBA, rows top to bottom.
@@ -58,6 +62,18 @@ pub struct Sheet {
     pub pictures: HashMap<String, Arc<Picture>>,
 }
 
+/// Model space as a layout viewport shows it.
+#[derive(Clone, Copy)]
+struct Through {
+    /// The viewport's center on the sheet, and the model point shown there.
+    center: Point,
+    view_center: Point,
+    /// Paper units per model unit.
+    k: f64,
+    /// The part of model space it shows.
+    window: Aabb,
+}
+
 struct Plotter<'a> {
     doc: &'a Document,
     settings: &'a PlotSettings,
@@ -65,6 +81,8 @@ struct Plotter<'a> {
     items: Vec<Item>,
     lookup: &'a dyn Fn(&str) -> Option<Arc<Picture>>,
     pictures: HashMap<String, Arc<Picture>>,
+    /// Plotting model space through a viewport.
+    through: Option<Through>,
 }
 
 /// How many straight pieces draw an arc of radius `r` and `sweep` radians
@@ -81,9 +99,60 @@ fn overlaps(a: &Aabb, b: &Aabb) -> bool {
     a.max.x >= b.min.x && a.min.x <= b.max.x && a.max.y >= b.min.y && a.min.y <= b.max.y
 }
 
-impl Plotter<'_> {
+impl<'a> Plotter<'a> {
     fn paper(&self, p: Point) -> Point {
-        self.layout.to_paper(p)
+        match self.through {
+            Some(t) => self.layout.to_paper(t.center + (p - t.view_center) * t.k),
+            None => self.layout.to_paper(p),
+        }
+    }
+
+    /// Millimeters on paper per drawing unit.
+    fn unit(&self) -> f64 {
+        self.layout.scale * self.through.map_or(1.0, |t| t.k)
+    }
+
+    /// Plots `entities` that show and fall in `window`, but those on the
+    /// `frozen` layers. A layout's viewports show model space through them.
+    fn objects(&mut self, entities: Vec<&'a Entity>, window: Aabb, frozen: &[String]) {
+        let doc = self.doc;
+        for e in entities {
+            if !doc.is_shown(&e.layer) || frozen.iter().any(|f| f.eq_ignore_ascii_case(&e.layer)) {
+                continue;
+            }
+            if !e.geometry.is_infinite() && !overlaps(&doc.entity_bounds(e), &window) {
+                continue;
+            }
+            if self.through.is_none() {
+                self.viewport(&e.geometry);
+            }
+            for s in doc.expanded_styled(e) {
+                self.styled(&s);
+            }
+        }
+    }
+
+    /// A viewport that's on: model space at its scale, cut to its frame
+    /// (which plots as its own lines).
+    fn viewport(&mut self, g: &'a Geometry) {
+        let Geometry::Viewport { center, width, height, view_center, view_height, frozen, on: true, .. } = g else {
+            return;
+        };
+        if *view_height <= 0.0 || *height <= 0.0 {
+            return;
+        }
+        let k = height / view_height;
+        let half = Point::new(width / 2.0, height / 2.0);
+        let window = Aabb::from_points(*view_center - half * (1.0 / k), *view_center + half * (1.0 / k));
+        let clip = Aabb::from_points(self.layout.to_paper(*center - half), self.layout.to_paper(*center + half));
+        let sheet = std::mem::take(&mut self.items);
+        self.through = Some(Through { center: *center, view_center: *view_center, k, window });
+        self.objects(self.doc.space_in_draw_order(MODEL), window, frozen);
+        self.through = None;
+        let items = std::mem::replace(&mut self.items, sheet);
+        if !items.is_empty() {
+            self.items.push(Item::Clipped { clip, items });
+        }
     }
 
     /// A curve on paper, arcs split finely.
@@ -92,7 +161,7 @@ impl Plotter<'_> {
         for seg in g.segments() {
             let steps = match seg {
                 Seg::Line(_) => 1,
-                Seg::Arc(a) => arc_steps(a.radius * self.layout.scale, a.sweep.to_radians()),
+                Seg::Arc(a) => arc_steps(a.radius * self.unit(), a.sweep.to_radians()),
             };
             let first = usize::from(!points.is_empty());
             for i in first..=steps {
@@ -117,7 +186,8 @@ impl Plotter<'_> {
     }
 
     /// A path in the object's linetype: dashes scaled by LTSCALE and the
-    /// plot scale; too fine to see, solid.
+    /// plot scale; too fine to see, solid. Through a viewport they're as
+    /// long as on the sheet (PSLTSCALE 1), whatever its scale.
     fn dashed(&mut self, points: Vec<Point>, closed: bool, s: &Styled, width: f64, color: Rgb) {
         let pattern = self.doc.linetype(&s.linetype).filter(|l| !l.is_continuous()).map(|l| {
             let k = self.doc.ltscale() * self.layout.scale;
@@ -165,13 +235,15 @@ impl Plotter<'_> {
             }
             _ if g.is_infinite() => {
                 let Some(Seg::Line(line)) = g.segments().first().copied() else { return };
-                if let Some(c) = clip_segment(line, &self.layout.window) {
+                let window = self.through.map_or(self.layout.window, |t| t.window);
+                if let Some(c) = clip_segment(line, &window) {
                     self.dashed(vec![self.paper(c.start), self.paper(c.end)], false, s, width, color);
                 }
             }
             _ => {
                 let mut points = self.path(g);
-                let closed = g.is_closed();
+                // A viewport's frame closes like a rectangle's.
+                let closed = g.is_closed() || matches!(g, Geometry::Viewport { .. });
                 if closed && points.len() > 2 && points[0].distance(points[points.len() - 1]) < 1e-9 {
                     points.pop();
                 }
@@ -199,13 +271,8 @@ impl Plotter<'_> {
             }
             let local = Point::new(-fx * widest, -0.7 + fy * span - i as f64 * row) * size;
             let at = *position + local.rotated_about(Point::ORIGIN, *rotation);
-            let item = Item::Text {
-                at: self.paper(at),
-                rotation: *rotation,
-                size: size * self.layout.scale,
-                text: line,
-                color,
-            };
+            let item =
+                Item::Text { at: self.paper(at), rotation: *rotation, size: size * self.unit(), text: line, color };
             self.items.push(item);
         }
     }
@@ -228,7 +295,7 @@ impl Plotter<'_> {
         let (mode, size) = (self.doc.pdmode(), self.doc.pdsize());
         let area = self.layout.window.height() * self.layout.scale;
         let full = match size {
-            s if s > 0.0 => s * self.layout.scale,
+            s if s > 0.0 => s * self.unit(),
             s if s < 0.0 => area * -s / 100.0,
             _ => area * 0.05,
         };
@@ -263,14 +330,14 @@ impl Plotter<'_> {
             if closed && points.len() > 2 && points[0].distance(points[points.len() - 1]) < 1e-9 {
                 points.pop();
             }
-            self.push_stroke(vec![Path { points, closed }], w * self.layout.scale, color, true);
+            self.push_stroke(vec![Path { points, closed }], w * self.unit(), color, true);
             return;
         }
         let mut polygons = Vec::new();
         for (seg, v) in g.segments().iter().zip(vertices) {
             let steps = match seg {
                 Seg::Line(_) => 1,
-                Seg::Arc(a) => arc_steps(a.radius * self.layout.scale, a.sweep.to_radians()),
+                Seg::Arc(a) => arc_steps(a.radius * self.unit(), a.sweep.to_radians()),
             };
             let (mut left, mut right) = (Vec::new(), Vec::new());
             for i in 0..=steps {
@@ -289,29 +356,26 @@ impl Plotter<'_> {
     }
 }
 
-/// The sheet `settings` plot `doc` on, or `None` when there's nothing to
-/// plot; images draw as nothing. Objects plot in draw order, as on screen.
-pub fn render(doc: &Document, settings: &PlotSettings) -> Option<Sheet> {
-    render_with_pictures(doc, settings, &|_| None)
+/// The sheet `settings` plot `space` of `doc` on (model space, or a
+/// layout with model space through its viewports), or `None` when there's
+/// nothing to plot; images draw as nothing. Objects plot in draw order, as
+/// on screen.
+pub fn render(doc: &Document, space: Space, settings: &PlotSettings) -> Option<Sheet> {
+    render_with_pictures(doc, space, settings, &|_| None)
 }
 
 /// Like [`render`], with images showing the pictures `lookup` has for
 /// them (loaded ones).
 pub fn render_with_pictures(
     doc: &Document,
+    space: Space,
     settings: &PlotSettings,
     lookup: &dyn Fn(&str) -> Option<Arc<Picture>>,
 ) -> Option<Sheet> {
-    let layout = settings.layout(doc)?;
-    let mut plotter = Plotter { doc, settings, layout, items: Vec::new(), lookup, pictures: HashMap::new() };
-    for e in doc.entities_in_draw_order() {
-        if !doc.is_shown(&e.layer) || (!e.geometry.is_infinite() && !overlaps(&doc.entity_bounds(e), &layout.window)) {
-            continue;
-        }
-        for s in doc.expanded_styled(e) {
-            plotter.styled(&s);
-        }
-    }
+    let layout = settings.layout(doc, space)?;
+    let mut plotter =
+        Plotter { doc, settings, layout, items: Vec::new(), lookup, pictures: HashMap::new(), through: None };
+    plotter.objects(doc.space_in_draw_order(space), layout.window, &[]);
     Some(Sheet { layout, items: plotter.items, pictures: plotter.pictures })
 }
 
@@ -342,7 +406,7 @@ mod tests {
         doc.update(id, |e| e.lineweight = Lineweight::Hundredths(50));
         doc.add(Geometry::Circle { center: Point::new(50.0, 50.0), radius: 5.0 });
         let window = Aabb::from_points(Point::ORIGIN, Point::new(100.0, 100.0));
-        let sheet = render(&doc, &settings(window)).unwrap();
+        let sheet = render(&doc, MODEL, &settings(window)).unwrap();
         let Item::Stroke { paths, width, color, .. } = &sheet.items[0] else { panic!() };
         assert_eq!((*width, *color), (0.5, [255, 0, 0]));
         assert_eq!(paths[0].points, vec![Point::new(5.0, 5.0), Point::new(15.0, 5.0)]);
@@ -352,8 +416,62 @@ mod tests {
         assert!(paths[0].closed && paths[0].points.len() >= 40);
         // Monochrome, without lineweights.
         let mono = PlotSettings { style: PlotStyle::Monochrome, lineweights: false, ..settings(window) };
-        let Item::Stroke { width, color, .. } = &render(&doc, &mono).unwrap().items[0] else { panic!() };
+        let Item::Stroke { width, color, .. } = &render(&doc, MODEL, &mono).unwrap().items[0] else { panic!() };
         assert_eq!((*width, *color), (0.0, [0, 0, 0]));
+    }
+
+    #[test]
+    fn a_layout_plots_its_sheet_and_model_space_through_its_viewports() {
+        let mut doc = Document::new();
+        doc.add_layer(Layer::new("Trees", 3));
+        doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(1000.0, 0.0) });
+        doc.add_on_layer(Geometry::Circle { center: Point::new(500.0, 0.0), radius: 50.0 }, "Trees", Color::ByLayer);
+        let paper = oxidraft_model::Paper {
+            width: 297.0,
+            height: 210.0,
+            margins: [10.0, 10.0, 10.0, 10.0],
+            millimeters: true,
+            ..Default::default()
+        };
+        let space = doc.add_layout(oxidraft_model::layout::Layout { id: 0, name: "L".into(), tab_order: 1, paper });
+        doc.set_space(space);
+        doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(277.0, 0.0) });
+        // 1:10, showing model 0..1000 x -250..250 in 100 x 50 at 150, 100.
+        let viewport = doc.add(Geometry::Viewport {
+            center: Point::new(150.0, 100.0),
+            width: 100.0,
+            height: 50.0,
+            view_center: Point::new(500.0, 0.0),
+            view_height: 500.0,
+            twist: 0.0,
+            frozen: vec!["Trees".into()],
+            locked: false,
+            on: true,
+        });
+        doc.set_space(MODEL);
+        let settings = PlotSettings { area: PlotArea::Layout, ..PlotSettings::default() };
+        let sheet = render(&doc, space, &settings).unwrap();
+        assert_eq!((sheet.layout.width, sheet.layout.height), (297.0, 210.0));
+        // The sheet's line, at its place on paper (origin 10 mm in).
+        let Item::Stroke { paths, .. } = &sheet.items[0] else { panic!("{:?}", sheet.items[0]) };
+        assert_eq!(paths[0].points, vec![Point::new(10.0, 10.0), Point::new(287.0, 10.0)]);
+        // Model space through the viewport, cut to its frame; Trees frozen there.
+        let Item::Clipped { clip, items } = &sheet.items[1] else { panic!("{:?}", sheet.items[1]) };
+        assert_eq!(*clip, Aabb::from_points(Point::new(110.0, 85.0), Point::new(210.0, 135.0)));
+        assert_eq!(items.len(), 1, "the line, not the frozen circle");
+        let Item::Stroke { paths, .. } = &items[0] else { panic!() };
+        assert!(paths[0].points[0].approx_eq(Point::new(110.0, 110.0)));
+        assert!(paths[0].points[1].approx_eq(Point::new(210.0, 110.0)));
+        // Then the viewport's own frame.
+        assert!(matches!(&sheet.items[2], Item::Stroke { paths, .. } if paths[0].closed), "{:?}", sheet.items.get(2));
+        // A viewport turned off shows nothing through it.
+        doc.update(viewport, |e| {
+            if let Geometry::Viewport { on, .. } = &mut e.geometry {
+                *on = false;
+            }
+        });
+        let sheet = render(&doc, space, &settings).unwrap();
+        assert!(!sheet.items.iter().any(|i| matches!(i, Item::Clipped { .. })));
     }
 
     #[test]
@@ -376,7 +494,7 @@ mod tests {
             ],
             closed: false,
         });
-        let sheet = render(&doc, &settings(Aabb::from_points(Point::ORIGIN, Point::new(60.0, 60.0)))).unwrap();
+        let sheet = render(&doc, MODEL, &settings(Aabb::from_points(Point::ORIGIN, Point::new(60.0, 60.0)))).unwrap();
         // DASHED is 12.7 on, 6.35 off: three dashes in 50.
         let Item::Stroke { paths, .. } = &sheet.items[0] else { panic!() };
         assert_eq!(paths.len(), 3);

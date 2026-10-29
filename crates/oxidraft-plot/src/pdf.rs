@@ -80,20 +80,26 @@ fn content(sheet: &Sheet) -> (String, Used) {
     ops.push_str("1 J 1 j\n");
     let _ =
         writeln!(ops, "{} {} {} {} re W n", num(clip.min.x), num(clip.min.y), num(clip.width()), num(clip.height()));
-    for item in &sheet.items {
+    item_ops(&mut ops, &mut used, sheet, &sheet.items);
+    (ops, used)
+}
+
+/// The operators that draw `items`, and what they use.
+fn item_ops(ops: &mut String, used: &mut Used, sheet: &Sheet, items: &[Item]) {
+    for item in items {
         match item {
             Item::Stroke { paths, width, color: c, wide } => {
                 ops.push_str(if *wide { "q 0 J 0 j 10 M\n" } else { "q\n" });
                 let _ = writeln!(ops, "{} RG {} w", color(*c), num(*width));
                 for p in paths {
-                    path_ops(&mut ops, p);
+                    path_ops(ops, p);
                 }
                 ops.push_str("S Q\n");
             }
             Item::Fill { polygons, color: c } => {
                 let _ = writeln!(ops, "{} rg", color(*c));
                 for p in polygons {
-                    path_ops(&mut ops, &Path { points: p.clone(), closed: true });
+                    path_ops(ops, &Path { points: p.clone(), closed: true });
                 }
                 ops.push_str("f*\n");
             }
@@ -131,15 +137,26 @@ fn content(sheet: &Sheet) -> (String, Used) {
                 });
                 ops.push_str("q\n");
                 if clip.len() >= 3 {
-                    path_ops(&mut ops, &Path { points: clip.clone(), closed: true });
+                    path_ops(ops, &Path { points: clip.clone(), closed: true });
                     ops.push_str("W n\n");
                 }
                 let m = [u.x, u.y, v.x, v.y, origin.x, origin.y].map(num).join(" ");
                 let _ = writeln!(ops, "{m} cm /Im{index} Do Q");
             }
+            Item::Clipped { clip, items } => {
+                let _ = writeln!(
+                    ops,
+                    "q {} {} {} {} re W n",
+                    num(clip.min.x),
+                    num(clip.min.y),
+                    num(clip.width()),
+                    num(clip.height())
+                );
+                item_ops(ops, used, sheet, items);
+                ops.push_str("Q\n");
+            }
         }
     }
-    (ops, used)
 }
 
 /// A picture's pixels for PDF: RGB (or gray) over a white background.
@@ -309,7 +326,7 @@ mod tests {
             ..PlotSettings::default()
         };
         let lookup = |n: &str| (n == "ortho").then(|| picture.clone());
-        let sheet = crate::render_with_pictures(&doc, &settings, &lookup).unwrap();
+        let sheet = crate::render_with_pictures(&doc, oxidraft_model::MODEL, &settings, &lookup).unwrap();
         assert_eq!(sheet.items.len(), 1, "the unloaded one plots nothing");
         let bytes = pdf(&sheet, "ortho");
         let text = String::from_utf8_lossy(&bytes);
@@ -338,7 +355,7 @@ mod tests {
             area: PlotArea::Window(Aabb::from_points(Point::ORIGIN, Point::new(100.0, 50.0))),
             ..PlotSettings::default()
         };
-        let sheet = crate::render(&doc, &settings).unwrap();
+        let sheet = crate::render(&doc, oxidraft_model::MODEL, &settings).unwrap();
         let bytes = pdf(&sheet, "Plan (ground floor)");
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.starts_with("%PDF-1.4") && text.trim_end().ends_with("%%EOF"));

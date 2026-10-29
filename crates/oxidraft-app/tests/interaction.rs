@@ -622,7 +622,7 @@ fn attach_a_pdf_page_as_an_underlay() {
     // An A4 landscape plot, written by Oxidraft itself.
     let mut plan = Document::new();
     plan.add(Geometry::Line { start: Point::ORIGIN, end: Point::new(100.0, 50.0) });
-    let sheet = oxidraft_plot::render(&plan, &oxidraft_plot::PlotSettings::default()).unwrap();
+    let sheet = oxidraft_plot::render(&plan, oxidraft_model::MODEL, &oxidraft_plot::PlotSettings::default()).unwrap();
     let pdf = dir.join("plan.pdf");
     std::fs::write(&pdf, oxidraft_plot::pdf(&sheet, "plan")).unwrap();
 
@@ -1132,4 +1132,25 @@ fn working_in_a_viewport_and_back_on_the_sheet() {
     h.run_steps(2);
     assert_eq!(h.state_mut().document_mut().space(), layout);
     assert_eq!(the_viewport(&mut h).2, now_height);
+}
+
+#[test]
+fn plotting_a_layout_plots_its_sheet_with_model_space_through_the_viewport() {
+    let mut h = app_with_line();
+    h.get_by_role_and_label(Role::Tab, "Layout1").click();
+    h.run_steps(3);
+    type_all(&mut h, &["mv", "f"]);
+    // Even from inside the viewport, PLOT plots the layout.
+    type_all(&mut h, &["ms", "plot"]);
+    h.run_steps(2);
+    assert!(h.query_by_label("Plot - Layout1").is_some(), "the dialog names the layout");
+    assert_eq!(h.state_mut().plot_settings_mut().unwrap().area, oxidraft_plot::PlotArea::Layout);
+    let path = std::env::temp_dir().join(format!("oxidraft-layout-plot-{}.pdf", std::process::id()));
+    h.state_mut().plot_to(&path).unwrap();
+    let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
+    std::fs::remove_file(&path).ok();
+    // Layout1 is A4 landscape; the model is cut to the viewport's frame.
+    assert!(text.contains("/MediaBox [0 0 841.8898 595.2756]"), "A4 landscape");
+    let history = h.state_mut().engine_mut().history().join("\n");
+    assert!(history.contains("Effective plotting area: 282.00 wide by 170.00 high"), "{history}");
 }
