@@ -171,6 +171,36 @@ impl Command for TextEdit {
     }
 }
 
+/// XOPEN: the attached drawing picked opens in its own window.
+#[derive(Default)]
+pub struct XOpen;
+
+impl Command for XOpen {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Select xref")
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match input {
+            Input::Pick { at, .. } => {
+                let id = ctx.pick(at).ok_or("Nothing there.")?;
+                let name = match ctx.doc.entity(id).map(|e| &e.geometry) {
+                    Some(Geometry::Insert { block, .. }) if ctx.doc.xref(block).is_some() => block.clone(),
+                    _ => return Err("That isn't an attached drawing (xref).".into()),
+                };
+                ctx.ui = Some(UiRequest::OpenXref(name));
+                Ok(Step::Done)
+            }
+            Input::Enter => Ok(Step::Done),
+            _ => Err("Pick an xref.".into()),
+        }
+    }
+
+    fn wants_pick(&self) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

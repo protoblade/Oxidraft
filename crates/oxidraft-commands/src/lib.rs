@@ -18,6 +18,7 @@ mod block_tools;
 mod break_join;
 pub mod calc;
 mod chamfer;
+mod change;
 mod circle;
 mod cleanup;
 mod clipboard;
@@ -71,6 +72,7 @@ mod smartdim;
 mod spline;
 mod splinedit;
 mod stretch;
+pub mod sysvar;
 mod table;
 mod text_edit;
 pub mod text_style;
@@ -87,7 +89,7 @@ mod zoom;
 pub use attdef::sync_attributes;
 pub use cleanup::object_key;
 pub use clipboard::{block_drawing, clip_of, paste};
-pub use engine::{COMMANDS, CommandInfo, Engine, Tracked};
+pub use engine::{COMMANDS, CommandInfo, Engine, Tracked, is_command};
 pub use input::{Input, parse_input};
 pub use mview::{viewport_at, viewport_onto_model};
 pub use rename::Named;
@@ -176,6 +178,10 @@ pub enum UiRequest {
     EditAttributes(EntityId),
     /// The text editor for a text (TEXTEDIT).
     EditText(EntityId),
+    /// A system variable the app keeps, to set (SETVAR, GRID).
+    SetVar(String, String),
+    /// XOPEN: this attached drawing opened in its own window.
+    OpenXref(String),
     /// The full command history, for long output like LIST's.
     TextWindow,
     /// Back to the Plot dialog with the window picked for it (`None`: as
@@ -304,6 +310,8 @@ pub struct Vars {
     /// The layout viewport model space is being worked in through
     /// (MSPACE), kept by the app.
     pub viewport: Option<EntityId>,
+    /// GRIDUNIT, kept by the app (0: adaptive).
+    pub grid_spacing: f64,
     /// The last area AREA or MEASUREGEOM measured (for Volume).
     pub last_area: f64,
     /// SNAPMODE (F9) and SNAPUNIT: the cursor jumps to points this far
@@ -351,6 +359,7 @@ impl Default for Vars {
             color_theme: 0,
             isoplane: None,
             viewport: None,
+            grid_spacing: 0.0,
             erased: Vec::new(),
             last_area: 0.0,
             snap: false,

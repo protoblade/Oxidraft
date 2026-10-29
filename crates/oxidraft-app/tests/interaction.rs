@@ -2379,3 +2379,35 @@ fn spell_changes_words_not_in_the_dictionary() {
     }
     assert!(h.query_all_by_label("Spelling check complete.").next().is_some());
 }
+
+#[test]
+fn system_variables_typed_and_set() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["orthomode"]);
+    assert_eq!(h.state_mut().engine_mut().prompt(), "Enter new value for ORTHOMODE <0>:");
+    type_all(&mut h, &["1"]);
+    h.run_steps(1);
+    assert!(h.state_mut().engine_mut().ortho());
+    // SETVAR with a name, a read-only one, and a bad value.
+    type_all(&mut h, &["setvar", "ltscale", "2.5"]);
+    h.run_steps(1);
+    assert_eq!(h.state_mut().document_mut().ltscale(), 2.5);
+    type_all(&mut h, &["dwgname"]);
+    type_all(&mut h, &["clayer", "nolayer"]);
+    h.run_steps(1);
+    type_all(&mut h, &["fill", "off", "limits", "0,0", "200,100", "status"]);
+    h.run_steps(1);
+    let history = h.state_mut().engine_mut().history().to_vec();
+    assert!(history.iter().any(|l| l.starts_with("DWGNAME = \"Drawing1.dxf\"")), "{history:?}");
+    assert!(history.iter().any(|l| l == "No such layer."), "{history:?}");
+    assert!(history.iter().any(|l| l.starts_with("Fill Off  Grid")), "{history:?}");
+    assert!(!h.state_mut().document_mut().fill());
+    // Clean screen hides the ribbon; Ctrl+0 brings it back.
+    assert!(h.query_by_role_and_label(Role::Tab, "Annotate").is_some());
+    type_all(&mut h, &["cleanscreenon"]);
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(Role::Tab, "Annotate").is_none());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num0);
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(Role::Tab, "Annotate").is_some());
+}

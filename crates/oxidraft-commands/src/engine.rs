@@ -603,6 +603,97 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(Base::default())),
     },
     CommandInfo { name: "OOPS", aliases: &[], description: "Bring back what the last ERASE erased", make: None },
+    CommandInfo { name: "SETVAR", aliases: &["SET"], description: "Show or set a system variable", make: None },
+    CommandInfo {
+        name: "STATUS",
+        aliases: &[],
+        description: "Show the drawing's counts, limits, extents and modes",
+        make: None,
+    },
+    CommandInfo { name: "TIME", aliases: &[], description: "Show when the drawing was made and saved", make: None },
+    CommandInfo {
+        name: "ATTACH",
+        aliases: &[],
+        description: "Attach a drawing, image or PDF, by the file picked",
+        make: None,
+    },
+    CommandInfo {
+        name: "XOPEN",
+        aliases: &[],
+        description: "Open an attached drawing (xref) in its own window",
+        make: Some(|| Box::new(crate::field_cmd::XOpen)),
+    },
+    CommandInfo { name: "EXPORT", aliases: &["EXP"], description: "Save a copy as DXF, DWG or PDF", make: None },
+    CommandInfo { name: "DXFOUT", aliases: &[], description: "Save a copy as DXF", make: None },
+    CommandInfo { name: "DXFIN", aliases: &[], description: "Open a DXF file", make: None },
+    CommandInfo { name: "QNEW", aliases: &[], description: "Start a new drawing", make: None },
+    CommandInfo { name: "SAVEALL", aliases: &[], description: "Save the drawing", make: None },
+    CommandInfo {
+        name: "CLEANSCREENON",
+        aliases: &[],
+        description: "Hide the ribbon and palettes (Ctrl+0)",
+        make: None,
+    },
+    CommandInfo { name: "CLEANSCREENOFF", aliases: &[], description: "Show the ribbon and palettes again", make: None },
+    CommandInfo {
+        name: "LIMITS",
+        aliases: &[],
+        description: "Set the drawing's limits; ON keeps points inside them (LIMCHECK)",
+        make: Some(|| Box::new(crate::sysvar::Limits::default())),
+    },
+    CommandInfo {
+        name: "FILL",
+        aliases: &[],
+        description: "Show hatches, wide polylines and solids filled, or as outlines (FILLMODE)",
+        make: Some(|| Box::new(crate::sysvar::Mode::fill())),
+    },
+    CommandInfo {
+        name: "QTEXT",
+        aliases: &[],
+        description: "Show text as boxes for speed (QTEXTMODE)",
+        make: Some(|| Box::new(crate::sysvar::Mode::quick_text())),
+    },
+    CommandInfo {
+        name: "GRID",
+        aliases: &[],
+        description: "Set the grid's spacing, or turn it on or off (F7)",
+        make: Some(|| Box::new(crate::sysvar::Grid::default())),
+    },
+    CommandInfo { name: "REGEN", aliases: &["RE"], description: "Regenerate the drawing", make: None },
+    CommandInfo { name: "REGENALL", aliases: &["REA"], description: "Regenerate every viewport", make: None },
+    CommandInfo { name: "REDRAW", aliases: &["R"], description: "Redraw the drawing", make: None },
+    CommandInfo { name: "REDRAWALL", aliases: &["RA"], description: "Redraw every viewport", make: None },
+    CommandInfo {
+        name: "MULTIPLE",
+        aliases: &[],
+        description: "Repeat the next command until Esc",
+        make: Some(|| Box::new(Multiple)),
+    },
+    CommandInfo {
+        name: "CHPROP",
+        aliases: &[],
+        description: "Change objects' color, layer, linetype, lineweight or transparency",
+        make: Some(|| Box::new(crate::change::ChProp::default())),
+    },
+    CommandInfo {
+        name: "CHANGE",
+        aliases: &["-CH"],
+        description: "Move line ends or resize circles to a point, edit texts, or change properties",
+        make: Some(|| Box::new(crate::change::Change::default())),
+    },
+    CommandInfo { name: "DBLIST", aliases: &[], description: "List every object in the drawing", make: None },
+    CommandInfo {
+        name: "SOLID",
+        aliases: &["SO"],
+        description: "Draw filled triangles and quadrilaterals",
+        make: Some(|| Box::new(crate::change::Solid::default())),
+    },
+    CommandInfo {
+        name: "TXT2MTXT",
+        aliases: &[],
+        description: "Combine single-line texts into one multiline text",
+        make: Some(|| Box::new(crate::change::Txt2Mtxt)),
+    },
     CommandInfo { name: "SELECTALL", aliases: &["AI_SELALL"], description: "Select every object", make: None },
     CommandInfo {
         name: "DSETTINGS",
@@ -1326,6 +1417,11 @@ pub const COMMANDS: &[CommandInfo] = &[
 static GRIP_STRETCH: CommandInfo =
     CommandInfo { name: "STRETCH", aliases: &[], description: "Grip stretch", make: None };
 
+/// True if a command (or alias) has this name.
+pub fn is_command(name: &str) -> bool {
+    find(name).is_some()
+}
+
 fn find(name: &str) -> Option<&'static CommandInfo> {
     COMMANDS
         .iter()
@@ -1366,6 +1462,8 @@ enum Gathering {
 /// command-line history.
 pub struct Engine {
     active: Option<Active>,
+    /// MULTIPLE: the command started again each time it ends.
+    repeat: Option<&'static CommandInfo>,
     last_command: Option<&'static CommandInfo>,
     last_point: Option<Point>,
     history: Vec<String>,
@@ -1421,6 +1519,7 @@ impl Engine {
     /// A new engine with AutoCAD's defaults: polar tracking and dynamic input on, ortho off.
     pub fn new() -> Self {
         Self {
+            repeat: None,
             active: None,
             last_command: None,
             last_point: None,
@@ -2269,6 +2368,7 @@ impl Engine {
         if self.window_start.take().is_some() || self.gathering.take().is_some() {
             return;
         }
+        self.repeat = None;
         match self.active.take() {
             Some(a) => {
                 self.log("*Cancel*");
@@ -2401,6 +2501,16 @@ impl Engine {
                 doc.commit();
                 if restored { "Restored previous layer states.".into() } else { "*No previous layer states*".into() }
             }
+            "REGEN" => "Regenerating model.".into(),
+            "REGENALL" => "Regenerating model - caching viewports.".into(),
+            "REDRAW" | "REDRAWALL" => String::new(),
+            "DBLIST" => {
+                let lines = crate::change::DbList::lines(doc);
+                if lines.len() > 40 {
+                    self.ui_requests.push(UiRequest::TextWindow);
+                }
+                lines.join("\n")
+            }
             "HELP" => COMMANDS
                 .iter()
                 .map(|c| {
@@ -2420,6 +2530,28 @@ impl Engine {
 
     fn feed(&mut self, input: Input, doc: &mut Document, cursor: Point, pick_tolerance: f64) {
         let Some(active) = &mut self.active else { return };
+        // MULTIPLE: the command named starts, and starts again each time it ends.
+        if std::ptr::eq(active.info, find("MULTIPLE").unwrap_or(active.info))
+            && let Input::Text(name) = &input
+        {
+            let Some(info) = find(name.trim()).filter(|i| i.make.is_some() && i.name != "MULTIPLE") else {
+                self.log("Unknown command.");
+                return;
+            };
+            self.active = None;
+            doc.commit();
+            self.repeat = Some(info);
+            self.log(format!("Command: {}", info.name));
+            self.start(info, doc, cursor, pick_tolerance);
+            return;
+        }
+        // LIMCHECK: no points outside the limits.
+        if let Input::Point(p) = input
+            && doc.outside_limits(p)
+        {
+            self.log("**Outside limits");
+            return;
+        }
         if let Input::Point(p) = input {
             self.last_point = Some(p);
         }
@@ -2450,14 +2582,55 @@ impl Engine {
         match result {
             Ok(Step::Continue) => {}
             Ok(Step::Done) => {
-                self.active = None;
+                let info = self.active.take().map(|a| a.info);
                 doc.commit();
                 if let Some(ids) = select {
                     self.set_selection(ids);
                 }
+                if let (Some(again), Some(info)) = (self.repeat, info)
+                    && std::ptr::eq(again, info)
+                {
+                    self.log(format!("Command: {}", info.name));
+                    self.start(info, doc, cursor, pick_tolerance);
+                }
             }
             Err(e) => self.log(e),
         }
+    }
+
+    /// Runs a command the app made, under `info_name`'s entry (`label` is
+    /// what the history shows).
+    pub fn run_with(&mut self, info_name: &str, label: &str, cmd: Box<dyn Command>, doc: &mut Document) -> bool {
+        let Some(info) = find(info_name) else { return false };
+        if self.active.is_some() {
+            self.cancel(doc);
+        }
+        self.window_start = None;
+        if !label.is_empty() {
+            self.log(format!("Command: {label}"));
+        }
+        self.launch(info, cmd, doc, Point::ORIGIN, 0.0);
+        true
+    }
+}
+
+/// MULTIPLE: asks for the command to repeat (the engine starts it).
+struct Multiple;
+
+impl Command for Multiple {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Enter command name to repeat")
+    }
+
+    fn input(&mut self, input: Input, _ctx: &mut Ctx) -> Result<Step, String> {
+        match input {
+            Input::Enter => Ok(Step::Done),
+            _ => Err("Enter a command name.".into()),
+        }
+    }
+
+    fn wants_text(&self) -> bool {
+        true
     }
 }
 

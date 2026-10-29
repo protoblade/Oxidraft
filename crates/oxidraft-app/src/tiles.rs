@@ -85,6 +85,7 @@ impl OxidraftApp {
         oxidraft_model::units::set_current(self.doc.units());
         oxidraft_model::field::set_env(self.field_env());
         self.engine.vars.viewport = self.active_viewport.as_ref().map(|v| v.id);
+        self.engine.vars.grid_spacing = self.grid_spacing.unwrap_or(0.0);
         let tiled = self.tiles.tiling != Tiling::Single && self.doc.space() == MODEL && self.active_viewport.is_none();
         if !tiled {
             self.canvas_pane(ui, full);

@@ -338,6 +338,13 @@ pub struct Document {
     attdisp: AttributeDisplay,
     /// INSBASE: the point that lands where the drawing is inserted or pasted.
     insbase: Point,
+    /// LIMITS: LIMMIN and LIMMAX, and LIMCHECK (no points outside them).
+    limits: (Point, Point),
+    limits_check: bool,
+    /// FILLMODE (fills, wide polylines and solids filled) and QTEXTMODE
+    /// (text shown as boxes).
+    fill: bool,
+    quick_text: bool,
     /// Attached drawings (XREF), by upper-case name.
     xrefs: BTreeMap<String, Xref>,
     /// Attached images and PDF pages, by upper-case name.
@@ -475,6 +482,10 @@ impl Document {
             pdsize: 0.0,
             attdisp: AttributeDisplay::Normal,
             insbase: Point::ORIGIN,
+            limits: (Point::ORIGIN, Point::new(420.0, 297.0)),
+            limits_check: false,
+            fill: true,
+            quick_text: false,
             xrefs: BTreeMap::new(),
             images: BTreeMap::new(),
             order: BTreeMap::new(),
@@ -1313,6 +1324,61 @@ impl Document {
     pub fn set_insbase(&mut self, p: Point) {
         if p != self.insbase {
             self.insbase = p;
+            self.revision += 1;
+        }
+    }
+
+    /// LIMMIN and LIMMAX.
+    pub fn limits(&self) -> (Point, Point) {
+        self.limits
+    }
+
+    pub fn set_limits(&mut self, min: Point, max: Point) {
+        let limits = (Point::new(min.x.min(max.x), min.y.min(max.y)), Point::new(min.x.max(max.x), min.y.max(max.y)));
+        if limits != self.limits {
+            self.limits = limits;
+            self.revision += 1;
+        }
+    }
+
+    /// LIMCHECK.
+    pub fn limits_check(&self) -> bool {
+        self.limits_check
+    }
+
+    pub fn set_limits_check(&mut self, on: bool) {
+        if on != self.limits_check {
+            self.limits_check = on;
+            self.revision += 1;
+        }
+    }
+
+    /// True if LIMCHECK is on and `p` is outside the limits.
+    pub fn outside_limits(&self, p: Point) -> bool {
+        let (min, max) = self.limits;
+        self.limits_check && (p.x < min.x - 1e-9 || p.y < min.y - 1e-9 || p.x > max.x + 1e-9 || p.y > max.y + 1e-9)
+    }
+
+    /// FILLMODE.
+    pub fn fill(&self) -> bool {
+        self.fill
+    }
+
+    pub fn set_fill(&mut self, on: bool) {
+        if on != self.fill {
+            self.fill = on;
+            self.revision += 1;
+        }
+    }
+
+    /// QTEXTMODE.
+    pub fn quick_text(&self) -> bool {
+        self.quick_text
+    }
+
+    pub fn set_quick_text(&mut self, on: bool) {
+        if on != self.quick_text {
+            self.quick_text = on;
             self.revision += 1;
         }
     }

@@ -129,6 +129,10 @@ pub struct OxidraftApp {
     pub(crate) point_style: Option<crate::drafting::PointStyle>,
     pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
     pub(crate) field_dialog: Option<crate::fields::FieldDialog>,
+    /// CLEANSCREENON (Ctrl+0): the ribbon and palettes hidden.
+    pub(crate) clean_screen: bool,
+    /// When the drawing was opened or started, for TIME.
+    pub(crate) opened_at: std::time::Instant,
     pub(crate) spell: Option<crate::spell::SpellDialog>,
     pub(crate) inspect_dialog: Option<crate::diminspect::InspectDialog>,
     pub(crate) text_editor: Option<crate::fields::TextEditor>,
@@ -295,6 +299,8 @@ impl OxidraftApp {
             point_style: None,
             tolerance_dialog: None,
             field_dialog: None,
+            clean_screen: false,
+            opened_at: std::time::Instant::now(),
             spell: None,
             inspect_dialog: None,
             text_editor: None,
@@ -458,6 +464,7 @@ impl OxidraftApp {
         self.engine.cancel(&mut self.doc);
         self.doc = Document::new();
         self.file_times = Default::default();
+        self.opened_at = std::time::Instant::now();
         self.shown_image_layers = None;
         self.space_views.clear();
         self.active_viewport = None;
@@ -504,6 +511,7 @@ impl OxidraftApp {
                 }
                 self.engine.log(msg);
                 self.file_times = crate::fields::FileTimes::of(&path);
+                self.opened_at = std::time::Instant::now();
                 self.path = Some(path);
                 self.dwg_version = version;
                 self.xref_selected = None;
@@ -636,6 +644,17 @@ impl OxidraftApp {
             "PTYPE" | "DDPTYPE" => self.open_point_style(),
             "TOLERANCE" | "TOL" => self.open_tolerance(),
             "FIELD" => self.open_field_dialog(false),
+            "STATUS" => self.status(),
+            "TIME" => self.time(),
+            "ATTACH" => self.attach(),
+            "EXPORT" | "EXP" => self.export(false),
+            "DXFOUT" => self.export(true),
+            "DXFIN" => self.after_saving(crate::files::Then::Open),
+            "QNEW" => self.after_saving(crate::files::Then::New),
+            "SAVEALL" => self.save(false),
+            "CLEANSCREENON" => self.clean_screen = true,
+            "CLEANSCREENOFF" => self.clean_screen = false,
+            "SETVAR" | "SET" => self.setvar(None),
             "SPELL" | "SP" => self.open_spell(),
             "DIMINSPECT" => self.open_inspect_dialog(),
             "MLEADERSTYLE" | "MLS" => self.open_leader_style(),
@@ -655,7 +674,11 @@ impl OxidraftApp {
                 self.leave_viewport();
                 return false;
             }
-            _ => return false,
+            // A system variable typed on its own, unless a command has its name.
+            other => match crate::sysvars::find(other).filter(|_| !oxidraft_commands::is_command(other)) {
+                Some(var) => self.setvar(Some(var)),
+                None => return false,
+            },
         }
         true
     }
@@ -698,6 +721,8 @@ impl OxidraftApp {
                 UiRequest::MaximizeViewport(id) => self.enter_viewport(id, true),
                 UiRequest::EditTable(id) => self.open_table_editor(id),
                 UiRequest::EditText(id) => self.open_text_editor(id),
+                UiRequest::SetVar(name, value) => self.set_var(&name, &value),
+                UiRequest::OpenXref(name) => self.open_xref(&name),
                 UiRequest::Tiling(tiling) => self.set_tiling(tiling),
                 UiRequest::ChangeSpace(ids) => self.change_space(&ids),
                 UiRequest::SaveXrefEdit => self.prepare_xref_edit_save(),
@@ -827,6 +852,9 @@ impl OxidraftApp {
         }
         if ctx.input_mut(|i| i.consume_key(cmd, Key::K)) {
             self.run("HYPERLINK");
+        }
+        if ctx.input_mut(|i| i.consume_key(cmd, Key::Num0)) {
+            self.clean_screen = !self.clean_screen;
         }
         // The Plot dialog and its preview keep Esc and Enter to themselves.
         if self.plot_keys(ctx) {
@@ -979,12 +1007,17 @@ impl eframe::App for OxidraftApp {
         self.update_title(&ctx);
 
         self.top_bar(ui);
-        self.ribbon(ui);
+        // Clean screen (Ctrl+0): the drawing, the command line and the status bar.
+        if !self.clean_screen {
+            self.ribbon(ui);
+        }
         self.status_bar(ui);
-        if self.show_file_tabs {
+        if self.show_file_tabs && !self.clean_screen {
             self.file_tabs(ui);
         }
-        self.properties_palette(ui);
+        if !self.clean_screen {
+            self.properties_palette(ui);
+        }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::model_bg())).show(ui, |ui| {
             self.canvas(ui);
         });

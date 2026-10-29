@@ -920,6 +920,29 @@ impl OxidraftApp {
     fn draw_wide(&self, painter: &Painter, rect: Rect, vertices: &[Vertex], closed: bool, stroke: Stroke) {
         let extra = (stroke.width - 1.0).max(0.0);
         let g = Geometry::Polyline { vertices: vertices.to_vec(), closed };
+        // FILLMODE off: wide segments as their outlines.
+        if !self.doc.fill() && stroke.width < 4.0 {
+            for (seg, v) in g.segments().iter().zip(vertices) {
+                let steps = match seg {
+                    Seg::Line(_) => 1,
+                    Seg::Arc(a) => ((a.length() * self.view.scale / 4.0).clamp(4.0, 720.0)) as usize,
+                };
+                let side = |sign: f64| -> Vec<Pos2> {
+                    (0..=steps)
+                        .map(|i| {
+                            let t = i as f64 / steps as f64;
+                            let half = (v.start_width + (v.end_width - v.start_width) * t) / 2.0;
+                            let (p, d) = (seg.point_at(t), seg.tangent_at(t));
+                            self.view.to_screen(rect, p + Point::new(-d.y, d.x) * (half * sign))
+                        })
+                        .collect()
+                };
+                let mut ring = side(1.0);
+                ring.extend(side(-1.0).into_iter().rev());
+                painter.add(Shape::closed_line(ring, Stroke::new(1.0, stroke.color)));
+            }
+            return;
+        }
         if let Some(w) = oxidraft_model::constant_width(vertices) {
             let mut path = self.screen_path(rect, &g);
             if closed && path.len() > 2 && path[0].distance(path[path.len() - 1]) < 0.01 {
@@ -980,6 +1003,13 @@ impl OxidraftApp {
             painter.add(Shape::convex_polygon(pts, stroke.color.gamma_multiply(0.5), Stroke::NONE));
             return;
         }
+        // QTEXTMODE: each text as its box.
+        if self.doc.quick_text() {
+            let corners = text_box(*position, *height, *rotation, *width, *attach, content, look.width_factor);
+            let pts: Vec<Pos2> = corners.iter().map(|p| self.view.to_screen(rect, *p)).collect();
+            painter.add(Shape::closed_line(pts, Stroke::new(1.0, stroke.color)));
+            return;
+        }
         let px = (*height * self.view.scale / 0.7) as f32;
         if px < 1.5 {
             return;
@@ -1011,7 +1041,8 @@ impl OxidraftApp {
     fn draw_hatch(&self, painter: &Painter, rect: Rect, g: &Geometry, stroke: Stroke) {
         let Geometry::Hatch { loops, pattern, scale, angle } = g else { return };
         let polys = hatch::polygons(loops);
-        if stroke.width >= 4.0 {
+        // FILLMODE off: solid and gradient fills as their outlines.
+        if stroke.width >= 4.0 || !self.doc.fill() && pattern.is_fill() {
             for poly in &polys {
                 let pts: Vec<Pos2> = poly.iter().map(|p| self.view.to_screen(rect, *p)).collect();
                 painter.add(Shape::closed_line(pts, stroke));

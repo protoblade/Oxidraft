@@ -941,6 +941,12 @@ fn build(doc: &Document) -> Built {
     drawing.header.dimension_line_gap = dim.gap;
     drawing.header.dimension_unit_tolerance_decimal_places = dim.decimals as i16;
     drawing.header.insertion_base = to_dxf(doc.insbase());
+    let (min, max) = doc.limits();
+    drawing.header.minimum_drawing_limits = to_dxf(min);
+    drawing.header.maximum_drawing_limits = to_dxf(max);
+    drawing.header.use_limits_checking = doc.limits_check();
+    drawing.header.fill_mode_on = doc.fill();
+    drawing.header.use_quick_text_mode = doc.quick_text();
     write_units(&mut drawing.header, doc.units());
     write_text_styles(&mut drawing, doc);
     // The XDATA applications used: registered, as AutoCAD (and DWG) need.
@@ -1533,6 +1539,11 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         doc.set_ltscale(drawing.header.line_type_scale);
     }
     doc.set_insbase(from_dxf(&drawing.header.insertion_base));
+    let h = &drawing.header;
+    doc.set_limits(from_dxf(&h.minimum_drawing_limits), from_dxf(&h.maximum_drawing_limits));
+    doc.set_limits_check(h.use_limits_checking);
+    doc.set_fill(h.fill_mode_on);
+    doc.set_quick_text(h.use_quick_text_mode);
     doc.set_units(read_units(&drawing.header));
     read_text_styles(&mut doc, drawing);
     doc.set_current_props(oxidraft_model::CurrentProps {
