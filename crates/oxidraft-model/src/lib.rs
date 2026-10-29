@@ -7,6 +7,7 @@ pub mod boundary;
 mod clip;
 mod document;
 mod entity;
+pub mod field;
 pub mod hatch;
 pub mod layout;
 mod library;

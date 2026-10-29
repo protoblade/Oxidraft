@@ -2273,3 +2273,73 @@ fn new_asks_to_save_changes_and_scripts_run() {
     h.run_steps(1);
     assert_eq!(h.state_mut().engine_mut().vars.isoplane, Some(oxidraft_commands::IsoPlane::Top));
 }
+
+#[test]
+fn fields_go_in_from_the_field_dialog_and_the_text_editor() {
+    use oxidraft_model::{Attach, DrawingProperties, field};
+    // 60 frames a second, so two clicks fall within egui's double-click time.
+    let mut h = app_with_line_at(1.0 / 60.0);
+    let doc = h.state_mut().document_mut();
+    doc.set_properties(DrawingProperties { title: "Ground floor".into(), ..Default::default() });
+    let text = doc.add(Geometry::Text {
+        look: Default::default(),
+        position: Point::new(30.0, 30.0),
+        height: 5.0,
+        rotation: 0.0,
+        width: 0.0,
+        attach: Attach::BottomLeft,
+        content: "Plan".into(),
+    });
+    h.run_steps(2);
+
+    // FIELD: Title, then where its text goes.
+    type_all(&mut h, &["field"]);
+    h.run_steps(2);
+    let title = h.get_by_label("Title").rect().center();
+    click(&mut h, title);
+    let upper = h.get_by_label("Uppercase").rect().center();
+    click(&mut h, upper);
+    h.run_steps(1);
+    assert!(h.query_by_label("GROUND FLOOR").is_some(), "the field's value shows");
+    let ok = h.get_by_label("OK").rect().center();
+    click(&mut h, ok);
+    h.run_steps(2);
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("FIELD"));
+    let at = screen(&h, 60.0, 20.0);
+    click(&mut h, at);
+    h.run_steps(2);
+    let doc = h.state_mut().document_mut();
+    let placed = doc.entities().find_map(|e| match &e.geometry {
+        Geometry::Text { content, .. } if e.id != text => Some(content.clone()),
+        _ => None,
+    });
+    assert_eq!(placed.as_deref(), Some(r#"%<\AcVar Title \f "%tc1">%"#));
+
+    // Double-click the text: the text editor, and Insert Field.
+    h.run_steps(30);
+    let on_text = screen(&h, 32.0, 31.0);
+    click(&mut h, on_text);
+    click(&mut h, on_text);
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(Role::TextInput, "Text").is_some(), "the text editor opens");
+    let insert = h.get_by_label("Insert Field...").rect().center();
+    click(&mut h, insert);
+    h.run_steps(2);
+    let name = h.get_by_label("Filename").rect().center();
+    click(&mut h, name);
+    // The Field dialog's OK, over the text editor's.
+    let ok = h.get_all_by_label("OK").last().unwrap().rect().center();
+    click(&mut h, ok);
+    h.run_steps(2);
+    let ok = h.get_by_label("OK").rect().center();
+    click(&mut h, ok);
+    h.run_steps(2);
+    let doc = h.state_mut().document_mut();
+    match &doc.entity(text).unwrap().geometry {
+        Geometry::Text { content, .. } => {
+            assert_eq!(content, r#"Plan%<\AcVar Filename \f "%fn6">%"#);
+            assert_eq!(field::evaluate(content, doc), "PlanDrawing1.dxf");
+        }
+        g => panic!("{g:?}"),
+    }
+}

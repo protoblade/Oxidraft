@@ -938,6 +938,28 @@ fn main() {
     h.run_steps(3);
     save(&mut h, &dir, "46-gradient");
 
+    // The Field dialog, over a title block's fields.
+    let mut h = harness();
+    {
+        let doc = h.state_mut().document_mut();
+        doc.set_properties(oxidraft_model::DrawingProperties {
+            title: "Ground floor plan".into(),
+            ..Default::default()
+        });
+        doc.add(Geometry::Text {
+            look: Default::default(),
+            position: Point::new(10.0, 20.0),
+            height: 3.0,
+            rotation: 0.0,
+            width: 0.0,
+            attach: Default::default(),
+            content: r#"%<\AcVar Title \f "%tc1">%\PPlotted %<\AcVar Date \f "MMMM d, yyyy">%"#.into(),
+        });
+    }
+    h.state_mut().type_command("field");
+    h.run_steps(3);
+    save(&mut h, &dir, "47-field");
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");

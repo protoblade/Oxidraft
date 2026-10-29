@@ -70,7 +70,7 @@ pub(crate) fn read_drawing(path: &Path) -> Result<Document, String> {
     if oxidraft_io_dwg::is_dwg(path) {
         oxidraft_io_dwg::load_file(path).map(|o| o.imported.document)
     } else {
-        oxidraft_io_dxf::load_file(path).map(|i| i.document).map_err(|e| e.to_string())
+        oxidraft_io_dwg::load_dxf(path).map(|i| i.document)
     }
 }
 

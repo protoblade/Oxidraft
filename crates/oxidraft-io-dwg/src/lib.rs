@@ -9,6 +9,7 @@ use acadrust::{CadDocument, DwgReadOptions, DwgReader, DwgWriter, DxfReader, Dxf
 use oxidraft_io_dxf::Imported;
 use oxidraft_model::Document;
 
+mod fields;
 mod groups;
 mod layouts;
 mod settings;
@@ -99,18 +100,41 @@ pub fn read(bytes: &[u8]) -> Result<Opened, Error> {
         }
     }
     let dxf = DxfWriter::new(&cad).with_version(DxfVersion::AC1032).write_to_vec().map_err(|e| e.to_string())?;
-    let imported = oxidraft_io_dxf::read(&mut dxf.as_slice()).map_err(|e| e.to_string())?;
+    let mut imported = oxidraft_io_dxf::read(&mut dxf.as_slice()).map_err(|e| e.to_string())?;
+    fields::restore(&cad, &mut imported);
     Ok(Opened { imported, version })
 }
 
-/// The drawing as acadrust holds it, layouts and all, ready to write.
-fn cad(doc: &Document) -> Result<CadDocument, Error> {
+/// A DXF file, its texts' AutoCAD fields brought back as field codes.
+pub fn read_dxf(bytes: &[u8]) -> Result<Imported, Error> {
+    let mut imported = oxidraft_io_dxf::read(&mut &bytes[..]).map_err(|e| e.to_string())?;
+    if bytes.windows(10).any(|w| w == b"ACAD_FIELD")
+        && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
+    {
+        fields::restore(&cad, &mut imported);
+    }
+    Ok(imported)
+}
+
+pub fn load_dxf(path: impl AsRef<Path>) -> Result<Imported, Error> {
+    read_dxf(&std::fs::read(path).map_err(|e| e.to_string())?)
+}
+
+/// The drawing as acadrust holds it, layouts and all, ready to write as
+/// `version` (fields are AutoCAD 2004's: older versions get their values).
+fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
     let mut dxf = Vec::new();
     let handles = oxidraft_io_dxf::write_with_handles(doc, &mut dxf).map_err(|e| e.to_string())?;
     let mut cad = DxfReader::from_reader(Cursor::new(dxf)).and_then(|r| r.read()).map_err(|e| e.to_string())?;
     layouts::finish(&mut cad, doc);
     groups::finish(&mut cad, doc, &handles);
     settings::finish(&mut cad, doc);
+    cad.version = version;
+    if version >= DxfVersion::AC1018 {
+        fields::finish(&mut cad, doc, &handles);
+    } else {
+        fields::flatten(&mut cad, doc, &handles);
+    }
     // DWG keeps CELTYPE as its linetype's handle; acadrust reads only the name.
     if let Some(lt) = cad.line_types.get(&cad.header.current_linetype_name) {
         cad.header.current_linetype_handle = lt.handle;
@@ -120,8 +144,7 @@ fn cad(doc: &Document) -> Result<CadDocument, Error> {
 
 /// The drawing as a DWG file of `version`.
 pub fn write(doc: &Document, version: Version) -> Result<Vec<u8>, Error> {
-    let mut cad = cad(doc)?;
-    cad.version = version.code();
+    let cad = cad(doc, version.code())?;
     let mut out = Cursor::new(Vec::new());
     DwgWriter::write_to_writer(&mut out, &cad).map_err(|e| e.to_string())?;
     Ok(out.into_inner())
@@ -133,8 +156,7 @@ pub fn write(doc: &Document, version: Version) -> Result<Vec<u8>, Error> {
 pub fn write_dxf(doc: &Document) -> Result<Vec<u8>, Error> {
     let newer = oxidraft_io_dxf::needs_newer_version(doc);
     let version = if newer { DxfVersion::AC1024 } else { DxfVersion::AC1015 };
-    let mut cad = cad(doc)?;
-    cad.version = version;
+    let cad = cad(doc, version)?;
     DxfWriter::new(&cad).with_version(version).write_to_vec().map_err(|e| e.to_string())
 }
 
@@ -748,6 +770,53 @@ mod tests {
         for version in [Version::R2018, Version::R2000] {
             check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
         }
+    }
+
+    #[test]
+    fn fields_survive_as_autocads() {
+        use oxidraft_model::field;
+        field::set_env(field::FieldEnv {
+            now: field::Moment { year: 2026, month: 10, day: 29, ..Default::default() },
+            ..Default::default()
+        });
+        let mut doc = Document::new();
+        let circle = doc.add(Geometry::Circle { center: Point::new(0.0, 0.0), radius: 2.0 });
+        for width in [0.0, 40.0] {
+            let content = format!(
+                r#"Issued %<\AcVar Date \f "yyyy-MM-dd">%, area {}"#,
+                field::object_code(circle, "Area", "%lu2%pr2")
+            );
+            doc.add(Geometry::Text {
+                position: Point::new(0.0, width),
+                height: 2.5,
+                rotation: 0.0,
+                width,
+                attach: Default::default(),
+                content,
+                look: Default::default(),
+            });
+        }
+        let shown = "Issued 2026-10-29, area 12.57";
+        let check = |back: &Document, how: &str, kept: bool| {
+            let texts: Vec<&String> = back
+                .entities()
+                .filter_map(|e| match &e.geometry {
+                    Geometry::Text { content, .. } => Some(content),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(texts.len(), 2, "{how}");
+            for t in texts {
+                assert_eq!(field::has_fields(t), kept, "{how}: {t}");
+                assert_eq!(field::evaluate(t, back), shown, "{how}");
+            }
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF", true);
+        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF", true);
+        check(&read(&write(&doc, Version::R2018).unwrap()).unwrap().imported.document, "R2018", true);
+        check(&read(&write(&doc, Version::R2000).unwrap()).unwrap().imported.document, "R2000", false);
     }
 
     #[test]

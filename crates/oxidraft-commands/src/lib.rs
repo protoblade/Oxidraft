@@ -33,6 +33,7 @@ mod ellipse;
 mod engine;
 mod erase;
 mod explode;
+mod field_cmd;
 mod fillet;
 mod grip;
 mod groups;
@@ -172,6 +173,8 @@ pub enum ViewRequest {
 pub enum UiRequest {
     /// The Enhanced Attribute Editor for a block reference (EATTEDIT).
     EditAttributes(EntityId),
+    /// The text editor for a text (TEXTEDIT).
+    EditText(EntityId),
     /// The full command history, for long output like LIST's.
     TextWindow,
     /// Back to the Plot dialog with the window picked for it (`None`: as

@@ -703,6 +703,24 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(crate::views::IsoPlaneCmd::default())),
     },
     CommandInfo {
+        name: "FIELD",
+        aliases: &[],
+        description: "Insert a field: text showing the date, the file name, the drawing's properties or an object's area",
+        make: Some(|| Box::new(crate::field_cmd::FieldText::default())),
+    },
+    CommandInfo {
+        name: "UPDATEFIELD",
+        aliases: &[],
+        description: "Update the fields in the selected objects",
+        make: Some(|| Box::new(crate::field_cmd::UpdateField)),
+    },
+    CommandInfo {
+        name: "TEXTEDIT",
+        aliases: &["ED", "DDEDIT"],
+        description: "Edit text, attribute values or a table's cells (or double-click them)",
+        make: Some(|| Box::new(crate::field_cmd::TextEdit::default())),
+    },
+    CommandInfo {
         name: "HYPERLINK",
         aliases: &["-HYPERLINK"],
         description: "Link objects to a web page or file (Cmd/Ctrl-click to follow), or remove links",

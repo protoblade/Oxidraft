@@ -12,6 +12,7 @@ mod cmdline;
 mod compare;
 mod drafting;
 mod drawing_units;
+mod fields;
 mod files;
 mod icons;
 mod layer_states;

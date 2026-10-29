@@ -31,6 +31,8 @@ pub struct Imported {
     pub document: Document,
     /// Number of DXF entities of types Oxidraft can't represent yet.
     pub skipped: usize,
+    /// The objects of model and paper space by their DXF handles.
+    pub handles: HashMap<u64, EntityId>,
 }
 
 fn to_dxf(p: Point) -> DxfPoint {
@@ -738,9 +740,12 @@ fn read_text_styles(doc: &mut Document, drawing: &Drawing) {
 }
 
 /// True if the drawing has what AutoCAD 2000's DXF can't hold: PDF
-/// underlays or transparency.
+/// underlays, transparency or fields.
 pub fn needs_newer_version(doc: &Document) -> bool {
     doc.image_defs().any(|d| d.is_pdf())
+        || doc.all_entities().any(
+            |e| matches!(&e.geometry, Geometry::Text { content, .. } if oxidraft_model::field::has_fields(content)),
+        )
         || doc.layers().iter().any(|l| l.transparency > 0)
         || doc.all_entities().any(|e| e.transparency != oxidraft_model::Transparency::ByLayer)
 }
@@ -1861,7 +1866,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
     read_settings(&mut doc, &raw.layouts);
     // A freshly opened file starts with an empty undo history.
     doc.forget_history();
-    Imported { document: doc, skipped }
+    Imported { document: doc, skipped, handles: ids_by_handle }
 }
 
 /// Sets imported attributes' layer and color: from the file when known,

@@ -1349,9 +1349,20 @@ impl Document {
                 | Geometry::AngularDimension { .. }
                 | Geometry::Leader { .. }
         ) {
-            return vec![e.geometry.clone()];
+            return vec![self.shown(&e.geometry)];
         }
         self.expanded_styled(e).into_iter().map(|s| s.geometry).collect()
+    }
+
+    /// `g` as it shows: text with its fields' values.
+    pub fn shown(&self, g: &Geometry) -> Geometry {
+        let mut g = g.clone();
+        if let Geometry::Text { content, .. } = &mut g
+            && crate::field::has_fields(content)
+        {
+            *content = crate::field::evaluate(content, self);
+        }
+        g
     }
 
     fn resolve(&self, layer: &str, style: (Color, &str, Lineweight), by_block: &Inherited) -> Inherited {
@@ -1382,7 +1393,7 @@ impl Document {
         let own = self.resolve(layer, style, by_block);
         let Geometry::Insert { block, placement, attributes, clip } = g else {
             let Inherited { color, linetype, lineweight } = own;
-            out.push(Styled { geometry: g.clone(), color, layer: layer.to_string(), linetype, lineweight });
+            out.push(Styled { geometry: self.shown(g), color, layer: layer.to_string(), linetype, lineweight });
             return;
         };
         let start = out.len();
@@ -1422,7 +1433,7 @@ impl Document {
         }
         for a in attributes.iter().filter(|a| self.shows_attribute(a)) {
             out.push(Styled {
-                geometry: a.text(),
+                geometry: self.shown(&a.text()),
                 color: self.color_on(&a.layer, a.color, own.color),
                 layer: a.layer.clone(),
                 linetype: CONTINUOUS.into(),

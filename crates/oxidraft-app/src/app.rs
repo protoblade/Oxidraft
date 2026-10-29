@@ -128,6 +128,10 @@ pub struct OxidraftApp {
     pub(crate) drafting_settings: Option<crate::drafting::DraftingSettings>,
     pub(crate) point_style: Option<crate::drafting::PointStyle>,
     pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
+    pub(crate) field_dialog: Option<crate::fields::FieldDialog>,
+    pub(crate) text_editor: Option<crate::fields::TextEditor>,
+    /// When the drawing's file was made and saved, for fields.
+    pub(crate) file_times: crate::fields::FileTimes,
     pub(crate) style_dialog: Option<crate::annotation_styles::StyleDialog>,
     pub(crate) attribute_manager: Option<crate::battman::AttributeManager>,
     pub(crate) layer_states_dialog: Option<crate::layer_states::LayerStatesDialog>,
@@ -288,6 +292,9 @@ impl OxidraftApp {
             drafting_settings: None,
             point_style: None,
             tolerance_dialog: None,
+            field_dialog: None,
+            text_editor: None,
+            file_times: Default::default(),
             style_dialog: None,
             attribute_manager: None,
             layer_states_dialog: None,
@@ -446,6 +453,7 @@ impl OxidraftApp {
         self.engine.cancel(&mut self.doc);
         self.engine.cancel(&mut self.doc);
         self.doc = Document::new();
+        self.file_times = Default::default();
         self.shown_image_layers = None;
         self.space_views.clear();
         self.active_viewport = None;
@@ -477,7 +485,7 @@ impl OxidraftApp {
         let loaded = if dwg {
             oxidraft_io_dwg::load_file(&path).map(|o| (o.imported, Some(o.version)))
         } else {
-            oxidraft_io_dxf::load_file(&path).map(|i| (i, None)).map_err(|e| e.to_string())
+            oxidraft_io_dwg::load_dxf(&path).map(|i| (i, None))
         };
         match loaded {
             Ok((imported, version)) => {
@@ -491,6 +499,7 @@ impl OxidraftApp {
                     msg.push_str(&format!(", skipped {} unsupported objects", imported.skipped));
                 }
                 self.engine.log(msg);
+                self.file_times = crate::fields::FileTimes::of(&path);
                 self.path = Some(path);
                 self.dwg_version = version;
                 self.xref_selected = None;
@@ -541,6 +550,7 @@ impl OxidraftApp {
             Ok(version) => {
                 let format = version.map_or(String::new(), |v| format!(" as {} DWG", v.name()));
                 self.engine.log(format!("Saved {}{format}", path.display()));
+                self.just_saved();
                 self.path = Some(path);
                 self.dwg_version = version;
                 self.saved_revision = self.doc.revision();
@@ -621,6 +631,7 @@ impl OxidraftApp {
             "OSNAP" | "OS" | "DDOSNAP" => self.open_drafting_settings(2),
             "PTYPE" | "DDPTYPE" => self.open_point_style(),
             "TOLERANCE" | "TOL" => self.open_tolerance(),
+            "FIELD" => self.open_field_dialog(false),
             "MLEADERSTYLE" | "MLS" => self.open_leader_style(),
             "BATTMAN" => self.open_attribute_manager(),
             "LAYERSTATE" | "LAS" => self.open_layer_states(),
@@ -680,6 +691,7 @@ impl OxidraftApp {
                 UiRequest::TextWindow => self.history_expanded = true,
                 UiRequest::MaximizeViewport(id) => self.enter_viewport(id, true),
                 UiRequest::EditTable(id) => self.open_table_editor(id),
+                UiRequest::EditText(id) => self.open_text_editor(id),
                 UiRequest::Tiling(tiling) => self.set_tiling(tiling),
                 UiRequest::ChangeSpace(ids) => self.change_space(&ids),
                 UiRequest::SaveXrefEdit => self.prepare_xref_edit_save(),
@@ -1004,6 +1016,8 @@ impl eframe::App for OxidraftApp {
         self.drafting_settings_dialog(&ctx);
         self.point_style_dialog(&ctx);
         self.tolerance_dialog(&ctx);
+        self.text_editor(&ctx);
+        self.field_dialog(&ctx);
         self.annotation_style_dialog(&ctx);
         self.attribute_manager_dialog(&ctx);
         self.layer_states_dialog(&ctx);

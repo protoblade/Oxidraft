@@ -430,6 +430,22 @@ impl OxidraftApp {
                 );
             });
         });
+        ribbon_panel(ui, "Data", |ui| {
+            ui.vertical(|ui| {
+                for t in [
+                    tool(
+                        Icon::Text,
+                        "Field",
+                        Some("FIELD"),
+                        "Inserts a field: text that shows the date, the file name, a drawing property or an object's area",
+                    ),
+                    tool(Icon::Text, "Update Fields", Some("UPDATEFIELD"), "Updates the fields in the selected objects"),
+                    tool(Icon::Text, "Hyperlink", Some("HYPERLINK"), "Links objects to a web page or file (Ctrl+K)"),
+                ] {
+                    self.small_tool(ui, &t);
+                }
+            });
+        });
     }
 
     /// A large button that shows a setting on (highlighted) or off; returns

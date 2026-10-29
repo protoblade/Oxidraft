@@ -83,6 +83,7 @@ impl OxidraftApp {
         oxidraft_model::annotation::set_dim_style(self.doc.dim_style());
         oxidraft_model::annotation::set_leader_style(self.doc.leader_style());
         oxidraft_model::units::set_current(self.doc.units());
+        oxidraft_model::field::set_env(self.field_env());
         let tiled = self.tiles.tiling != Tiling::Single && self.doc.space() == MODEL && self.active_viewport.is_none();
         if !tiled {
             self.canvas_pane(ui, full);
