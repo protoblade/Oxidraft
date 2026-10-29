@@ -63,6 +63,17 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document) {
         }
         add_record(cad, oxidraft_io_dxf::PDF_LAYERS_RECORD, entries);
     }
+    // Dynamic blocks: each block's name (1), then its definition's lines (3).
+    let dynamic: Vec<_> = doc.all_dynamic_blocks().collect();
+    if !dynamic.is_empty() {
+        let mut entries = Vec::new();
+        for (name, def) in dynamic {
+            let name = doc.block(name).map_or_else(|| name.clone(), |b| b.name.clone());
+            entries.push(XRecordEntry::string(1, name));
+            entries.extend(def.to_text().lines().map(|l| XRecordEntry::string(3, l.to_string())));
+        }
+        add_record(cad, oxidraft_io_dxf::DYNAMIC_BLOCKS_RECORD, entries);
+    }
 }
 
 /// An XRECORD of `entries` in the root dictionary under `name`.

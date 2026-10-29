@@ -30,6 +30,7 @@ mod dims;
 mod dims_more;
 mod donut;
 mod draworder;
+pub mod dynblock;
 mod edit;
 mod ellipse;
 mod engine;

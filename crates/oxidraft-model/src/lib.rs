@@ -10,6 +10,7 @@ pub mod centermark;
 mod clip;
 pub mod dimassoc;
 mod document;
+pub mod dynamic;
 mod entity;
 pub mod field;
 pub mod hatch;

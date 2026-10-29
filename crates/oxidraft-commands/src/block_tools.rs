@@ -158,6 +158,7 @@ impl NCopy {
             transparency: e.transparency,
             hyperlink: None,
             array: None,
+            dynamic: None,
             geometry: part.geometry,
         })
     }

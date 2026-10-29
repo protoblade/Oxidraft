@@ -100,8 +100,16 @@ pub fn read(bytes: &[u8]) -> Result<Opened, Error> {
             .records()
             .iter()
             .filter(|r| {
-                ["PE_URL", "OXIDRAFT_ANNO", "OXIDRAFT_ARRAY", "OXIDRAFT_MLEADER", "OXIDRAFT_PART", "OXIDRAFT_TABLE"]
-                    .contains(&r.application_name.as_str())
+                [
+                    "PE_URL",
+                    "OXIDRAFT_ANNO",
+                    "OXIDRAFT_ARRAY",
+                    "OXIDRAFT_MLEADER",
+                    "OXIDRAFT_PART",
+                    "OXIDRAFT_TABLE",
+                    "OXIDRAFT_DYN",
+                ]
+                .contains(&r.application_name.as_str())
                     || dimension && ["ACAD", "OXIDRAFT_DIM"].contains(&r.application_name.as_str())
             })
             .cloned()
@@ -1131,6 +1139,66 @@ mod tests {
         let mut ours = Vec::new();
         oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
         check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
+    fn dynamic_blocks_and_their_references_survive() {
+        use oxidraft_model::dynamic::{DynamicBlock, DynamicValues, Param, VisibilityState};
+        use oxidraft_model::{Block, BlockEntity, Color, Placement};
+        let mut doc = Document::new();
+        let line = |a: (f64, f64), b: (f64, f64)| {
+            BlockEntity::new(
+                "0",
+                Color::ByBlock,
+                Geometry::Line { start: Point::new(a.0, a.1), end: Point::new(b.0, b.1) },
+            )
+        };
+        doc.define_block(Block {
+            name: "DOOR".into(),
+            base: Point::ORIGIN,
+            entities: vec![line((0.0, 0.0), (900.0, 0.0)), line((0.0, 0.0), (0.0, 900.0))],
+        });
+        let def = DynamicBlock {
+            params: vec![Param::Linear {
+                name: "Width".into(),
+                base: Point::ORIGIN,
+                end: Point::new(900.0, 0.0),
+                stretch: Some(oxidraft_geom::Aabb::from_points(Point::new(800.0, -10.0), Point::new(1000.0, 10.0))),
+            }],
+            states: vec![
+                VisibilityState { name: "Open".into(), hidden: vec![] },
+                VisibilityState { name: "Closed".into(), hidden: vec![1] },
+            ],
+            current_state: 0,
+        };
+        doc.set_dynamic_block("DOOR", Some(def.clone()));
+        let id = doc.add(Geometry::Insert {
+            block: "DOOR".into(),
+            placement: Placement::at(Point::ORIGIN),
+            attributes: vec![],
+            clip: None,
+        });
+        let values = DynamicValues {
+            block: "DOOR".into(),
+            values: vec![("Width".into(), 1200.0)],
+            visibility: Some("Closed".into()),
+        };
+        doc.set_dynamic_values(id, values.clone());
+        let check = |back: &Document, how: &str| {
+            assert_eq!(back.dynamic_block("DOOR"), Some(&def), "{how}");
+            let e = back.entities().find(|e| matches!(e.geometry, Geometry::Insert { .. })).unwrap();
+            assert_eq!(e.dynamic.as_deref(), Some(&values), "{how}");
+            let drawn = back.expanded(e);
+            assert!(
+                drawn.len() == 1
+                    && matches!(drawn[0], Geometry::Line { end, .. } if end.approx_eq(Point::new(1200.0, 0.0))),
+                "{how}: {drawn:?}"
+            );
+        };
         check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
         for version in [Version::R2018, Version::R2000] {
             check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));

@@ -296,6 +296,12 @@ pub(crate) enum Change {
         before: Option<crate::dimassoc::DimAssoc>,
         after: Option<crate::dimassoc::DimAssoc>,
     },
+    /// A block's dynamic definition (BPARAMETER, BVSTATE and the like).
+    Dynamic {
+        key: String,
+        before: Option<crate::dynamic::DynamicBlock>,
+        after: Option<crate::dynamic::DynamicBlock>,
+    },
     /// The multileader and table styles.
     AnnotationStyles {
         before: (crate::annotation::LeaderStyle, crate::table::TableStyle),
@@ -353,6 +359,8 @@ pub struct Document {
     named_ucs: Vec<crate::ucs::NamedUcs>,
     /// Associative dimensions: what each one's definition points follow.
     pub(crate) dim_assoc: BTreeMap<EntityId, crate::dimassoc::DimAssoc>,
+    /// Dynamic blocks' definitions, by block name (upper case).
+    pub(crate) dynamic_blocks: BTreeMap<String, crate::dynamic::DynamicBlock>,
     /// Objects hidden for now (HIDEOBJECTS, ISOLATEOBJECTS): not drawn,
     /// picked or plotted, but kept, saved and undone as ever.
     hidden_objects: std::collections::HashSet<EntityId>,
@@ -511,6 +519,7 @@ impl Document {
             pdf_layers_off: BTreeMap::new(),
             dim_assoc: BTreeMap::new(),
             hidden_objects: Default::default(),
+            dynamic_blocks: BTreeMap::new(),
             anno_scale: 1.0,
             anno_all_visible: true,
             limits: (Point::ORIGIN, Point::new(420.0, 297.0)),
@@ -2128,6 +2137,7 @@ impl Document {
             transparency,
             hyperlink: None,
             array: None,
+            dynamic: None,
             geometry,
         };
         self.insert_entity(entity)
@@ -2475,6 +2485,7 @@ impl Document {
                     Change::LayerStates { .. } => "Layer state",
                     Change::Properties { .. } => "Drawing properties",
                     Change::DimAssoc { .. } => "Dimension association",
+                    Change::Dynamic { .. } => "Dynamic block",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -2536,6 +2547,12 @@ impl Document {
                 match if forward { after } else { before } {
                     Some(a) => self.dim_assoc.insert(*id, a.clone()),
                     None => self.dim_assoc.remove(id),
+                };
+            }
+            Change::Dynamic { key, before, after } => {
+                match if forward { after } else { before } {
+                    Some(d) => self.dynamic_blocks.insert(key.clone(), d.clone()),
+                    None => self.dynamic_blocks.remove(key),
                 };
             }
             Change::LayerStates { before, after } => {

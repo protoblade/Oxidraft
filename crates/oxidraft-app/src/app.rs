@@ -830,6 +830,13 @@ impl OxidraftApp {
             "DATALINKUPDATE" | "DLU" => {
                 self.data_link_update();
             }
+            "BAUTHORPALETTE" | "BAUTHORPALETTECLOSE" | "BTESTBLOCK" | "BACTIONBAR" | "BCYCLEORDER" | "BGRIPSET" => {
+                self.engine.log(
+                    "Block authoring is on the Block Editor's Dynamic panel (BPARAMETER, BACTION, BVSTATE, BVHIDE, BVSHOW); \
+                     insert the block to test it, and change its values in Properties or with -DYNPROP.",
+                )
+            }
+            "BATTORDER" => self.open_attribute_manager(),
             "DGNIMPORT" => self.dgn_import(),
             "DGNATTACH" => self.dgn_attach(),
             "DGNEXPORT" => self.dgn_export(),

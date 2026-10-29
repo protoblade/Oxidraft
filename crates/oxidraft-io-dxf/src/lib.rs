@@ -861,6 +861,60 @@ pub const SETTINGS_RECORD: &str = "OXIDRAFT_SETTINGS";
 /// The XRECORD the drawing's layer states are kept in (see the DWG writer).
 pub const LAYER_STATES_RECORD: &str = "OXIDRAFT_LAYER_STATES";
 
+/// The XRECORD keeping the dynamic blocks' definitions.
+pub const DYNAMIC_BLOCKS_RECORD: &str = "OXIDRAFT_DYNBLOCKS";
+
+/// The XDATA application keeping a dynamic reference's values.
+const DYN_APP: &str = "OXIDRAFT_DYN";
+
+/// A dynamic reference's values as XDATA: its block, its visibility
+/// state, then each parameter's name and value.
+fn dyn_xdata(e: &oxidraft_model::Entity) -> Option<dxf::XData> {
+    let v = e.dynamic.as_deref()?;
+    let mut items =
+        vec![dxf::XDataItem::Str(v.block.clone()), dxf::XDataItem::Str(v.visibility.clone().unwrap_or_default())];
+    for (name, value) in &v.values {
+        items.extend([dxf::XDataItem::Str(name.clone()), dxf::XDataItem::Real(*value)]);
+    }
+    Some(dxf::XData { application_name: DYN_APP.into(), items })
+}
+
+fn dyn_from(x_data: &[dxf::XData]) -> Option<Box<oxidraft_model::dynamic::DynamicValues>> {
+    let x = x_data.iter().find(|x| x.application_name == DYN_APP)?;
+    let mut it = x.items.iter();
+    let text = |i: Option<&dxf::XDataItem>| if let Some(dxf::XDataItem::Str(s)) = i { Some(s.clone()) } else { None };
+    let block = text(it.next())?;
+    let visibility = text(it.next()).filter(|v| !v.is_empty());
+    let mut values = Vec::new();
+    while let (Some(name), Some(dxf::XDataItem::Real(v))) = (text(it.next()), it.next()) {
+        values.push((name, *v));
+    }
+    Some(Box::new(oxidraft_model::dynamic::DynamicValues { block, values, visibility }))
+}
+
+fn read_dynamic_blocks(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
+    let Some(handle) = raw.dictionaries.values().flatten().find(|(n, _)| n == DYNAMIC_BLOCKS_RECORD).map(|(_, h)| *h)
+    else {
+        return;
+    };
+    let Some(pairs) = raw.xrecords.get(&handle) else { return };
+    let mut current: Option<(String, Vec<String>)> = None;
+    for (code, value) in pairs.iter().chain(std::iter::once(&(1, String::new()))) {
+        match code {
+            1 => {
+                if let Some((name, lines)) = current.take().filter(|c| !c.0.is_empty())
+                    && let Some(def) = oxidraft_model::dynamic::DynamicBlock::from_text(&lines.join("\n"))
+                {
+                    doc.set_dynamic_block(&name, Some(def));
+                }
+                current = Some((value.clone(), Vec::new()));
+            }
+            3 => current.iter_mut().for_each(|c| c.1.push(value.clone())),
+            _ => {}
+        }
+    }
+}
+
 /// The XRECORD keeping the PDF underlays' layers turned off (ULAYERS).
 pub const PDF_LAYERS_RECORD: &str = "OXIDRAFT_PDF_LAYERS";
 
@@ -969,6 +1023,7 @@ fn read_properties(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
 fn read_settings(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
     read_layer_states(doc, raw);
     read_pdf_layers(doc, raw);
+    read_dynamic_blocks(doc, raw);
     read_properties(doc, raw);
     let Some(handle) = raw.dictionaries.values().flatten().find(|(n, _)| n == SETTINGS_RECORD).map(|(_, h)| *h) else {
         return;
@@ -1077,6 +1132,9 @@ fn build(doc: &Document) -> Built {
     }
     if doc.all_entities().any(|e| e.array.is_some()) {
         apps.push(array_xdata::APP);
+    }
+    if doc.all_entities().any(|e| e.dynamic.is_some()) {
+        apps.push(DYN_APP);
     }
     if doc.all_entities().any(|e| matches!(e.geometry, Geometry::Leader { .. } | Geometry::Table { .. })) {
         apps.extend([leader_xdata::APP, leader_xdata::PART_APP, table_xdata::APP]);
@@ -1217,6 +1275,7 @@ fn build(doc: &Document) -> Built {
             de.common.x_data.extend(dim_xdata::xdata(&e.geometry));
             de.common.x_data.extend(anno_xdata(e));
             de.common.x_data.extend(array_xdata::xdata(e));
+            de.common.x_data.extend(dyn_xdata(e));
             add_attributes(&mut drawing, &mut de, own.as_ref().unwrap_or(&e.geometry), &mut styles);
             entities.push((de, &e.geometry, e.id));
         }
@@ -1235,6 +1294,7 @@ fn build(doc: &Document) -> Built {
                 de.common.x_data.extend(dim_xdata::xdata(&e.geometry));
                 de.common.x_data.extend(anno_xdata(e));
                 de.common.x_data.extend(array_xdata::xdata(e));
+                de.common.x_data.extend(dyn_xdata(e));
                 if i == 0 {
                     de.common.is_in_paper_space = true;
                     add_attributes(&mut drawing, &mut de, attributes, &mut styles);
@@ -1936,6 +1996,9 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                 if let Some(a) = array_xdata::read(&e.common.x_data, &doc, id) {
                     doc.update(id, |x| x.array = Some(a));
                 }
+                if let Some(v) = dyn_from(&e.common.x_data) {
+                    doc.update(id, |x| x.dynamic = Some(v));
+                }
                 placed.push((e.common.handle.0, position as f64, id));
             }
             None => skipped += 1,
@@ -1982,6 +2045,9 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                     }
                     if let Some(a) = array_xdata::read(&e.common.x_data, &doc, id) {
                         doc.update(id, |x| x.array = Some(a));
+                    }
+                    if let Some(v) = dyn_from(&e.common.x_data) {
+                        doc.update(id, |x| x.dynamic = Some(v));
                     }
                     placed.push((e.common.handle.0, f64::from(u32::MAX), id));
                 }

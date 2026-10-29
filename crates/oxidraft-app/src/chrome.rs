@@ -1121,6 +1121,26 @@ impl OxidraftApp {
                 }
             }
         });
+        // Making it dynamic: parameters, their actions, visibility states.
+        ribbon_panel(ui, "Dynamic", |ui| {
+            ui.vertical(|ui| {
+                for t in [
+                    tool(Icon::Dimension, "Parameter", Some("BPARAMETER"), "A Linear, Flip or Rotation parameter"),
+                    tool(Icon::Stretch, "Stretch Action", Some("BACTION"), "What a linear parameter stretches"),
+                    tool(Icon::Properties, "Visibility States", Some("BVSTATE"), "New, current or deleted states"),
+                ] {
+                    self.small_tool(ui, &t);
+                }
+            });
+            ui.vertical(|ui| {
+                for t in [
+                    tool(Icon::Erase, "Make Invisible", Some("BVHIDE"), "Hides objects in the current state"),
+                    tool(Icon::Properties, "Make Visible", Some("BVSHOW"), "Shows objects in the current state"),
+                ] {
+                    self.small_tool(ui, &t);
+                }
+            });
+        });
     }
 
     /// The Edit Reference panel, shown while a reference is edited in place.

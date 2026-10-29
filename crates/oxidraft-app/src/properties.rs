@@ -212,6 +212,10 @@ impl OxidraftApp {
             if let [e] = selected.as_slice() {
                 section(ui, "Geometry");
                 self.geometry_rows(ui, e, width);
+                if self.doc.dynamic_values(e.id).is_some() {
+                    section(ui, "Custom");
+                    self.dynamic_rows(ui, e.id, width);
+                }
             }
         });
     }
@@ -751,6 +755,49 @@ impl OxidraftApp {
                 ui.end_row();
             }
         });
+    }
+
+    /// A dynamic block reference's parameters and visibility state, as
+    /// AutoCAD's palette lists them under Custom.
+    fn dynamic_rows(&mut self, ui: &mut Ui, id: EntityId, width: f32) {
+        let Some(values) = self.doc.dynamic_values(id) else { return };
+        let Some(def) = self.doc.dynamic_block(&values.block).cloned() else { return };
+        let mut changed = values.clone();
+        egui::Grid::new(("dynamic_rows", id)).num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
+            for p in &def.params {
+                let name = p.name().to_string();
+                label_cell(ui, &name);
+                let v = values.value(&name).unwrap_or_else(|| p.default_value());
+                let angle = matches!(p, oxidraft_model::dynamic::Param::Rotation { .. });
+                if let Some(new) = self.number_field(ui, &name, Id::unique(("dyn", id, name.as_str())), v, angle, width)
+                {
+                    changed.values.retain(|(n, _)| !n.eq_ignore_ascii_case(&name));
+                    changed.values.push((name, new));
+                }
+                ui.end_row();
+            }
+            if !def.states.is_empty() {
+                label_cell(ui, "Visibility");
+                let current = values.visibility.clone().unwrap_or_else(|| def.states[0].name.clone());
+                let r = egui::ComboBox::from_id_salt(("dyn_vis", id)).width(width).selected_text(&current).show_ui(
+                    ui,
+                    |ui| {
+                        for s in &def.states {
+                            if ui.selectable_label(s.name == current, &s.name).clicked() {
+                                changed.visibility = Some(s.name.clone());
+                            }
+                        }
+                    },
+                );
+                r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Visibility"));
+                ui.end_row();
+            }
+        });
+        if changed != values {
+            self.doc.begin("PROPERTIES");
+            self.doc.set_dynamic_values(id, changed);
+            self.doc.commit();
+        }
     }
 
     /// An editable number that applies on Enter or when it loses focus.

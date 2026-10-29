@@ -1506,6 +1506,9 @@ pub struct Entity {
     pub annotative: Option<Box<Annotative>>,
     /// Its layout, when it's an associative array (a block reference).
     pub array: Option<Box<crate::assoc_array::AssocArray>>,
+    /// Its parameters' values, when it's a dynamic block's reference
+    /// showing them.
+    pub dynamic: Option<Box<crate::dynamic::DynamicValues>>,
     pub geometry: Geometry,
 }
 
