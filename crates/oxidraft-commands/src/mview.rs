@@ -440,6 +440,30 @@ mod tests {
     }
 
     #[test]
+    fn mvsetup_arrays_scales_and_titles() {
+        let mut doc = doc_with_layout();
+        let mut engine = Engine::new();
+        // An array of 3 by 2 viewports in an area.
+        run(&mut engine, &mut doc, &["MVSETUP", "", "3", "3", "2", "10,10", "250,190"]);
+        let vps = viewports(&doc);
+        assert_eq!(vps.len(), 6);
+        // Scaled 1:100.
+        run(&mut engine, &mut doc, &["MVSETUP", "s", "all", "", "1", "100"]);
+        for v in viewports(&doc) {
+            let Geometry::Viewport { height, view_height, .. } = v else { panic!() };
+            assert!((view_height / height - 100.0).abs() < 1e-9);
+        }
+        // A title block: a border and its strip.
+        let before = doc.len();
+        run(&mut engine, &mut doc, &["MVSETUP", "t", "5,5", "292,205"]);
+        assert!(doc.len() >= before + 5);
+        // Not on the Model tab.
+        doc.set_space(MODEL);
+        run(&mut engine, &mut doc, &["MVSETUP"]);
+        assert!(!engine.is_active());
+    }
+
+    #[test]
     fn corners_make_a_viewport_onto_the_model_extents() {
         let mut doc = doc_with_layout();
         let mut engine = Engine::new();

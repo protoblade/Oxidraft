@@ -62,7 +62,7 @@ use crate::{
     mirror::Mirror,
     more_cmds::{
         AddSelected, Aperture, Browser, CenterAction, CenterCmd, ClassicLeader, Elev, Isolate, MInsert, MRedo,
-        MatchCell, OnOff, TInsert, TableExport, Url, UrlMode, ViewGo, ViewRes, XBind, XPlode,
+        MatchCell, MvSetup, OnOff, TInsert, TableExport, Url, UrlMode, ViewGo, ViewRes, XBind, XPlode,
     },
     move_copy::MoveCopy,
     mview::{Mview, VpClip, VpMax},
@@ -1151,6 +1151,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         description: "Center marks back to the standard extension past their circles",
         make: Some(|| Box::new(CenterCmd::new(CenterAction::Reset))),
+    },
+    CommandInfo {
+        name: "MVSETUP",
+        aliases: &[],
+        description: "Set a layout up: viewports in an array, their scale, a title block",
+        make: Some(|| Box::new(MvSetup::default())),
     },
     CommandInfo {
         name: "MATCHCELL",

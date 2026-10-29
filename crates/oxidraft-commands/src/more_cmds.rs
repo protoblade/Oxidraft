@@ -1078,3 +1078,201 @@ mod cell_cmd_tests {
         assert_eq!(cell_format(formats, 3, 0).block.as_deref(), Some("DOT"));
     }
 }
+
+#[derive(Clone, Copy, PartialEq)]
+enum MvStage {
+    Option,
+    Layout,
+    ColumnsX,
+    RowsY,
+    First,
+    Second(Point),
+    ScaleSelect,
+    PaperUnits,
+    ModelUnits,
+    TitleFirst,
+    TitleSecond(Point),
+}
+
+/// MVSETUP on a layout: Create an array of viewports in an area, Scale
+/// the viewports picked (paper units to model units), or add a Title
+/// block (a border and a title strip) in an area.
+pub struct MvSetup {
+    stage: MvStage,
+    columns: usize,
+    rows: usize,
+    viewports: Vec<EntityId>,
+    paper: f64,
+    /// On the Model tab, where it can't run.
+    model: bool,
+}
+
+impl Default for MvSetup {
+    fn default() -> Self {
+        Self { stage: MvStage::Option, columns: 1, rows: 1, viewports: Vec::new(), paper: 1.0, model: false }
+    }
+}
+
+impl MvSetup {
+    fn create(&self, ctx: &mut Ctx, a: Point, b: Point) {
+        let area = oxidraft_geom::Aabb::from_points(a, b);
+        let gap = (area.width().min(area.height()) * 0.02).max(0.0);
+        let (cols, rows) = (self.columns.max(1), self.rows.max(1));
+        let w = (area.width() - gap * (cols - 1) as f64) / cols as f64;
+        let h = (area.height() - gap * (rows - 1) as f64) / rows as f64;
+        for r in 0..rows {
+            for c in 0..cols {
+                let min = Point::new(area.min.x + c as f64 * (w + gap), area.min.y + r as f64 * (h + gap));
+                let frame = oxidraft_geom::Aabb::from_points(min, min + Point::new(w, h));
+                let vp = crate::mview::viewport_onto_model(ctx.doc, frame);
+                ctx.doc.add(vp);
+            }
+        }
+    }
+
+    fn title_block(ctx: &mut Ctx, a: Point, b: Point) {
+        let area = oxidraft_geom::Aabb::from_points(a, b);
+        let corners = [area.min, Point::new(area.max.x, area.min.y), area.max, Point::new(area.min.x, area.max.y)];
+        ctx.doc.add(Geometry::Polyline { vertices: corners.map(oxidraft_model::Vertex::at).to_vec(), closed: true });
+        // A title strip along the bottom right: two rows over three columns.
+        let (w, h) = ((area.width() * 0.4).min(180.0), (area.height() * 0.12).min(40.0));
+        let x0 = area.max.x - w;
+        let y0 = area.min.y;
+        let lines = [
+            (Point::new(x0, y0), Point::new(x0, y0 + h)),
+            (Point::new(x0, y0 + h), Point::new(area.max.x, y0 + h)),
+            (Point::new(x0, y0 + h / 2.0), Point::new(area.max.x, y0 + h / 2.0)),
+            (Point::new(x0 + w / 2.0, y0), Point::new(x0 + w / 2.0, y0 + h / 2.0)),
+        ];
+        for (start, end) in lines {
+            ctx.doc.add(Geometry::Line { start, end });
+        }
+        let text_height = h / 8.0;
+        for (label, at) in [
+            ("TITLE", Point::new(x0 + text_height, y0 + h * 0.75)),
+            ("DRAWN", Point::new(x0 + text_height, y0 + h * 0.25)),
+            ("SHEET", Point::new(x0 + w / 2.0 + text_height, y0 + h * 0.25)),
+        ] {
+            ctx.doc.add(Geometry::Text {
+                position: at,
+                height: text_height,
+                rotation: 0.0,
+                width: 0.0,
+                attach: oxidraft_model::Attach::MiddleLeft,
+                content: label.into(),
+                look: Default::default(),
+            });
+        }
+    }
+}
+
+impl Command for MvSetup {
+    fn prepare(&mut self, doc: &oxidraft_model::Document) -> Option<String> {
+        self.model = doc.layout(doc.space()).is_none();
+        self.model.then(|| "** Command not allowed in Model Tab **".into())
+    }
+
+    fn is_finished(&self) -> bool {
+        self.model
+    }
+
+    fn prompt(&self) -> Prompt {
+        match self.stage {
+            MvStage::Option => Prompt::new("Enter an option")
+                .with_keywords(&["Create", "Scale viewports", "Title block"])
+                .with_default("Create"),
+            MvStage::Layout => {
+                Prompt::new("Enter layout number to load (0 None, 1 Single, 2 Four, 3 Array of viewports)")
+                    .with_default("1")
+            }
+            MvStage::ColumnsX => Prompt::new("Enter number of viewports in X direction").with_default("2"),
+            MvStage::RowsY => Prompt::new("Enter number of viewports in Y direction").with_default("2"),
+            MvStage::First | MvStage::TitleFirst => Prompt::new("Specify first corner of bounding area"),
+            MvStage::Second(_) | MvStage::TitleSecond(_) => Prompt::new("Specify opposite corner"),
+            MvStage::ScaleSelect => Prompt::new("Select the viewports to scale"),
+            MvStage::PaperUnits => Prompt::new("Enter the number of paper space units").with_default("1"),
+            MvStage::ModelUnits => Prompt::new("Enter the number of model space units").with_default("1"),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let number = |input: &Input, default: f64| match input {
+            Input::Value(v) => Some(*v),
+            Input::Enter => Some(default),
+            _ => None,
+        };
+        match (self.stage, input) {
+            (MvStage::Option, Input::Keyword("Scale viewports")) => self.stage = MvStage::ScaleSelect,
+            (MvStage::Option, Input::Keyword("Title block")) => self.stage = MvStage::TitleFirst,
+            (MvStage::Option, Input::Keyword(_) | Input::Enter) => self.stage = MvStage::Layout,
+            (MvStage::Layout, input) => {
+                let n = number(&input, 1.0).ok_or("Requires 0 to 3.")?;
+                (self.columns, self.rows) = match n as u32 {
+                    0 => return Ok(Step::Done),
+                    1 => (1, 1),
+                    2 => (2, 2),
+                    3 => {
+                        self.stage = MvStage::ColumnsX;
+                        return Ok(Step::Continue);
+                    }
+                    _ => return Err("Requires 0 to 3.".into()),
+                };
+                self.stage = MvStage::First;
+            }
+            (MvStage::ColumnsX, input) => {
+                let n = number(&input, 2.0).filter(|n| *n >= 1.0 && *n <= 20.0).ok_or("Requires 1 to 20.")?;
+                self.columns = n as usize;
+                self.stage = MvStage::RowsY;
+            }
+            (MvStage::RowsY, input) => {
+                let n = number(&input, 2.0).filter(|n| *n >= 1.0 && *n <= 20.0).ok_or("Requires 1 to 20.")?;
+                self.rows = n as usize;
+                self.stage = MvStage::First;
+            }
+            (MvStage::First, Input::Point(p)) => self.stage = MvStage::Second(p),
+            (MvStage::Second(a), Input::Point(b)) => {
+                self.create(ctx, a, b);
+                return Ok(Step::Done);
+            }
+            (MvStage::TitleFirst, Input::Point(p)) => self.stage = MvStage::TitleSecond(p),
+            (MvStage::TitleSecond(a), Input::Point(b)) => {
+                Self::title_block(ctx, a, b);
+                return Ok(Step::Done);
+            }
+            (MvStage::ScaleSelect, Input::Selection(s)) => {
+                self.viewports = s
+                    .ids
+                    .into_iter()
+                    .filter(|id| matches!(ctx.doc.entity(*id).map(|e| &e.geometry), Some(Geometry::Viewport { .. })))
+                    .collect();
+                if self.viewports.is_empty() {
+                    return Ok(Step::Done);
+                }
+                self.stage = MvStage::PaperUnits;
+            }
+            (MvStage::PaperUnits, input) => {
+                self.paper = number(&input, 1.0).filter(|v| *v > 0.0).ok_or("Requires a positive number.")?;
+                self.stage = MvStage::ModelUnits;
+            }
+            (MvStage::ModelUnits, input) => {
+                let model = number(&input, 1.0).filter(|v| *v > 0.0).ok_or("Requires a positive number.")?;
+                let k = model / self.paper;
+                for id in &self.viewports {
+                    ctx.doc.update(*id, |e| {
+                        if let Geometry::Viewport { height, view_height, .. } = &mut e.geometry {
+                            *view_height = *height * k;
+                        }
+                    });
+                }
+                return Ok(Step::Done);
+            }
+            (_, Input::Enter) => return Ok(Step::Done),
+            _ => return Err("Invalid input.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn wants_selection(&self) -> bool {
+        self.stage == MvStage::ScaleSelect
+    }
+}
