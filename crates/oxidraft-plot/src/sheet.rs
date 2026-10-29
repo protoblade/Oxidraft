@@ -363,7 +363,7 @@ impl<'a> Plotter<'a> {
     }
 
     fn hatch(&mut self, g: &Geometry, color: Rgb, width: f64) {
-        let Geometry::Hatch { loops, pattern, scale, angle } = g else { return };
+        let Geometry::Hatch { loops, pattern, scale, angle, origin } = g else { return };
         let polys = hatch::polygons(loops);
         if let HatchPattern::Gradient { kind, from, to } = *pattern {
             // Small triangles, each in the color halfway through it.
@@ -376,7 +376,7 @@ impl<'a> Plotter<'a> {
         } else if *pattern == HatchPattern::Solid {
             let polygons = polys.iter().map(|p| p.iter().map(|q| self.paper(*q)).collect()).collect();
             self.items.push(Item::Fill { polygons, color });
-        } else if let Some(lines) = hatch::pattern_lines(&polys, *pattern, *scale, *angle, 200_000) {
+        } else if let Some(lines) = hatch::pattern_lines(&polys, *pattern, *scale, *angle, *origin, 200_000) {
             let paths =
                 lines.into_iter().map(|(a, b)| Path { points: vec![self.paper(a), self.paper(b)], closed: false });
             self.push_stroke(paths.collect(), width, color, false);

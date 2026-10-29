@@ -626,7 +626,7 @@ impl OxidraftApp {
             Geometry::Leader { content, scale, .. } => {
                 vec![("Contents", Value::Edit(content.clone())), ("Scale", Value::Number(*scale))]
             }
-            Geometry::Hatch { loops, pattern, scale, angle } => {
+            Geometry::Hatch { loops, pattern, scale, angle, .. } => {
                 let polys = hatch::polygons(loops);
                 let areas: Vec<f64> = polys.iter().map(|p| hatch::signed_area(p).abs()).collect();
                 let area = areas.iter().copied().fold(0.0, f64::max) * 2.0 - areas.iter().sum::<f64>();
@@ -970,7 +970,13 @@ mod tests {
 
     #[test]
     fn edits_annotation_properties() {
-        let hatch = Geometry::Hatch { loops: Vec::new(), pattern: HatchPattern::Ansi31, scale: 1.0, angle: 0.0 };
+        let hatch = Geometry::Hatch {
+            origin: Default::default(),
+            loops: Vec::new(),
+            pattern: HatchPattern::Ansi31,
+            scale: 1.0,
+            angle: 0.0,
+        };
         assert!(matches!(
             with_text_property(&hatch, "Pattern", "solid"),
             Some(Geometry::Hatch { pattern: HatchPattern::Solid, .. })

@@ -107,6 +107,7 @@ pub struct OxidraftApp {
     pub(crate) purge: Option<crate::manage::PurgeDialog>,
     /// COMPARE: the drawing compared with, while comparing.
     pub(crate) comparison: Option<crate::compare::Comparison>,
+    pub(crate) xcomparison: Option<crate::compare::XComparison>,
     /// DIMSTYLE's dialog (the style and DIMSCALE being set), and FIND's.
     pub(crate) dim_style_dialog: Option<(oxidraft_model::annotation::DimStyle, f64)>,
     pub(crate) find_replace: Option<crate::styles::FindReplace>,
@@ -129,6 +130,8 @@ pub struct OxidraftApp {
     pub(crate) point_style: Option<crate::drafting::PointStyle>,
     pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
     pub(crate) field_dialog: Option<crate::fields::FieldDialog>,
+    pub(crate) underlay_layers_dialog: Option<crate::ulayers::UnderlayLayers>,
+    pub(crate) pdf_import_dialog: Option<crate::pdf_import::PdfImportDialog>,
     pub(crate) array_dialog: Option<crate::classic::ArrayDialog>,
     pub(crate) group_dialog: Option<crate::classic::GroupDialog>,
     pub(crate) layout_wizard: Option<crate::classic::LayoutWizard>,
@@ -302,6 +305,7 @@ impl OxidraftApp {
             show_layout_tabs: true,
             purge: None,
             comparison: None,
+            xcomparison: None,
             dim_style_dialog: None,
             find_replace: None,
             alias_dialog: None,
@@ -320,6 +324,8 @@ impl OxidraftApp {
             point_style: None,
             tolerance_dialog: None,
             field_dialog: None,
+            underlay_layers_dialog: None,
+            pdf_import_dialog: None,
             array_dialog: None,
             group_dialog: None,
             layout_wizard: None,
@@ -700,6 +706,10 @@ impl OxidraftApp {
             "BMPOUT" => self.image_out_command("BMP", &["bmp"]),
             "TIME" => self.time(),
             "ATTACH" => self.attach(),
+            "IMPORT" | "IMP" => self.import(),
+            "PDFIMPORT" => self.pdf_import(),
+            "ULAYERS" => self.open_underlay_layers(),
+            "INSERTOBJ" | "IO" => self.insert_object(),
             "EXPORT" | "EXP" => self.export(false),
             "DXFOUT" => self.export(true),
             "DXFIN" => self.after_saving(crate::files::Then::Open),
@@ -718,7 +728,10 @@ impl OxidraftApp {
             "COMPARE" => self.compare_command(),
             "DIMSTYLE" | "D" | "DST" => self.open_dim_style(),
             "FIND" => self.find_replace = Some(Default::default()),
-            "COMPAREEXIT" => self.comparison = None,
+            "COMPAREEXIT" => {
+                self.comparison = None;
+                self.xcomparison = None;
+            }
             "FILETAB" => self.show_file_tabs = true,
             "FILETABCLOSE" => self.show_file_tabs = false,
             // Viewports and layouts are made on the sheets: out of the
@@ -776,6 +789,7 @@ impl OxidraftApp {
                 UiRequest::EditText(id) => self.open_text_editor(id),
                 UiRequest::SetVar(name, value) => self.set_var(&name, &value),
                 UiRequest::OpenXref(name) => self.open_xref(&name),
+                UiRequest::CompareXref(name) => self.xcompare(&name),
                 UiRequest::Tiling(tiling) => self.set_tiling(tiling),
                 UiRequest::ChangeSpace(ids) => self.change_space(&ids),
                 UiRequest::SaveXrefEdit => self.prepare_xref_edit_save(),
@@ -1100,6 +1114,7 @@ impl eframe::App for OxidraftApp {
         self.dim_style_dialog(&ctx);
         self.find_dialog(&ctx);
         self.compare_bar(&ctx);
+        self.xcompare_bar(&ctx);
         self.alias_dialog(&ctx);
         self.layer_walk_dialog(&ctx);
         self.export_pdf_dialog(&ctx);
@@ -1117,6 +1132,8 @@ impl eframe::App for OxidraftApp {
         self.tolerance_dialog(&ctx);
         self.text_editor(&ctx);
         self.field_dialog(&ctx);
+        self.underlay_layers_dialog(&ctx);
+        self.pdf_import_dialog(&ctx);
         self.array_dialog(&ctx);
         self.group_dialog(&ctx);
         self.layout_wizard(&ctx);

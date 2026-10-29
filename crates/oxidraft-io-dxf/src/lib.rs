@@ -851,6 +851,30 @@ pub const SETTINGS_RECORD: &str = "OXIDRAFT_SETTINGS";
 /// The XRECORD the drawing's layer states are kept in (see the DWG writer).
 pub const LAYER_STATES_RECORD: &str = "OXIDRAFT_LAYER_STATES";
 
+/// The XRECORD keeping the PDF underlays' layers turned off (ULAYERS).
+pub const PDF_LAYERS_RECORD: &str = "OXIDRAFT_PDF_LAYERS";
+
+fn read_pdf_layers(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
+    let Some(handle) = raw.dictionaries.values().flatten().find(|(n, _)| n == PDF_LAYERS_RECORD).map(|(_, h)| *h)
+    else {
+        return;
+    };
+    let Some(pairs) = raw.xrecords.get(&handle) else { return };
+    let mut current: Option<(String, Vec<String>)> = None;
+    for (code, value) in pairs.iter().chain(std::iter::once(&(1, String::new()))) {
+        match code {
+            1 => {
+                if let Some((name, off)) = current.take().filter(|c| !c.0.is_empty()) {
+                    doc.set_pdf_layers_off(&name, off);
+                }
+                current = Some((value.clone(), Vec::new()));
+            }
+            8 => current.iter_mut().for_each(|c| c.1.push(value.clone())),
+            _ => {}
+        }
+    }
+}
+
 /// The settings worth keeping that DXF has no place for: the multileader
 /// and table styles, as key and value pairs.
 pub fn settings_of(doc: &Document) -> Vec<(&'static str, f64)> {
@@ -929,6 +953,7 @@ fn read_properties(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
 
 fn read_settings(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
     read_layer_states(doc, raw);
+    read_pdf_layers(doc, raw);
     read_properties(doc, raw);
     let Some(handle) = raw.dictionaries.values().flatten().find(|(n, _)| n == SETTINGS_RECORD).map(|(_, h)| *h) else {
         return;
@@ -1517,7 +1542,7 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
             );
             let corners = if c.approx_eq(d) { vec![a, b, c] } else { vec![a, b, d, c] };
             let loops = vec![corners.into_iter().map(Vertex::at).collect()];
-            Geometry::Hatch { loops, pattern: HatchPattern::Solid, scale: 1.0, angle: 0.0 }
+            Geometry::Hatch { origin: Default::default(), loops, pattern: HatchPattern::Solid, scale: 1.0, angle: 0.0 }
         }
         EntityType::Leader(l) if l.vertices.len() >= 2 => Geometry::Leader {
             more: Vec::new(),
@@ -2258,7 +2283,13 @@ mod tests {
         doc.set_image_def(def("ortho", "tiles\\ortho.tif", None, 400.0, 200.0));
         doc.set_image_def(def("plan - 2", "plan.pdf", Some(1), 842.0, 595.0));
         let clip = vec![Point::new(110.0, 205.0), Point::new(130.0, 205.0), Point::new(120.0, 215.0)];
-        let adjust = oxidraft_model::PictureAdjust { brightness: 70, contrast: 40, fade: 20, monochrome: false };
+        let adjust = oxidraft_model::PictureAdjust {
+            brightness: 70,
+            contrast: 40,
+            fade: 20,
+            monochrome: false,
+            transparent: true,
+        };
         let ortho = Geometry::Image {
             adjust,
             image: "ortho".into(),
@@ -2319,6 +2350,7 @@ mod tests {
         doc.add(line(1.0));
         let square = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(x, y)| Vertex::at(Point::new(x, y)));
         let hatch = doc.add(Geometry::Hatch {
+            origin: Default::default(),
             loops: vec![square.to_vec()],
             pattern: HatchPattern::Solid,
             scale: 1.0,
@@ -2583,8 +2615,13 @@ mod tests {
         doc.set_insbase(Point::new(7.0, 8.0));
         doc.add(Geometry::Point { position: Point::new(3.0, 4.0) });
         let square = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(x, y)| Vertex::at(Point::new(x, y)));
-        let hatch =
-            Geometry::Hatch { loops: vec![square.to_vec()], pattern: HatchPattern::Solid, scale: 1.0, angle: 0.0 };
+        let hatch = Geometry::Hatch {
+            origin: Default::default(),
+            loops: vec![square.to_vec()],
+            pattern: HatchPattern::Solid,
+            scale: 1.0,
+            angle: 0.0,
+        };
         doc.add(hatch.clone());
         // A real point where the first hatch placeholder would be.
         doc.add(Geometry::Point { position: Point::new(0.0, 0.0) });
@@ -2787,7 +2824,13 @@ mod tests {
             .iter()
             .map(|&(x, y)| Vertex::at(Point::new(x, y)))
             .collect();
-        let hatched = Geometry::Hatch { loops: vec![square], pattern: HatchPattern::Ansi31, scale: 2.0, angle: 15.0 };
+        let hatched = Geometry::Hatch {
+            origin: Default::default(),
+            loops: vec![square],
+            pattern: HatchPattern::Ansi31,
+            scale: 2.0,
+            angle: 15.0,
+        };
         doc.add(hatched.clone());
 
         let mut buf = Vec::new();

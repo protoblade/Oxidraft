@@ -91,7 +91,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     if let Some(loops) = oxidraft_model::boundary::boundary_at(&doc, Point::new(65.0, 10.0)) {
         doc.add_on_layer(
-            Geometry::Hatch { loops, pattern: HatchPattern::Ansi31, scale: 1.5, angle: 0.0 },
+            Geometry::Hatch {
+                origin: Default::default(),
+                loops,
+                pattern: HatchPattern::Ansi31,
+                scale: 1.5,
+                angle: 0.0,
+            },
             "Hatch",
             Color::Index(8),
         );
@@ -115,7 +121,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|&(x, y)| Vertex::at(Point::new(x, y)))
         .collect();
     doc.add_on_layer(
-        Geometry::Hatch { loops: vec![slab], pattern: HatchPattern::Solid, scale: 1.0, angle: 0.0 },
+        Geometry::Hatch {
+            origin: Default::default(),
+            loops: vec![slab],
+            pattern: HatchPattern::Solid,
+            scale: 1.0,
+            angle: 0.0,
+        },
         "Hatch",
         Color::Index(9),
     );

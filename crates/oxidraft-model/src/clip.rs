@@ -136,7 +136,7 @@ fn keep_whole(g: &Geometry, boundary: &[Point]) -> Option<Geometry> {
 
 /// A fill cut to the boundary: one hatch per convex piece of it.
 fn cut_fill(g: &Geometry, boundary: &[Point]) -> Vec<Geometry> {
-    let Geometry::Hatch { loops, pattern, scale, angle } = g else { return Vec::new() };
+    let Geometry::Hatch { loops, pattern, scale, angle, origin } = g else { return Vec::new() };
     let polys = hatch::polygons(loops);
     let pieces: Vec<Vec<Point>> = if is_convex(boundary) {
         vec![boundary.to_vec()]
@@ -154,6 +154,7 @@ fn cut_fill(g: &Geometry, boundary: &[Point]) -> Vec<Geometry> {
                 .map(|r| r.into_iter().map(Vertex::at).collect())
                 .collect();
             (!rings.is_empty()).then_some(Geometry::Hatch {
+                origin: *origin,
                 loops: rings,
                 pattern: *pattern,
                 scale: *scale,
@@ -237,8 +238,13 @@ mod tests {
             Point::new(0.0, 10.0),
         ];
         let big = [(-1.0, -1.0), (11.0, -1.0), (11.0, 11.0), (-1.0, 11.0)].map(|(x, y)| Vertex::at(Point::new(x, y)));
-        let fill =
-            Geometry::Hatch { loops: vec![big.to_vec()], pattern: crate::HatchPattern::Solid, scale: 1.0, angle: 0.0 };
+        let fill = Geometry::Hatch {
+            origin: Default::default(),
+            loops: vec![big.to_vec()],
+            pattern: crate::HatchPattern::Solid,
+            scale: 1.0,
+            angle: 0.0,
+        };
         let area: f64 = clip_styled(vec![styled(fill)], &ell, false)
             .iter()
             .map(|s| match &s.geometry {

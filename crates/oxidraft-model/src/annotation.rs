@@ -314,7 +314,13 @@ pub fn arrowhead(tip: Point, into: Point, size: f64) -> Geometry {
     let base = tip + into * size;
     let side = Point::new(-into.y, into.x) * (size / 6.0);
     let loop_ = vec![Vertex::at(tip), Vertex::at(base + side), Vertex::at(base - side)];
-    Geometry::Hatch { loops: vec![loop_], pattern: HatchPattern::Solid, scale: 1.0, angle: 0.0 }
+    Geometry::Hatch {
+        origin: Default::default(),
+        loops: vec![loop_],
+        pattern: HatchPattern::Solid,
+        scale: 1.0,
+        angle: 0.0,
+    }
 }
 
 /// Readable text angle in (-90, 90]: text along a line never reads upside down.

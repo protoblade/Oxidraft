@@ -343,6 +343,8 @@ pub struct Document {
     ucs: crate::ucs::Ucs,
     ucs_previous: Vec<crate::ucs::Ucs>,
     named_ucs: Vec<crate::ucs::NamedUcs>,
+    /// ULAYERS: each PDF underlay's layers turned off, by its name.
+    pdf_layers_off: BTreeMap<String, Vec<String>>,
     /// CANNOSCALE: drawing units per paper unit; ANNOALLVISIBLE.
     pub(crate) anno_scale: f64,
     pub(crate) anno_all_visible: bool,
@@ -493,6 +495,7 @@ impl Document {
             ucs: crate::ucs::WORLD,
             ucs_previous: Vec::new(),
             named_ucs: Vec::new(),
+            pdf_layers_off: BTreeMap::new(),
             anno_scale: 1.0,
             anno_all_visible: true,
             limits: (Point::ORIGIN, Point::new(420.0, 297.0)),
@@ -1339,6 +1342,26 @@ impl Document {
             self.insbase = p;
             self.revision += 1;
         }
+    }
+
+    /// ULAYERS: the layers of PDF underlay `name` turned off.
+    pub fn pdf_layers_off(&self, name: &str) -> &[String] {
+        self.pdf_layers_off.get(&name.to_ascii_uppercase()).map_or(&[], Vec::as_slice)
+    }
+
+    /// Every PDF underlay's layers turned off, by underlay name.
+    pub fn all_pdf_layers_off(&self) -> impl Iterator<Item = (&String, &Vec<String>)> {
+        self.pdf_layers_off.iter()
+    }
+
+    pub fn set_pdf_layers_off(&mut self, name: &str, off: Vec<String>) {
+        let key = name.to_ascii_uppercase();
+        if off.is_empty() {
+            self.pdf_layers_off.remove(&key);
+        } else {
+            self.pdf_layers_off.insert(key, off);
+        }
+        self.revision += 1;
     }
 
     /// The current UCS.

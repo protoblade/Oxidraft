@@ -130,3 +130,106 @@ impl OxidraftApp {
         }
     }
 }
+
+/// XCOMPARE: an attached drawing as it was read against its file now —
+/// what the file has new (green) and what it no longer has (red), at each
+/// of the xref's references.
+pub(crate) struct XComparison {
+    name: String,
+    pub added: Vec<Geometry>,
+    pub removed: Vec<Geometry>,
+    counts: (usize, usize, usize),
+}
+
+/// The objects of `doc`'s model space, and of `def`'s block, each as
+/// (key, geometry), for matching one for one.
+fn keyed(entities: &[oxidraft_model::Entity]) -> HashMap<String, Vec<Geometry>> {
+    let mut out: HashMap<String, Vec<Geometry>> = HashMap::new();
+    for e in entities {
+        out.entry(object_key(e)).or_default().push(e.geometry.clone());
+    }
+    out
+}
+
+impl OxidraftApp {
+    /// XCOMPARE on xref `name`: reads its file and compares.
+    pub fn xcompare(&mut self, name: &str) {
+        let Some(x) = self.doc.xref(name).cloned() else { return };
+        let Some(def) = self.doc.block(&x.name).cloned() else { return };
+        let Some(path) = crate::xref::resolve(self.path.as_deref(), &x.path) else {
+            self.engine.log(format!("Xref \"{}\" not found: {}", x.name, x.path));
+            return;
+        };
+        let now = match crate::xref::read_drawing(&path) {
+            Ok(d) => d,
+            Err(e) => {
+                self.engine.log(format!("Could not read {}: {e}", path.display()));
+                return;
+            }
+        };
+        // The definition as objects of their own, to key like the file's.
+        let mut was = Document::new();
+        for be in &def.entities {
+            was.add_styled(be.geometry.clone(), &be.layer, be.color, &be.linetype, be.lineweight);
+        }
+        let mut theirs = keyed(&now.space_in_draw_order(MODEL).into_iter().cloned().collect::<Vec<_>>());
+        let mut removed = Vec::new();
+        let mut same = 0;
+        for e in was.space_in_draw_order(MODEL) {
+            match theirs.get_mut(&object_key(e)).and_then(Vec::pop) {
+                Some(_) => same += 1,
+                None => removed.push(e.geometry.clone()),
+            }
+        }
+        let added: Vec<Geometry> = theirs.into_values().flatten().collect();
+        // Where the references put them.
+        let places: Vec<oxidraft_model::Placement> = self
+            .doc
+            .all_entities()
+            .filter_map(|e| match &e.geometry {
+                Geometry::Insert { block, placement, .. } if block.eq_ignore_ascii_case(&x.name) => Some(*placement),
+                _ => None,
+            })
+            .collect();
+        let place = |gs: &[Geometry]| -> Vec<Geometry> {
+            places.iter().flat_map(|p| gs.iter().map(|g| p.place(def.base, g))).collect()
+        };
+        let counts = (added.len(), removed.len(), same);
+        self.engine.log(format!(
+            "Xref {} compared with its file: {} new, {} gone, {} the same.",
+            x.name, counts.0, counts.1, counts.2
+        ));
+        self.xcomparison = Some(XComparison { name: x.name, added: place(&added), removed: place(&removed), counts });
+    }
+
+    /// The bar over the drawing while comparing an xref: the counts,
+    /// Reload and Exit.
+    pub(crate) fn xcompare_bar(&mut self, ctx: &egui::Context) {
+        let Some(c) = &self.xcomparison else { return };
+        let (mut exit, mut reload) = (false, false);
+        let r = self.drawing_rect;
+        egui::Area::new(egui::Id::unique("xcompare_bar"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::CENTER_TOP)
+            .fixed_pos(egui::pos2(r.center().x, r.top() + 30.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("Xref Compare: {}", c.name)).strong());
+                        ui.colored_label(HERE, format!("{} new", c.counts.0));
+                        ui.colored_label(THERE, format!("{} gone", c.counts.1));
+                        ui.colored_label(BOTH, format!("{} the same", c.counts.2));
+                        reload = ui.button("Reload Xref").clicked();
+                        exit = ui.button("Exit Compare").clicked();
+                    });
+                });
+            });
+        if reload {
+            let name = c.name.clone();
+            self.reload_xref(&name);
+        }
+        if exit || reload {
+            self.xcomparison = None;
+        }
+    }
+}

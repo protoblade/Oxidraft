@@ -213,6 +213,7 @@ mod tests {
             closed: true,
         });
         doc.add(Geometry::Hatch {
+            origin: Default::default(),
             loops: vec![square.to_vec()],
             pattern: HatchPattern::Ansi31,
             scale: 1.0,
@@ -695,7 +696,13 @@ mod tests {
         let square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
             .map(|(x, y)| oxidraft_model::Vertex::at(Point::new(x, y)));
         let pattern = HatchPattern::Gradient { kind: GradientKind::Spherical, from: 1, to: 3 };
-        doc.add(Geometry::Hatch { loops: vec![square.to_vec()], pattern, scale: 1.0, angle: 30.0 });
+        doc.add(Geometry::Hatch {
+            origin: Default::default(),
+            loops: vec![square.to_vec()],
+            pattern,
+            scale: 1.0,
+            angle: 30.0,
+        });
         let check = |back: &Document, how: &str| {
             let got = back.entities().find_map(|e| match &e.geometry {
                 Geometry::Hatch { pattern, angle, .. } => Some((*pattern, *angle)),
@@ -876,7 +883,13 @@ mod tests {
             height: 200.0,
             status: oxidraft_model::XrefStatus::Loaded,
         });
-        let adjust = oxidraft_model::PictureAdjust { brightness: 70, contrast: 40, fade: 20, monochrome: false };
+        let adjust = oxidraft_model::PictureAdjust {
+            brightness: 70,
+            contrast: 40,
+            fade: 20,
+            monochrome: false,
+            transparent: true,
+        };
         doc.add(Geometry::Image {
             image: "ortho".into(),
             origin: Point::new(0.0, 0.0),
@@ -957,6 +970,34 @@ mod tests {
         oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
         let back = oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document;
         assert!(back.entities().next().unwrap().annotative.is_some(), "Oxidraft's DXF");
+        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
+    fn hatch_origins_survive() {
+        let mut doc = Document::new();
+        let square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+            .map(|(x, y)| oxidraft_model::Vertex::at(Point::new(x, y)));
+        doc.add(Geometry::Hatch {
+            loops: vec![square.to_vec()],
+            pattern: oxidraft_model::HatchPattern::Ansi31,
+            scale: 1.0,
+            angle: 0.0,
+            origin: Point::new(3.0, 4.0),
+        });
+        let check = |back: &Document, how: &str| {
+            let g = &back.entities().next().unwrap().geometry;
+            assert!(
+                matches!(g, Geometry::Hatch { origin, .. } if origin.approx_eq(Point::new(3.0, 4.0))),
+                "{how}: {g:?}"
+            );
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
         check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
         for version in [Version::R2018, Version::R2000] {
             check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));

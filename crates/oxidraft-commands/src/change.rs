@@ -305,6 +305,7 @@ impl Solid {
             other => other.to_vec(),
         };
         Geometry::Hatch {
+            origin: Default::default(),
             loops: vec![ring.into_iter().map(Vertex::at).collect()],
             pattern: HatchPattern::Solid,
             scale: 1.0,

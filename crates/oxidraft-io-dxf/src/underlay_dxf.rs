@@ -133,6 +133,7 @@ pub(crate) fn entity(g: &Geometry, handles: &Handles) -> Option<EntityType> {
     };
     e.set_show_image(true);
     e.set_show_image_when_not_alligned(true);
+    e.set_use_transparency(adjust.transparent);
     if clip.len() >= 3 {
         // Clipping boundaries are in pixels from the image's upper-left corner.
         e.set_use_clipping_boundary(true);
@@ -226,6 +227,7 @@ impl Definitions {
                     contrast: percent(i.contrast),
                     fade: percent(i.fade),
                     monochrome: false,
+                    transparent: i.use_transparency(),
                 };
                 (def, Geometry::Image { adjust, image, origin, u, v, clip })
             }

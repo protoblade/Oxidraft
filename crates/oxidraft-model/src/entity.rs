@@ -182,6 +182,8 @@ pub enum Geometry {
         pattern: HatchPattern,
         scale: f64,
         angle: f64,
+        /// Where its pattern's lines start (HATCHSETORIGIN).
+        origin: Point,
     },
     /// An ellipse or elliptical arc (DXF ELLIPSE).
     Ellipse(Ellipse),
@@ -1014,9 +1016,10 @@ impl Geometry {
                 content: content.clone(),
                 scale: scale * length_factor,
             },
-            Geometry::Hatch { loops, pattern, scale, angle } => {
+            Geometry::Hatch { loops, pattern, scale, angle, origin: hatch_origin } => {
                 let origin = loops.first().and_then(|l| l.first()).map_or(Point::ORIGIN, |v| v.point);
                 Geometry::Hatch {
+                    origin: f(*hatch_origin),
                     loops: loops
                         .iter()
                         .map(|l| {
@@ -1136,7 +1139,8 @@ impl Geometry {
                 content: content.clone(),
                 scale: *scale,
             },
-            Geometry::Hatch { loops, pattern, scale, angle } => Geometry::Hatch {
+            Geometry::Hatch { loops, pattern, scale, angle, origin } => Geometry::Hatch {
+                origin: shift(*origin),
                 loops: loops.iter().map(|l| l.iter().map(|v| Vertex::new(shift(v.point), v.bulge)).collect()).collect(),
                 pattern: *pattern,
                 scale: *scale,

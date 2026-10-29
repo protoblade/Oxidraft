@@ -176,9 +176,18 @@ impl Command for TextEdit {
     }
 }
 
-/// XOPEN: the attached drawing picked opens in its own window.
+/// XOPEN: the attached drawing picked opens in its own window; XCOMPARE:
+/// it's compared with its file.
 #[derive(Default)]
-pub struct XOpen;
+pub struct XOpen {
+    compare: bool,
+}
+
+impl XOpen {
+    pub fn compare() -> Self {
+        Self { compare: true }
+    }
+}
 
 impl Command for XOpen {
     fn prompt(&self) -> Prompt {
@@ -193,7 +202,7 @@ impl Command for XOpen {
                     Some(Geometry::Insert { block, .. }) if ctx.doc.xref(block).is_some() => block.clone(),
                     _ => return Err("That isn't an attached drawing (xref).".into()),
                 };
-                ctx.ui = Some(UiRequest::OpenXref(name));
+                ctx.ui = Some(if self.compare { UiRequest::CompareXref(name) } else { UiRequest::OpenXref(name) });
                 Ok(Step::Done)
             }
             Input::Enter => Ok(Step::Done),

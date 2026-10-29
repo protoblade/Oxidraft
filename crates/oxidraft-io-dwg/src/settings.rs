@@ -53,6 +53,16 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document) {
         }
         add_record(cad, oxidraft_io_dxf::LAYER_STATES_RECORD, entries);
     }
+    // ULAYERS: each PDF underlay's name (1), then its layers turned off (8).
+    let off: Vec<_> = doc.all_pdf_layers_off().collect();
+    if !off.is_empty() {
+        let mut entries = Vec::new();
+        for (name, layers) in off {
+            entries.push(XRecordEntry::string(1, name.clone()));
+            entries.extend(layers.iter().map(|l| XRecordEntry::string(8, l.clone())));
+        }
+        add_record(cad, oxidraft_io_dxf::PDF_LAYERS_RECORD, entries);
+    }
 }
 
 /// An XRECORD of `entries` in the root dictionary under `name`.

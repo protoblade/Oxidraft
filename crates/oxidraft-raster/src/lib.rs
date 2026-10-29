@@ -74,6 +74,9 @@ pub struct Pixels {
     pub rgba: Vec<u8>,
 }
 
+pub mod pdf_layers;
+pub mod pdf_vectors;
+
 pub fn is_pdf(path: &Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
 }
@@ -336,7 +339,8 @@ fn read_tiff(path: &Path, region: Region, width: u32, height: u32) -> Result<Pix
 
 fn render_pdf(path: &Path, page: usize, max_side: u32) -> Result<Pixels, String> {
     use hayro::vello_cpu::{color::palette::css::WHITE, peniko::ImageAlphaType};
-    let data = std::fs::read(path).map_err(|e| e.to_string())?;
+    // Without the layers turned off for it (ULAYERS).
+    let data = pdf_layers::read_pdf(path).map_err(|e| e.to_string())?;
     let pdf = hayro::hayro_syntax::Pdf::new(data).map_err(|e| format!("not a readable PDF ({e:?})"))?;
     let p = pdf.pages().get(page).ok_or("no such page")?;
     let (w, h) = p.render_dimensions();

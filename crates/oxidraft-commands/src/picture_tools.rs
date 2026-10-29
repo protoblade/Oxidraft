@@ -123,6 +123,59 @@ impl Command for Adjust {
     }
 }
 
+/// TRANSPARENCY: whether the selected images' transparent pixels show
+/// what's under them.
+#[derive(Default)]
+pub struct ImageTransparency {
+    ids: Vec<EntityId>,
+}
+
+impl Command for ImageTransparency {
+    fn prompt(&self) -> Prompt {
+        if self.ids.is_empty() {
+            Prompt::new("Select image(s)")
+        } else {
+            Prompt::new("Enter transparency mode").with_keywords(&["ON", "OFF"]).with_default("OFF")
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (self.ids.is_empty(), input) {
+            (true, Input::Selection(s)) => {
+                self.ids = s
+                    .ids
+                    .into_iter()
+                    .filter(|id| match ctx.doc.entity(*id).map(|e| &e.geometry) {
+                        Some(Geometry::Image { image, .. }) => !ctx.doc.image_def(image).is_some_and(|d| d.is_pdf()),
+                        _ => false,
+                    })
+                    .collect();
+                if self.ids.is_empty() {
+                    ctx.messages.push("No images selected.".into());
+                    return Ok(Step::Done);
+                }
+                Ok(Step::Continue)
+            }
+            (false, input @ (Input::Keyword(_) | Input::Enter)) => {
+                let on = input == Input::Keyword("ON");
+                for id in &self.ids {
+                    ctx.doc.update(*id, |e| {
+                        if let Geometry::Image { adjust, .. } = &mut e.geometry {
+                            adjust.transparent = on;
+                        }
+                    });
+                }
+                Ok(Step::Done)
+            }
+            _ => Err("Invalid input.".into()),
+        }
+    }
+
+    fn wants_selection(&self) -> bool {
+        self.ids.is_empty()
+    }
+}
+
 /// Which frames a frame variable sets.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Frames {
@@ -233,6 +286,8 @@ mod tests {
             Geometry::Image { adjust, .. } => assert_eq!((adjust.fade, adjust.brightness), (40, 70)),
             g => panic!("{g:?}"),
         }
+        run(&mut e, &mut d, &["transparency", "all", "", "on"]);
+        assert!(matches!(&d.entity(id).unwrap().geometry, Geometry::Image { adjust, .. } if adjust.transparent));
         run(&mut e, &mut d, &["imageframe", "0"]);
         assert_eq!((d.picture_frame(false), d.picture_frame(true)), (0, 1));
         run(&mut e, &mut d, &["frame", "2"]);

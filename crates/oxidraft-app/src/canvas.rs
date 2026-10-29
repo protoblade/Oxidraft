@@ -205,6 +205,15 @@ impl OxidraftApp {
         self.sheet_scale = self.active_viewport.filter(|_| active.is_some()).map(|a| a.page.scale);
         self.draw_entities(&model, rect, cursor.as_ref(), self.doc.space(), &frozen);
         // Comparing drawings: what's only in the other one, red.
+        // XCOMPARE: what an xref's file has new, green; what it lost, red.
+        if let Some(c) = self.xcomparison.as_ref().filter(|_| self.doc.space() == MODEL) {
+            for g in &c.added {
+                self.draw_geometry(&model, rect, g, Stroke::new(1.5, crate::compare::HERE));
+            }
+            for g in &c.removed {
+                self.draw_geometry(&model, rect, g, Stroke::new(1.5, crate::compare::THERE));
+            }
+        }
         if let Some(c) = self.comparison.as_ref().filter(|_| self.doc.space() == MODEL) {
             for g in &c.only_there {
                 self.draw_geometry(&model, rect, g, Stroke::new(1.5, crate::compare::THERE));
@@ -1121,7 +1130,7 @@ impl OxidraftApp {
     /// Solid fills as triangles; patterns as lines clipped to the boundary
     /// (too fine to see at this zoom: a faint fill instead).
     fn draw_hatch(&self, painter: &Painter, rect: Rect, g: &Geometry, stroke: Stroke) {
-        let Geometry::Hatch { loops, pattern, scale, angle } = g else { return };
+        let Geometry::Hatch { loops, pattern, scale, angle, origin } = g else { return };
         let polys = hatch::polygons(loops);
         // FILLMODE off: solid and gradient fills as their outlines.
         if stroke.width >= 4.0 || !self.doc.fill() && pattern.is_fill() {
@@ -1161,7 +1170,7 @@ impl OxidraftApp {
             fill(stroke.color);
         } else if spacing_px < 2.0 {
             fill(stroke.color.gamma_multiply(0.3));
-        } else if let Some(lines) = hatch::pattern_lines(&polys, *pattern, *scale, *angle, 20_000) {
+        } else if let Some(lines) = hatch::pattern_lines(&polys, *pattern, *scale, *angle, *origin, 20_000) {
             for (a, b) in lines {
                 painter.line_segment(
                     [self.view.to_screen(rect, a), self.view.to_screen(rect, b)],

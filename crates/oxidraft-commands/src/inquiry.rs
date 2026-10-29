@@ -309,6 +309,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let h = Geometry::Hatch {
+            origin: Default::default(),
             loops: vec![sq(0.0, 10.0), sq(4.0, 2.0)],
             pattern: oxidraft_model::HatchPattern::Solid,
             scale: 1.0,

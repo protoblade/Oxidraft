@@ -1,6 +1,7 @@
 //! STATUS and TIME, the drawing's facts in the command history; and the
-//! file commands that lead to others: ATTACH (by the file's type),
-//! EXPORT and DXFOUT (a copy in another format), DXFIN, QNEW and SAVEALL.
+//! file commands that lead to others: ATTACH and IMPORT (by the file's
+//! type), INSERTOBJ, EXPORT and DXFOUT (a copy in another format), DXFIN,
+//! QNEW and SAVEALL.
 
 use oxidraft_model::{MODEL, snap::SnapKind};
 use std::path::Path;
@@ -111,6 +112,73 @@ impl OxidraftApp {
         } else {
             self.open_image_dialog(path);
         }
+    }
+
+    /// IMPORT: a drawing comes in as a block, a PDF's drawing as objects
+    /// (PDFIMPORT), an image attached.
+    pub(crate) fn import(&mut self) {
+        let dialog = rfd::FileDialog::new()
+            .add_filter("All importable files", &["dwg", "dxf", "pdf", "tif", "tiff", "png", "jpg", "jpeg", "bmp"])
+            .add_filter("Drawing (DWG, DXF)", &["dwg", "dxf"])
+            .add_filter("PDF", &["pdf"])
+            .add_filter("Images", &["tif", "tiff", "png", "jpg", "jpeg", "bmp"]);
+        if let Some(path) = dialog.pick_file() {
+            self.import_file(path);
+        }
+    }
+
+    pub fn import_file(&mut self, path: std::path::PathBuf) {
+        let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        match ext.as_str() {
+            "dwg" | "dxf" => {
+                self.library_drawing(&path);
+                self.insert_from_library(&path, None);
+            }
+            "pdf" => self.open_pdf_import(path),
+            _ => self.open_image_dialog(path),
+        }
+    }
+
+    /// INSERTOBJ: an image or PDF page shown as it is; any other file as
+    /// a framed object naming it, linked to it (Cmd/Ctrl-click opens it),
+    /// as an OLE object shown as an icon.
+    pub(crate) fn insert_object(&mut self) {
+        if let Some(path) = rfd::FileDialog::new().set_title("Insert Object: create from file").pick_file() {
+            self.insert_object_file(&path);
+        }
+    }
+
+    pub fn insert_object_file(&mut self, path: &Path) {
+        let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if ["pdf", "tif", "tiff", "png", "jpg", "jpeg", "bmp"].contains(&ext.as_str()) {
+            return self.open_image_dialog(path.to_path_buf());
+        }
+        let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let at = self.view.center;
+        // A frame a twelfth of the view across, the file's name in it.
+        let w = f64::from(self.drawing_rect.width()) / self.view.scale / 12.0;
+        let h = w * 0.6;
+        let corners = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
+            .map(|(x, y)| oxidraft_model::Vertex::at(at + oxidraft_geom::Point::new(x, y)));
+        let text = oxidraft_model::Geometry::Text {
+            look: Default::default(),
+            position: at + oxidraft_geom::Point::new(w / 2.0, h / 2.0),
+            height: h / 6.0,
+            rotation: 0.0,
+            width: w * 0.9,
+            attach: oxidraft_model::Attach::MiddleCenter,
+            content: file.clone(),
+        };
+        let link = oxidraft_model::Hyperlink { url: path.display().to_string(), description: file.clone() };
+        self.engine.cancel(&mut self.doc);
+        self.doc.begin("INSERTOBJ");
+        for g in [oxidraft_model::Geometry::Polyline { vertices: corners.to_vec(), closed: true }, text] {
+            let id = self.doc.add(g);
+            let link = link.clone();
+            self.doc.update(id, |e| e.hyperlink = Some(Box::new(link)));
+        }
+        self.doc.commit();
+        self.engine.log(format!("{file} inserted, linked: Cmd/Ctrl-click it to open it."));
     }
 
     /// EXPORT and DXFOUT: a copy of the drawing in another format (or a

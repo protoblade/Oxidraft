@@ -188,6 +188,8 @@ pub enum UiRequest {
     SetVar(String, String),
     /// XOPEN: this attached drawing opened in its own window.
     OpenXref(String),
+    /// XCOMPARE: this attached drawing compared with its file.
+    CompareXref(String),
     /// The full command history, for long output like LIST's.
     TextWindow,
     /// Back to the Plot dialog with the window picked for it (`None`: as

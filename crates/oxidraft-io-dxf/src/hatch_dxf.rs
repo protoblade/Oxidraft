@@ -175,6 +175,8 @@ fn hatch_geometry(c: &mut Cursor, name: &str, solid: bool) -> Option<Geometry> {
         return None;
     }
     let (mut scale, mut angle) = (1.0, 0.0);
+    // The first pattern line's base point: where the pattern starts.
+    let mut origin: Option<Point> = None;
     let (mut gradient, mut gradient_angle, mut colors, mut gradient_name) = (false, 0.0, Vec::new(), "LINEAR");
     while let Some(code) = c.peek() {
         match code {
@@ -184,6 +186,10 @@ fn hatch_geometry(c: &mut Cursor, name: &str, solid: bool) -> Option<Geometry> {
             460 => gradient_angle = c.num(460).unwrap_or(0.0).to_degrees(),
             63 => colors.extend(c.int(63).map(|i| i.clamp(1, 255) as u8)),
             470 => gradient_name = c.take(470).unwrap_or("LINEAR"),
+            43 if origin.is_none() => {
+                let x = c.num(43).unwrap_or(0.0);
+                origin = Some(Point::new(x, c.num(44).unwrap_or(0.0)));
+            }
             _ => c.at += 1,
         }
     }
@@ -191,11 +197,12 @@ fn hatch_geometry(c: &mut Cursor, name: &str, solid: bool) -> Option<Geometry> {
         let kind = GradientKind::from_name(gradient_name).unwrap_or(GradientKind::Linear);
         let (from, to) = (colors.first().copied().unwrap_or(5), colors.get(1).copied().unwrap_or(2));
         let pattern = HatchPattern::Gradient { kind, from, to };
-        return Some(Geometry::Hatch { loops, pattern, scale: 1.0, angle: gradient_angle });
+        return Some(Geometry::Hatch { origin: Default::default(), loops, pattern, scale: 1.0, angle: gradient_angle });
     }
     // Patterns Oxidraft doesn't have show as ANSI31 at their scale and angle.
     let pattern = if solid { HatchPattern::Solid } else { HatchPattern::from_name(name).unwrap_or_default() };
-    Some(Geometry::Hatch { loops, pattern, scale: if scale > 0.0 { scale } else { 1.0 }, angle })
+    let origin = origin.unwrap_or_default();
+    Some(Geometry::Hatch { origin, loops, pattern, scale: if scale > 0.0 { scale } else { 1.0 }, angle })
 }
 
 /// Every HATCH in a text DXF file.
@@ -237,6 +244,7 @@ pub(crate) fn read_hatches(dxf: &[u8]) -> Vec<RawHatch> {
                     linetype: linetype::BYLAYER.into(),
                     lineweight: Lineweight::ByLayer,
                     geometry: Geometry::Hatch {
+                        origin: Default::default(),
                         loops: Vec::new(),
                         pattern: HatchPattern::Solid,
                         scale: 1.0,
@@ -284,7 +292,7 @@ fn num(v: f64) -> String {
 /// The AcDbHatch data of a hatch: polyline boundary paths and, for line
 /// patterns, the pattern lines scaled and rotated into drawing units.
 pub(crate) fn hatch_data(g: &Geometry) -> Vec<(i32, String)> {
-    let Geometry::Hatch { loops, pattern, scale, angle } = g else { return Vec::new() };
+    let Geometry::Hatch { loops, pattern, scale, angle, origin } = g else { return Vec::new() };
     let solid = pattern.is_fill();
     // A gradient is a solid fill with its colors after the seed points.
     let name = if solid { "SOLID" } else { pattern.name() };
@@ -328,8 +336,8 @@ pub(crate) fn hatch_data(g: &Geometry) -> Vec<(i32, String)> {
             let offset = Point::ORIGIN.polar(spacing * scale, a + 90.0);
             out.extend([
                 (53, num(a)),
-                (43, num(0.0)),
-                (44, num(0.0)),
+                (43, num(origin.x)),
+                (44, num(origin.y)),
                 (45, num(offset.x)),
                 (46, num(offset.y)),
                 (79, "0".into()),

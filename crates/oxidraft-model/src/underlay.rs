@@ -38,11 +38,14 @@ pub struct PictureAdjust {
     pub contrast: u8,
     pub fade: u8,
     pub monochrome: bool,
+    /// TRANSPARENCY: an image's transparent pixels show what's under it;
+    /// off, it covers what's under it.
+    pub transparent: bool,
 }
 
 impl Default for PictureAdjust {
     fn default() -> Self {
-        PictureAdjust { brightness: 50, contrast: 50, fade: 0, monochrome: false }
+        PictureAdjust { brightness: 50, contrast: 50, fade: 0, monochrome: false, transparent: false }
     }
 }
 
@@ -58,7 +61,7 @@ impl PictureAdjust {
         if pdf {
             PictureAdjust { fade: self.fade, monochrome: self.monochrome, ..Default::default() }
         } else {
-            PictureAdjust { monochrome: false, ..*self }
+            PictureAdjust { monochrome: false, transparent: false, ..*self }
         }
     }
 

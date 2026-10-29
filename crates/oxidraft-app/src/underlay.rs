@@ -380,6 +380,8 @@ impl OxidraftApp {
     /// reading the pictures that were loaded when the drawing was saved.
     pub(crate) fn load_pictures(&mut self) {
         self.rasters.clear();
+        // PDF layers turned off (ULAYERS) stay off.
+        self.apply_pdf_layers();
         self.image_selected.clear();
         let defs: Vec<ImageDef> = self.doc.image_defs().cloned().collect();
         for def in defs {
@@ -854,6 +856,18 @@ impl OxidraftApp {
                 egui::pos2(a as f32, (1.0 - b) as f32)
             };
             let pdf = self.doc.image_def(image).is_some_and(|d| d.is_pdf());
+            // TRANSPARENCY off: the image covers what's under it.
+            if !pdf && !adjust.transparent {
+                let mut cover = egui::Mesh::default();
+                for t in hatch::triangles(std::slice::from_ref(&ring)) {
+                    let i = cover.vertices.len() as u32;
+                    for p in t {
+                        cover.colored_vertex(to(p), theme::background_now());
+                    }
+                    cover.add_triangle(i, i + 1, i + 2);
+                }
+                painter.add(Shape::mesh(cover));
+            }
             let (tint, overlays) = screen_adjust(&adjust.shown(pdf));
             let mut mesh = egui::Mesh::with_texture(texture);
             for t in hatch::triangles(std::slice::from_ref(&ring)) {

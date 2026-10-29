@@ -257,3 +257,156 @@ impl Command for RevCloud {
         self.stage == Stage::Object
     }
 }
+
+/// A revision cloud: a polyline of arcs only.
+fn is_cloud(g: &Geometry) -> bool {
+    matches!(g, Geometry::Polyline { vertices, closed } if vertices.len() >= 2
+        && vertices.iter().take(if *closed { vertices.len() } else { vertices.len() - 1 }).all(|v| v.bulge.abs() > 1e-9))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum PropStage {
+    Select,
+    Option,
+    ArcLength,
+}
+
+/// REVCLOUDPROPERTIES: the selected revision clouds remade with another arc
+/// length, or in the other style (Normal, Calligraphy), or made a plain
+/// Polyline through their points.
+pub struct RevCloudProperties {
+    stage: PropStage,
+    ids: Vec<oxidraft_model::EntityId>,
+    arc: f64,
+}
+
+impl Default for RevCloudProperties {
+    fn default() -> Self {
+        Self { stage: PropStage::Select, ids: Vec::new(), arc: 1.0 }
+    }
+}
+
+impl RevCloudProperties {
+    /// Each cloud remade along the path through its points.
+    fn remake(&self, ctx: &mut Ctx, arc: Option<f64>, calligraphy: Option<bool>) -> usize {
+        let mut n = 0;
+        for id in &self.ids {
+            let Some(Geometry::Polyline { vertices, closed }) = ctx.doc.entity(*id).map(|e| e.geometry.clone()) else {
+                continue;
+            };
+            let points: Vec<Point> = vertices.iter().map(|v| v.point).collect();
+            let segs: Vec<Seg> = if closed {
+                polygon(&points)
+            } else {
+                points.windows(2).map(|w| Seg::from_bulge(w[0], w[1], 0.0)).collect()
+            };
+            // Its arcs' length now, and whether they swell like a pen's.
+            let now = segs.iter().map(Seg::length).sum::<f64>() / segs.len().max(1) as f64;
+            let was_calligraphy = vertices.iter().any(|v| v.start_width != v.end_width);
+            let reverse = vertices.first().is_some_and(|v| v.bulge < 0.0);
+            let Some(g) = cloud(&segs, closed, arc.unwrap_or(now), calligraphy.unwrap_or(was_calligraphy), reverse)
+            else {
+                continue;
+            };
+            ctx.doc.update(*id, |e| e.geometry = g);
+            n += 1;
+        }
+        n
+    }
+}
+
+impl Command for RevCloudProperties {
+    fn start(&mut self, vars: &Vars) -> Option<String> {
+        self.arc = vars.revcloud_arc.unwrap_or(1.0);
+        None
+    }
+
+    fn prompt(&self) -> Prompt {
+        match self.stage {
+            PropStage::Select => Prompt::new("Select revision clouds"),
+            PropStage::Option => {
+                Prompt::new("Enter an option").with_keywords(&["Arc length", "Normal", "Calligraphy", "Polyline"])
+            }
+            PropStage::ArcLength => Prompt::new("Specify arc length").with_default(format!("{:.4}", self.arc)),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (self.stage, input) {
+            (PropStage::Select, Input::Selection(s)) => {
+                self.ids =
+                    s.ids.into_iter().filter(|id| ctx.doc.entity(*id).is_some_and(|e| is_cloud(&e.geometry))).collect();
+                if self.ids.is_empty() {
+                    ctx.messages.push("No revision clouds selected.".into());
+                    return Ok(Step::Done);
+                }
+                self.stage = PropStage::Option;
+            }
+            (PropStage::Option, Input::Keyword("Arc length")) => self.stage = PropStage::ArcLength,
+            (PropStage::Option, Input::Keyword(k @ ("Normal" | "Calligraphy"))) => {
+                let n = self.remake(ctx, None, Some(k == "Calligraphy"));
+                ctx.messages.push(format!("{n} revision cloud(s) changed."));
+                return Ok(Step::Done);
+            }
+            (PropStage::Option, Input::Keyword(_)) => {
+                for id in &self.ids {
+                    ctx.doc.update(*id, |e| {
+                        if let Geometry::Polyline { vertices, .. } = &mut e.geometry {
+                            for v in vertices.iter_mut() {
+                                *v = Vertex::at(v.point);
+                            }
+                        }
+                    });
+                }
+                return Ok(Step::Done);
+            }
+            (PropStage::ArcLength, input @ (Input::Value(_) | Input::Enter)) => {
+                let arc = if let Input::Value(v) = input { v } else { self.arc };
+                if arc <= 0.0 {
+                    return Err("Requires a positive arc length.".into());
+                }
+                ctx.vars.revcloud_arc = Some(arc);
+                let n = self.remake(ctx, Some(arc), None);
+                ctx.messages.push(format!("{n} revision cloud(s) changed."));
+                return Ok(Step::Done);
+            }
+            (_, Input::Enter) => return Ok(Step::Done),
+            _ => return Err("Invalid input.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn wants_selection(&self) -> bool {
+        self.stage == PropStage::Select
+    }
+}
+
+#[cfg(test)]
+mod properties_tests {
+    use super::*;
+    use crate::Engine;
+    use oxidraft_model::Document;
+
+    #[test]
+    fn revcloudproperties_remakes_arcs() {
+        let mut d = Document::new();
+        let square = [Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(10.0, 10.0), Point::new(0.0, 10.0)];
+        let id = d.add(cloud(&polygon(&square), true, 2.0, false, false).unwrap());
+        let count = |d: &Document| match &d.entity(id).unwrap().geometry {
+            Geometry::Polyline { vertices, .. } => vertices.len(),
+            _ => 0,
+        };
+        assert_eq!(count(&d), 20);
+        let mut e = Engine::new();
+        for t in ["revcloudproperties", "all", "", "a", "4"] {
+            e.submit(t, &mut d, Point::ORIGIN, 0.5);
+        }
+        assert_eq!(count(&d), 10, "arcs about twice as long");
+        for t in ["revcloudproperties", "all", "", "p"] {
+            e.submit(t, &mut d, Point::ORIGIN, 0.5);
+        }
+        assert!(
+            matches!(&d.entity(id).unwrap().geometry, Geometry::Polyline { vertices, .. } if vertices.iter().all(|v| v.bulge == 0.0))
+        );
+    }
+}

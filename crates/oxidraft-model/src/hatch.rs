@@ -195,6 +195,7 @@ pub fn pattern_lines(
     pattern: HatchPattern,
     scale: f64,
     angle: f64,
+    origin: Point,
     max_lines: usize,
 ) -> Option<Vec<(Point, Point)>> {
     let mut out = Vec::new();
@@ -212,13 +213,15 @@ pub fn pattern_lines(
         if !lo.is_finite() {
             return Some(out);
         }
-        let first = (lo / spacing).ceil() as i64;
-        let last = (hi / spacing).floor() as i64;
+        // The lines run through the origin (HATCHSETORIGIN).
+        let shift = origin.rotated_about(Point::ORIGIN, -a).y;
+        let first = ((lo - shift) / spacing).ceil() as i64;
+        let last = ((hi - shift) / spacing).floor() as i64;
         if (last - first) as usize + out.len() > max_lines {
             return None;
         }
         for k in first..=last {
-            let y = k as f64 * spacing;
+            let y = shift + k as f64 * spacing;
             let mut xs: Vec<f64> = Vec::new();
             for poly in &rotated {
                 for i in 0..poly.len() {
@@ -319,12 +322,15 @@ mod tests {
     fn horizontal_lines_skip_the_island() {
         let polys = polygons(&[square(0.0, 0.0, 10.0), square(4.0, 4.0, 2.0)]);
         // Scale 0.25 puts lines 0.79375 apart, so some cross the island at y 4..6.
-        let lines = pattern_lines(&polys, HatchPattern::Line, 0.25, 0.0, 1000).unwrap();
+        let lines = pattern_lines(&polys, HatchPattern::Line, 0.25, 0.0, Point::ORIGIN, 1000).unwrap();
         assert!(lines.iter().all(|(a, b)| (a.y - b.y).abs() < 1e-9));
         let crossing: Vec<_> = lines.iter().filter(|(a, _)| a.y > 4.0 && a.y < 6.0).collect();
         assert_eq!(crossing.len(), 4, "two rows, each split in two by the island");
         assert!(crossing.iter().all(|(a, b)| b.x <= 4.0 + 1e-9 || a.x >= 6.0 - 1e-9));
-        assert!(pattern_lines(&polys, HatchPattern::Line, 0.001, 0.0, 1000).is_none(), "too dense");
+        assert!(pattern_lines(&polys, HatchPattern::Line, 0.001, 0.0, Point::ORIGIN, 1000).is_none(), "too dense");
+        // Moved to start a quarter spacing up, the lines move with it.
+        let moved = pattern_lines(&polys, HatchPattern::Line, 0.25, 0.0, Point::new(0.0, 0.0625), 1000).unwrap();
+        assert!(moved.iter().any(|(a, _)| (a.y - 0.0625).abs() < 1e-9) && !moved.iter().any(|(a, _)| a.y.abs() < 1e-9));
     }
 
     #[test]

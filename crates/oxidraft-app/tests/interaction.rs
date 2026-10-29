@@ -2677,3 +2677,118 @@ fn classic_array_group_and_layout_wizard() {
     assert!(doc.space_in_draw_order(layout.id).iter().any(|e| matches!(e.geometry, Geometry::Viewport { .. })));
     assert_eq!(doc.space(), layout.id);
 }
+
+#[test]
+fn pdfimport_brings_a_plots_lines_and_text_back() {
+    use oxidraft_model::Attach;
+    // A drawing plotted to PDF: a line and a text.
+    let mut drawing = Document::new();
+    drawing.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(100.0, 0.0) });
+    drawing.add(Geometry::Text {
+        look: Default::default(),
+        position: Point::new(10.0, 20.0),
+        height: 5.0,
+        rotation: 0.0,
+        width: 0.0,
+        attach: Attach::BottomLeft,
+        content: "PLAN".into(),
+    });
+    let settings = oxidraft_plot::PlotSettings::default();
+    let sheet = oxidraft_plot::render(&drawing, oxidraft_model::MODEL, &settings).unwrap();
+    let dir = std::env::temp_dir().join(format!("oxidraft-pdfimport-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("plan.pdf");
+    std::fs::write(&file, oxidraft_plot::pdf(&sheet, "plan")).unwrap();
+
+    let mut h = app_with_line();
+    let n = h.state_mut().import_pdf_file(&file, 0, 25.4);
+    assert!(n >= 2, "{n}");
+    let doc = h.state_mut().document_mut();
+    let lines: Vec<f64> = doc.entities().filter(|e| e.layer == "PDF_Geometry").map(|e| e.geometry.length()).collect();
+    assert!(!lines.is_empty());
+    let texts: Vec<String> = doc
+        .entities()
+        .filter_map(|e| match &e.geometry {
+            Geometry::Text { content, .. } if e.layer == "PDF_Text" => Some(content.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|t| t.contains("PLAN")), "{texts:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A one-page PDF with a line on layer Walls and one on Doors.
+fn layered_pdf() -> Vec<u8> {
+    let content = "/OC /L1 BDC 0 0 m 100 0 l S EMC /OC /L2 BDC 0 50 m 100 50 l S EMC";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R] /D << >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Properties << /L1 5 0 R /L2 6 0 R >> >> >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /OCG /Name (Walls) >>".to_string(),
+        "<< /Type /OCG /Name (Doors) >>".to_string(),
+    ];
+    let mut out = b"%PDF-1.5\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes(),
+    );
+    out
+}
+
+#[test]
+fn underlay_layers_hide_from_view_and_import() {
+    use oxidraft_model::{ImageDef, XrefStatus};
+    let dir = std::env::temp_dir().join(format!("oxidraft-ulayers-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("plan.pdf");
+    std::fs::write(&file, layered_pdf()).unwrap();
+    let mut h = app_with_line();
+    let doc = h.state_mut().document_mut();
+    doc.set_image_def(ImageDef {
+        name: "plan".into(),
+        path: file.display().to_string(),
+        page: Some(0),
+        width: 200.0,
+        height: 200.0,
+        status: XrefStatus::Loaded,
+    });
+    let underlay = doc.add(Geometry::Image {
+        image: "plan".into(),
+        origin: Point::new(0.0, 0.0),
+        u: Point::new(200.0, 0.0),
+        v: Point::new(0.0, 200.0),
+        clip: Vec::new(),
+        adjust: Default::default(),
+    });
+    h.state_mut().set_underlay_layers_off("plan", vec!["Doors".into()]);
+    assert_eq!(h.state_mut().document_mut().pdf_layers_off("plan"), ["Doors".to_string()]);
+    h.state_mut().engine_mut().set_selection(vec![underlay]);
+    type_all(&mut h, &["pdfimport"]);
+    h.run_steps(1);
+    let doc = h.state_mut().document_mut();
+    let imported: Vec<f64> = doc
+        .entities()
+        .filter(|e| e.layer == "PDF_Geometry")
+        .filter_map(|e| match e.geometry {
+            Geometry::Line { start, .. } => Some(start.y),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(imported.len(), 1, "only the wall's line: {imported:?}");
+    assert!(imported[0].abs() < 1e-6);
+    // Kept with the drawing.
+    let bytes = oxidraft_io_dwg::write(doc, oxidraft_io_dwg::Version::R2018).unwrap();
+    let back = oxidraft_io_dwg::read(&bytes).unwrap().imported.document;
+    assert_eq!(back.pdf_layers_off("plan"), ["Doors".to_string()]);
+    std::fs::remove_dir_all(&dir).ok();
+}

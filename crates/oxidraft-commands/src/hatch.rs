@@ -47,7 +47,13 @@ impl Hatch {
     }
 
     fn add(&mut self, loops: Vec<Vec<Vertex>>, ctx: &mut Ctx) {
-        let id = ctx.doc.add(Geometry::Hatch { loops, pattern: self.pattern, scale: self.scale, angle: self.angle });
+        let id = ctx.doc.add(Geometry::Hatch {
+            origin: Default::default(),
+            loops,
+            pattern: self.pattern,
+            scale: self.scale,
+            angle: self.angle,
+        });
         // Behind what it fills (AutoCAD's HPDRAWORDER "Behind boundary").
         ctx.doc.send_behind_drawing(&[id]);
         self.created += 1;

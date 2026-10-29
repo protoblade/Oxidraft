@@ -370,6 +370,82 @@ impl Command for HatchSetBoundary {
     }
 }
 
+/// HATCHSETORIGIN: where the selected hatches' patterns start: a point,
+/// or a corner or the center of each one's extents.
+#[derive(Default)]
+pub struct HatchSetOrigin {
+    ids: Vec<EntityId>,
+}
+
+impl HatchSetOrigin {
+    fn set(&self, ctx: &mut Ctx, at: &dyn Fn(&Geometry) -> Point) {
+        for id in &self.ids {
+            ctx.doc.update(*id, |e| {
+                let p = at(&e.geometry);
+                if let Geometry::Hatch { origin, .. } = &mut e.geometry {
+                    *origin = p;
+                }
+            });
+        }
+    }
+}
+
+impl Command for HatchSetOrigin {
+    fn prompt(&self) -> Prompt {
+        if self.ids.is_empty() {
+            Prompt::new("Select hatch objects")
+        } else {
+            Prompt::new("Specify new origin point or").with_keywords(&[
+                "Bottom left",
+                "bottom Right",
+                "Top left",
+                "top rIght",
+                "Center",
+            ])
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (self.ids.is_empty(), input) {
+            (true, Input::Selection(s)) => {
+                self.ids = s
+                    .ids
+                    .into_iter()
+                    .filter(|id| matches!(ctx.doc.entity(*id).map(|e| &e.geometry), Some(Geometry::Hatch { .. })))
+                    .collect();
+                if self.ids.is_empty() {
+                    ctx.messages.push("No hatches selected.".into());
+                    return Ok(Step::Done);
+                }
+                Ok(Step::Continue)
+            }
+            (false, Input::Point(p)) => {
+                self.set(ctx, &|_| p);
+                Ok(Step::Done)
+            }
+            (false, Input::Keyword(k)) => {
+                self.set(ctx, &|g| {
+                    let b = g.bounds();
+                    match k {
+                        "Bottom left" => b.min,
+                        "bottom Right" => Point::new(b.max.x, b.min.y),
+                        "Top left" => Point::new(b.min.x, b.max.y),
+                        "top rIght" => b.max,
+                        _ => b.center(),
+                    }
+                });
+                Ok(Step::Done)
+            }
+            (_, Input::Enter) => Ok(Step::Done),
+            _ => Err("Invalid input.".into()),
+        }
+    }
+
+    fn wants_selection(&self) -> bool {
+        self.ids.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Engine;
@@ -398,7 +474,7 @@ mod tests {
     fn hatches(d: &Document) -> Vec<(Vec<Vec<Vertex>>, HatchPattern, f64, f64)> {
         d.entities()
             .filter_map(|e| match &e.geometry {
-                Geometry::Hatch { loops, pattern, scale, angle } => Some((loops.clone(), *pattern, *scale, *angle)),
+                Geometry::Hatch { loops, pattern, scale, angle, .. } => Some((loops.clone(), *pattern, *scale, *angle)),
                 _ => None,
             })
             .collect()
@@ -408,7 +484,13 @@ mod tests {
         let mut d = Document::new();
         // Two areas, the first with an island.
         let loops = vec![square(0.0, 0.0, 10.0), square(4.0, 4.0, 2.0), square(20.0, 0.0, 10.0)];
-        d.add(Geometry::Hatch { loops, pattern: HatchPattern::Ansi31, scale: 1.0, angle: 0.0 });
+        d.add(Geometry::Hatch {
+            origin: Default::default(),
+            loops,
+            pattern: HatchPattern::Ansi31,
+            scale: 1.0,
+            angle: 0.0,
+        });
         d
     }
 
@@ -452,6 +534,20 @@ mod tests {
     }
 
     #[test]
+    fn hatchsetorigin_moves_where_the_pattern_starts() {
+        let (mut e, mut d) = (Engine::new(), doc());
+        run(&mut e, &mut d, &["hatchsetorigin", "all", "", "3,4"]);
+        assert!(
+            matches!(d.entities().next().unwrap().geometry, Geometry::Hatch { origin, .. } if origin == Point::new(3.0, 4.0))
+        );
+        // Bottom left: the corner of its extents.
+        run(&mut e, &mut d, &["hatchsetorigin", "all", "", "b"]);
+        assert!(
+            matches!(d.entities().next().unwrap().geometry, Geometry::Hatch { origin, .. } if origin == Point::ORIGIN)
+        );
+    }
+
+    #[test]
     fn generate_and_set_boundaries() {
         let (mut e, mut d) = (Engine::new(), doc());
         run(&mut e, &mut d, &["hatchgenerateboundary", "all", ""]);
@@ -474,6 +570,7 @@ mod tests {
         let other = d.add(Geometry::Circle { center: Point::new(50.0, 50.0), radius: 1.0 });
         let edge = d.add(Geometry::Polyline { vertices: square(0.0, 0.0, 10.0), closed: true });
         let hatch = d.add(Geometry::Hatch {
+            origin: Default::default(),
             loops: vec![square(0.0, 0.0, 10.0)],
             pattern: HatchPattern::Solid,
             scale: 1.0,
