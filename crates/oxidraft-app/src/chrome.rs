@@ -113,7 +113,7 @@ const NOT_YET: &str = "Not available in Oxidraft yet";
 impl OxidraftApp {
     /// Title row: app button, quick-access toolbar, drawing name.
     pub(crate) fn top_bar(&mut self, ui: &mut Ui) {
-        let frame = Frame::NONE.fill(theme::TOP_BAR).inner_margin(Margin::symmetric(0, 0));
+        let frame = Frame::NONE.fill(theme::top_bar()).inner_margin(Margin::symmetric(0, 0));
         egui::Panel::top("top_bar").frame(frame).exact_size(30.0).show_separator_line(false).show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
@@ -138,7 +138,13 @@ impl OxidraftApp {
                 let dirty = if self.is_dirty() { "*" } else { "" };
                 let title = format!("Oxidraft    {}{dirty}", self.file_name());
                 let rect = ui.max_rect();
-                ui.painter().text(rect.center(), Align2::CENTER_CENTER, title, FontId::proportional(12.5), theme::TEXT);
+                ui.painter().text(
+                    rect.center(),
+                    Align2::CENTER_CENTER,
+                    title,
+                    FontId::proportional(12.5),
+                    theme::text(),
+                );
             });
         });
     }
@@ -160,18 +166,21 @@ impl OxidraftApp {
                 self.run("PLOT");
             }
             ui.separator();
+            if ui.button("Options...").clicked() {
+                self.run("OPTIONS");
+            }
             if ui.button("Check for Updates...").clicked() {
                 self.check_for_updates(ui.ctx());
             }
             ui.label(
-                egui::RichText::new(format!("Oxidraft {}", env!("CARGO_PKG_VERSION"))).small().color(theme::TEXT_DIM),
+                egui::RichText::new(format!("Oxidraft {}", env!("CARGO_PKG_VERSION"))).small().color(theme::text_dim()),
             );
         });
     }
 
     /// Ribbon: tab strip plus the panels of the selected tab.
     pub(crate) fn ribbon(&mut self, ui: &mut Ui) {
-        let tabs = Frame::NONE.fill(theme::TOP_BAR).inner_margin(Margin { left: 8, right: 8, top: 0, bottom: 0 });
+        let tabs = Frame::NONE.fill(theme::top_bar()).inner_margin(Margin { left: 8, right: 8, top: 0, bottom: 0 });
         egui::Panel::top("ribbon_tabs").frame(tabs).exact_size(26.0).show_separator_line(false).show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -183,7 +192,7 @@ impl OxidraftApp {
             });
         });
 
-        let body = Frame::NONE.fill(theme::RIBBON).inner_margin(Margin::symmetric(4, 0));
+        let body = Frame::NONE.fill(theme::ribbon()).inner_margin(Margin::symmetric(4, 0));
         egui::Panel::top("ribbon").frame(body).exact_size(98.0).show_separator_line(false).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -202,7 +211,7 @@ impl OxidraftApp {
                     ui.vertical(|ui| {
                         ui.add_space(36.0);
                         ui.colored_label(
-                            theme::TEXT_DIM,
+                            theme::text_dim(),
                             format!("The {} tab is {}.", RIBBON_TABS[self.ribbon_tab], NOT_YET.to_lowercase()),
                         );
                     });
@@ -455,7 +464,7 @@ impl OxidraftApp {
         let (rect, response) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
         paint_hover(ui, rect, &response, true);
         let icon = Rect::from_center_size(rect.center(), vec2(16.0, 16.0));
-        icons::paint(ui.painter(), icon, t.icon, theme::TEXT, true);
+        icons::paint(ui.painter(), icon, t.icon, theme::text(), true);
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
         response.on_hover_text(t.tip).clicked()
     }
@@ -540,27 +549,27 @@ impl OxidraftApp {
 
     /// Drawing tabs under the ribbon.
     pub(crate) fn file_tabs(&mut self, ui: &mut Ui) {
-        let frame = Frame::NONE.fill(theme::STRIP).inner_margin(Margin { left: 6, right: 6, top: 3, bottom: 0 });
+        let frame = Frame::NONE.fill(theme::strip()).inner_margin(Margin { left: 6, right: 6, top: 3, bottom: 0 });
         egui::Panel::top("file_tabs").frame(frame).exact_size(28.0).show_separator_line(false).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 let dirty = if self.is_dirty() { "*" } else { "" };
                 let label = format!("{}{dirty}", self.file_name());
-                let galley = ui.painter().layout_no_wrap(label, FontId::proportional(12.0), theme::TEXT);
+                let galley = ui.painter().layout_no_wrap(label, FontId::proportional(12.0), theme::text());
                 let (rect, _) = ui.allocate_exact_size(vec2(galley.size().x + 44.0, 25.0), Sense::hover());
-                ui.painter().rect_filled(rect, CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, theme::MODEL_BG);
-                ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(2.0, theme::ACCENT));
+                ui.painter().rect_filled(rect, CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, theme::tab());
+                ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(2.0, theme::accent()));
                 ui.painter().galley(
                     pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0),
                     galley,
-                    theme::TEXT,
+                    theme::text(),
                 );
                 ui.painter().text(
                     pos2(rect.right() - 14.0, rect.center().y),
                     Align2::CENTER_CENTER,
                     "×",
                     FontId::proportional(13.0),
-                    theme::TEXT_DIM,
+                    theme::text_dim(),
                 );
                 ui.add_space(4.0);
                 if ui.add(egui::Button::new("+").frame(false)).on_hover_text("New drawing").clicked() {
@@ -572,7 +581,7 @@ impl OxidraftApp {
 
     /// Status bar: layout tabs, coordinates and drafting toggles.
     pub(crate) fn status_bar(&mut self, ui: &mut Ui) {
-        let frame = Frame::NONE.fill(theme::STRIP).inner_margin(Margin::symmetric(6, 0));
+        let frame = Frame::NONE.fill(theme::strip()).inner_margin(Margin::symmetric(6, 0));
         egui::Panel::bottom("status").frame(frame).exact_size(28.0).show_separator_line(false).show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
@@ -586,12 +595,12 @@ impl OxidraftApp {
                 let coords = self.cursor.map_or(String::new(), |p| format!("{:.4}, {:.4}, 0.0000", p.x, p.y));
                 ui.add_sized(
                     [210.0, 20.0],
-                    egui::Label::new(egui::RichText::new(coords).monospace().color(theme::TEXT_DIM)),
+                    egui::Label::new(egui::RichText::new(coords).monospace().color(theme::text_dim())),
                 );
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     self.update_badge(ui);
-                    ui.label(egui::RichText::new("1:1").color(theme::TEXT_DIM));
+                    ui.label(egui::RichText::new("1:1").color(theme::text_dim()));
                     ui.add_space(6.0);
                     let mut lwt = self.show_lineweights;
                     if status_toggle(ui, "LWT", &mut lwt, "Show/Hide Lineweight") {
@@ -606,11 +615,11 @@ impl OxidraftApp {
                     // AutoCAD's OSNAP dropdown: which running snaps are on.
                     let (rect, arrow) = ui.allocate_exact_size(vec2(12.0, 22.0), Sense::click());
                     if arrow.hovered() {
-                        ui.painter().rect_filled(rect, 2.0, theme::RIBBON_HOVER);
+                        ui.painter().rect_filled(rect, 2.0, theme::ribbon_hover());
                     }
                     let c = rect.center();
                     let tip = vec![c + vec2(-3.5, -1.5), c + vec2(3.5, -1.5), c + vec2(0.0, 2.5)];
-                    ui.painter().add(Shape::convex_polygon(tip, theme::TEXT_DIM, Stroke::NONE));
+                    ui.painter().add(Shape::convex_polygon(tip, theme::text_dim(), Stroke::NONE));
                     let arrow = arrow.on_hover_text("Running object snaps");
                     egui::Popup::menu(&arrow).show(|ui| {
                         for kind in oxidraft_model::snap::SnapKind::ALL {
@@ -646,7 +655,7 @@ impl OxidraftApp {
                         self.grid = grid;
                         self.log_toggle("Grid", grid);
                     }
-                    ui.label(egui::RichText::new("MODEL").strong().color(theme::TEXT));
+                    ui.label(egui::RichText::new("MODEL").strong().color(theme::text()));
                 });
             });
         });
@@ -664,7 +673,7 @@ impl OxidraftApp {
             _ => return,
         };
         let button = egui::Button::new(egui::RichText::new(text).color(Color32::WHITE).size(11.5))
-            .fill(theme::ACCENT.gamma_multiply(0.8))
+            .fill(theme::accent().gamma_multiply(0.8))
             .corner_radius(3.0);
         if ui.add(button).on_hover_text("Oxidraft update").clicked() {
             self.update_dialog = true;
@@ -677,7 +686,7 @@ impl OxidraftApp {
 fn paint_large(ui: &mut Ui, t: &Tool, enabled: bool) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(58.0, 76.0), Sense::click());
     paint_hover(ui, rect, &response, enabled);
-    let color = if enabled { theme::TEXT } else { theme::TEXT_DISABLED };
+    let color = if enabled { theme::text() } else { theme::text_disabled() };
     let icon = Rect::from_center_size(pos2(rect.center().x, rect.top() + 22.0), vec2(30.0, 30.0));
     icons::paint(ui.painter(), icon, t.icon, color, enabled);
     ui.painter().text(
@@ -696,14 +705,14 @@ fn paint_small(ui: &mut Ui, t: &Tool, enabled: bool) -> Response {
     let text_w = if t.label.is_empty() {
         0.0
     } else {
-        ui.painter().layout_no_wrap(t.label.into(), font.clone(), theme::TEXT).size().x + 6.0
+        ui.painter().layout_no_wrap(t.label.into(), font.clone(), theme::text()).size().x + 6.0
     };
     let (rect, response) = ui.allocate_exact_size(
         vec2(24.0 + text_w.max(if t.label.is_empty() { 0.0 } else { 46.0 }), 24.0),
         Sense::click(),
     );
     paint_hover(ui, rect, &response, enabled);
-    let color = if enabled { theme::TEXT } else { theme::TEXT_DISABLED };
+    let color = if enabled { theme::text() } else { theme::text_disabled() };
     let icon = Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0));
     icons::paint(ui.painter(), icon, t.icon, color, enabled);
     if !t.label.is_empty() {
@@ -723,19 +732,19 @@ fn ribbon_panel(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {
             });
             let width = r.response.rect.width();
             let (title_rect, _) = ui.allocate_exact_size(vec2(width, 18.0), Sense::hover());
-            ui.painter().rect_filled(title_rect, 0.0, theme::RIBBON_TITLE);
+            ui.painter().rect_filled(title_rect, 0.0, theme::ribbon_title());
             let text = ui.painter().text(
                 title_rect.center() - vec2(5.0, 0.0),
                 Align2::CENTER_CENTER,
                 title,
                 FontId::proportional(11.0),
-                theme::TEXT_DIM,
+                theme::text_dim(),
             );
             // Expander arrow, as on AutoCAD's panel titles.
             let c = pos2(text.right() + 9.0, title_rect.center().y + 1.0);
             ui.painter().add(egui::Shape::convex_polygon(
                 vec![c + vec2(-3.5, -2.0), c + vec2(3.5, -2.0), c + vec2(0.0, 2.5)],
-                theme::TEXT_DIM,
+                theme::text_dim(),
                 Stroke::NONE,
             ));
         })
@@ -743,20 +752,23 @@ fn ribbon_panel(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {
     let r = response.rect;
     ui.painter().line_segment(
         [pos2(r.right(), r.top() + 4.0), pos2(r.right(), r.bottom())],
-        Stroke::new(1.0, theme::RIBBON_TITLE),
+        Stroke::new(1.0, theme::ribbon_title()),
     );
     ui.add_space(1.0);
 }
 
 fn paint_hover(ui: &Ui, rect: Rect, response: &Response, enabled: bool) {
     if enabled && response.hovered() {
-        let fill =
-            if response.is_pointer_button_down_on() { theme::ACCENT.gamma_multiply(0.45) } else { theme::RIBBON_HOVER };
+        let fill = if response.is_pointer_button_down_on() {
+            theme::accent().gamma_multiply(0.45)
+        } else {
+            theme::ribbon_hover()
+        };
         ui.painter().rect(
             rect.shrink(1.0),
             2.0,
             fill,
-            Stroke::new(1.0, theme::RIBBON_HOVER.gamma_multiply(1.3)),
+            Stroke::new(1.0, theme::ribbon_hover().gamma_multiply(1.3)),
             egui::StrokeKind::Inside,
         );
     }
@@ -766,33 +778,33 @@ fn icon_button(ui: &mut Ui, icon: Icon, size: f32, enabled: bool, tip: &str) -> 
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(vec2(size + 10.0, size + 8.0), sense);
     paint_hover(ui, rect, &response, enabled);
-    let color = if enabled { theme::TEXT } else { theme::TEXT_DISABLED };
+    let color = if enabled { theme::text() } else { theme::text_disabled() };
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(size, size)), icon, color, enabled);
     response.on_hover_text(tip)
 }
 
 fn ribbon_tab(ui: &mut Ui, name: &str, selected: bool) -> Response {
     let font = FontId::proportional(12.5);
-    let w = ui.painter().layout_no_wrap(name.into(), font.clone(), theme::TEXT).size().x + 24.0;
+    let w = ui.painter().layout_no_wrap(name.into(), font.clone(), theme::text()).size().x + 24.0;
     let (rect, response) = ui.allocate_exact_size(vec2(w, 26.0), Sense::click());
     if selected {
-        ui.painter().rect_filled(rect, CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, theme::RIBBON);
+        ui.painter().rect_filled(rect, CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, theme::ribbon());
     } else if response.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, theme::STRIP);
+        ui.painter().rect_filled(rect, CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, theme::strip());
     }
-    let color = if selected { theme::TEXT } else { theme::TEXT_DIM };
+    let color = if selected { theme::text() } else { theme::text_dim() };
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, name, font, color);
     response
 }
 
 fn layout_tab(ui: &mut Ui, name: &str, selected: bool) -> Response {
     let font = FontId::proportional(12.0);
-    let w = ui.painter().layout_no_wrap(name.into(), font.clone(), theme::TEXT).size().x + 18.0;
+    let w = ui.painter().layout_no_wrap(name.into(), font.clone(), theme::text()).size().x + 18.0;
     let (rect, response) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
     if selected {
-        ui.painter().rect_filled(rect, 2.0, theme::RIBBON);
+        ui.painter().rect_filled(rect, 2.0, theme::ribbon());
     }
-    let color = if selected { theme::TEXT } else { theme::TEXT_DIM };
+    let color = if selected { theme::text() } else { theme::text_dim() };
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, name, font, color);
     response
 }
@@ -800,18 +812,18 @@ fn layout_tab(ui: &mut Ui, name: &str, selected: bool) -> Response {
 /// A text toggle on the status bar, blue when on. Returns true when clicked.
 fn status_toggle(ui: &mut Ui, label: &str, on: &mut bool, tip: &str) -> bool {
     let font = FontId::proportional(11.5);
-    let w = ui.painter().layout_no_wrap(label.into(), font.clone(), theme::TEXT).size().x + 14.0;
+    let w = ui.painter().layout_no_wrap(label.into(), font.clone(), theme::text()).size().x + 14.0;
     let (rect, response) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
     let enabled = ui.is_enabled();
     if response.hovered() && enabled {
-        ui.painter().rect_filled(rect, 2.0, theme::RIBBON_HOVER);
+        ui.painter().rect_filled(rect, 2.0, theme::ribbon_hover());
     } else if *on {
-        ui.painter().rect_filled(rect, 2.0, theme::ACCENT.gamma_multiply(0.25));
+        ui.painter().rect_filled(rect, 2.0, theme::accent().gamma_multiply(0.25));
     }
     let color = match (enabled, *on) {
-        (false, _) => theme::TEXT_DISABLED,
-        (true, true) => theme::ACCENT,
-        (true, false) => theme::TEXT_DIM,
+        (false, _) => theme::text_disabled(),
+        (true, true) => theme::accent(),
+        (true, false) => theme::text_dim(),
     };
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, color);
     let clicked = response.on_hover_text(tip).clicked();
@@ -823,5 +835,5 @@ fn status_toggle(ui: &mut Ui, label: &str, on: &mut bool, tip: &str) -> bool {
 
 fn color_swatch(ui: &mut Ui, aci: u8) {
     let (rect, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
-    ui.painter().rect(rect, 1.0, theme::aci(aci), Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Inside);
+    ui.painter().rect(rect, 1.0, theme::swatch(aci), Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Inside);
 }

@@ -611,7 +611,7 @@ impl OxidraftApp {
                         let mut page = d.page + 1;
                         ui.horizontal(|ui| {
                             ui.add(egui::DragValue::new(&mut page).range(1..=d.info.pages.max(1)));
-                            ui.colored_label(theme::TEXT_DIM, format!("of {}", d.info.pages));
+                            ui.colored_label(theme::text_dim(), format!("of {}", d.info.pages));
                         });
                         d.page = page - 1;
                     } else {
@@ -638,7 +638,7 @@ impl OxidraftApp {
                         ui.vertical(|ui| {
                             ui.checkbox(&mut d.use_georef, "Use its georeferencing");
                             ui.colored_label(
-                                theme::TEXT_DIM,
+                                theme::text_dim(),
                                 format!(
                                     "{:.4} units a pixel, corner at {:.3}, {:.3}",
                                     g.u.length() / d.info.width.max(1.0),
@@ -671,7 +671,7 @@ impl OxidraftApp {
                                 egui::DragValue::new(&mut d.scale).speed(0.01).range(0.0001..=f64::MAX).max_decimals(4),
                             );
                             let hint = if pdf { "x page size in mm" } else { "units wide" };
-                            ui.colored_label(theme::TEXT_DIM, hint);
+                            ui.colored_label(theme::text_dim(), hint);
                         });
                     });
                     ui.end_row();
@@ -770,7 +770,7 @@ impl OxidraftApp {
             let size = to(*origin).distance(to(*origin + *u));
             if size > 60.0 {
                 let text = format!("{image}\n{state}");
-                painter.text(center, Align2::CENTER_CENTER, text, FontId::proportional(12.0), theme::TEXT_DIM);
+                painter.text(center, Align2::CENTER_CENTER, text, FontId::proportional(12.0), theme::label());
             }
         }
     }

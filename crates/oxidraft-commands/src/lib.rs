@@ -148,6 +148,8 @@ pub enum UiRequest {
     PlotWindow(Option<Aabb>),
     /// REFCLOSE's Save for an xref: its file is to be written.
     SaveXrefEdit,
+    /// COLORTHEME: 0 dark, 1 light.
+    ColorTheme(u8),
 }
 
 /// Result of feeding one input to a command.
@@ -203,6 +205,8 @@ pub struct Vars {
     pub revcloud_calligraphy: bool,
     /// REVCLOUDCREATEMODE: Polygonal (true) or Rectangular clouds.
     pub revcloud_polygonal: bool,
+    /// COLORTHEME: 0 dark, 1 light. The app keeps it; it's here for the prompt.
+    pub color_theme: u8,
 }
 
 impl Default for Vars {
@@ -232,6 +236,7 @@ impl Default for Vars {
             revcloud_arc: None,
             revcloud_calligraphy: false,
             revcloud_polygonal: false,
+            color_theme: 0,
         }
     }
 }

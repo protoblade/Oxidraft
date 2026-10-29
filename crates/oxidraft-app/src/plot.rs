@@ -296,7 +296,7 @@ impl OxidraftApp {
                                     });
                             });
                             ui.colored_label(
-                                theme::TEXT_DIM,
+                                theme::text_dim(),
                                 "Writes a PDF file: lines as vectors, text you can search.",
                             );
                         });
@@ -436,7 +436,7 @@ impl OxidraftApp {
                         // A small preview of the sheet, as in AutoCAD's dialog.
                         let (w, h) = s.sheet();
                         let (space, _) = ui.allocate_exact_size(vec2(250.0, 170.0), Sense::hover());
-                        ui.painter().rect_filled(space, 4.0, theme::INPUT_BG);
+                        ui.painter().rect_filled(space, 4.0, theme::input_bg());
                         let paper = paper_rect(space.shrink(10.0), w, h);
                         match dialog.sheet.as_ref().and_then(|(_, _, sh)| sh.as_ref()) {
                             Some(sheet) if sheet.layout.width == w => {
@@ -453,7 +453,7 @@ impl OxidraftApp {
                             }
                             None => "There's nothing to plot.".into(),
                         };
-                        ui.colored_label(theme::TEXT_DIM, note);
+                        ui.colored_label(theme::text_dim(), note);
                     });
                 });
                 ui.separator();
@@ -493,7 +493,7 @@ impl OxidraftApp {
                 let (rect, _) = ui.allocate_exact_size(screen.size(), Sense::click_and_drag());
                 ui.painter().rect_filled(rect, 0.0, Color32::from_gray(96));
                 let bar = Rect::from_min_size(rect.min, vec2(rect.width(), 36.0));
-                ui.painter().rect_filled(bar, 0.0, theme::TOP_BAR);
+                ui.painter().rect_filled(bar, 0.0, theme::top_bar());
                 let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(10.0, 6.0))));
                 bar_ui.horizontal_centered(|ui| {
                     if ui.button("Plot").clicked() {
@@ -502,7 +502,7 @@ impl OxidraftApp {
                     if ui.button("Close Preview").clicked() {
                         action = PreviewAction::Close;
                     }
-                    ui.colored_label(theme::TEXT_DIM, "Press Esc or Enter to exit.");
+                    ui.colored_label(theme::text_dim(), "Press Esc or Enter to exit.");
                 });
                 if let Some(sheet) = dialog.sheet() {
                     let space = Rect::from_min_max(pos2(rect.left(), bar.bottom()), rect.max).shrink(24.0);

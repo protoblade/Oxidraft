@@ -6,7 +6,7 @@ use oxidraft_geom::Point;
 use oxidraft_model::Document;
 
 use crate::{
-    theme,
+    theme::{self, ColorTheme},
     update::{UpdateState, Updater},
     view::View,
 };
@@ -45,6 +45,11 @@ pub struct OxidraftApp {
     pub(crate) xref_selected: Option<String>,
     /// What each attached drawing attaches itself, as read with it.
     pub(crate) nested_xrefs: std::collections::HashMap<String, Vec<(String, String, oxidraft_model::XrefStatus)>>,
+    /// The options (color theme, drawing background), where they're kept
+    /// between runs (`None`: not kept, as in tests), and the Options dialog.
+    pub(crate) settings: crate::settings::Settings,
+    pub(crate) settings_path: Option<std::path::PathBuf>,
+    pub(crate) options: Option<crate::settings::OptionsDialog>,
     /// REFCLOSE's Save for an xref, waiting to be confirmed.
     pub(crate) xref_edit_save: Option<crate::xref::XrefEditSave>,
     /// Images and PDF pages: their pixels as read so far, the reader, and
@@ -139,6 +144,9 @@ impl OxidraftApp {
             xref_selected: None,
             nested_xrefs: Default::default(),
             xref_edit_save: None,
+            settings: Default::default(),
+            settings_path: None,
+            options: None,
             rasters: Default::default(),
             details: Default::default(),
             detail_wants: Default::default(),
@@ -175,6 +183,12 @@ impl OxidraftApp {
             text_fields: Vec::new(),
             prev_text_fields: Vec::new(),
         }
+    }
+
+    /// Keeps the options in `path` from now on, as the app does in the
+    /// user's configuration folder.
+    pub fn keep_settings_in(&mut self, path: PathBuf) {
+        self.settings_path = Some(path);
     }
 
     /// Replaces the drawing and zooms to its extents.
@@ -363,6 +377,7 @@ impl OxidraftApp {
             "PDFATTACH" => self.pdf_attach(),
             "PREVIEW" | "PRE" => self.open_plot(true),
             "QSELECT" => self.open_quick_select(),
+            "OPTIONS" | "OP" => self.open_options(),
             "PROPERTIES" | "PR" | "PROPS" | "MO" | "CH" => self.properties_open = true,
             _ => return false,
         }
@@ -390,7 +405,7 @@ impl OxidraftApp {
     }
 
     /// Opens what commands asked for. Returns true if there was anything.
-    fn handle_ui_requests(&mut self) -> bool {
+    fn handle_ui_requests(&mut self, ctx: &egui::Context) -> bool {
         let requests = self.engine.take_ui_requests();
         for r in &requests {
             match *r {
@@ -399,6 +414,10 @@ impl OxidraftApp {
                 }
                 UiRequest::TextWindow => self.history_expanded = true,
                 UiRequest::SaveXrefEdit => self.prepare_xref_edit_save(),
+                UiRequest::ColorTheme(n) => {
+                    let color_theme = if n == 1 { ColorTheme::Light } else { ColorTheme::Dark };
+                    self.apply_settings(ctx, crate::settings::Settings { color_theme, ..self.settings });
+                }
                 UiRequest::PlotWindow(window) => {
                     if let Some(d) = &mut self.plot {
                         if let Some(w) = window {
@@ -555,10 +574,10 @@ impl eframe::App for OxidraftApp {
         self.status_bar(ui);
         self.file_tabs(ui);
         self.properties_palette(ui);
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::MODEL_BG)).show(ui, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::model_bg())).show(ui, |ui| {
             self.canvas(ui);
         });
-        self.handle_ui_requests();
+        self.handle_ui_requests(&ctx);
         self.layer_manager(&ctx);
         self.quick_select_dialog(&ctx);
         self.attribute_editor(&ctx);
@@ -567,11 +586,12 @@ impl eframe::App for OxidraftApp {
         self.image_attach_dialog(&ctx);
         self.xref_palette(&ctx);
         self.xref_edit_save_dialog(&ctx);
+        self.options_dialog(&ctx);
         self.update_window(&ctx);
         self.command_line(&ctx);
         self.publish_copied(&ctx);
         // Requests from what was typed this frame show on the next.
-        if self.handle_ui_requests() {
+        if self.handle_ui_requests(&ctx) {
             ctx.request_repaint();
         }
     }
@@ -633,7 +653,7 @@ impl OxidraftApp {
                         ui.add_space(6.0);
                         if crate::update::is_dev_build() {
                             ui.colored_label(
-                                theme::TEXT_DIM,
+                                theme::text_dim(),
                                 "This is a development build. Update the source with git pull and rebuild.",
                             );
                         }
@@ -658,7 +678,7 @@ impl OxidraftApp {
                     UpdateState::Installed(version) => {
                         ui.label(format!("Oxidraft {version} is installed. Restart to start using it."));
                         if self.is_dirty() {
-                            ui.colored_label(theme::GRIP_HOVER, "Save your drawing before restarting.");
+                            ui.colored_label(theme::grip_hover(), "Save your drawing before restarting.");
                         }
                         ui.horizontal(|ui| {
                             if self.is_dirty() && ui.button("Save").clicked() {

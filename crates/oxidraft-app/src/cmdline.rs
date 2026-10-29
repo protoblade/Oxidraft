@@ -2,15 +2,11 @@
 //! AutoComplete and clickable command options, as in AutoCAD LT.
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontId, Frame, Key, Margin, Order, RichText, Sense, Stroke, TextEdit, vec2,
+    self, Align2, CornerRadius, FontId, Frame, Key, Margin, Order, RichText, Sense, Stroke, TextEdit, vec2,
 };
 use oxidraft_commands::Engine;
 
 use crate::{app::OxidraftApp, theme};
-
-const BAR_BG: Color32 = Color32::from_rgb(52, 60, 74);
-const HISTORY_BG: Color32 = Color32::from_rgba_premultiplied(30, 35, 44, 200);
-const KEYWORD_BG: Color32 = Color32::from_rgb(70, 82, 102);
 
 impl OxidraftApp {
     pub(crate) fn command_line(&mut self, ctx: &egui::Context) {
@@ -94,15 +90,15 @@ impl OxidraftApp {
         }
         self.suggestion = self.suggestion.min(list.len() - 1);
         Frame::NONE
-            .fill(theme::TOOLTIP_BG)
-            .stroke(Stroke::new(1.0, theme::TOOLTIP_EDGE))
+            .fill(theme::tooltip_bg())
+            .stroke(Stroke::new(1.0, theme::tooltip_edge()))
             .inner_margin(Margin::same(3))
             .show(ui, |ui| {
                 ui.set_width(width - 6.0);
                 for (i, c) in list.iter().enumerate() {
                     let (rect, response) = ui.allocate_exact_size(vec2(width - 6.0, 22.0), Sense::click());
                     if i == self.suggestion || response.hovered() {
-                        ui.painter().rect_filled(rect, 2.0, theme::ACCENT.gamma_multiply(0.35));
+                        ui.painter().rect_filled(rect, 2.0, theme::accent().gamma_multiply(0.35));
                     }
                     let aliases =
                         if c.aliases.is_empty() { String::new() } else { format!(" ({})", c.aliases.join(", ")) };
@@ -111,14 +107,14 @@ impl OxidraftApp {
                         Align2::LEFT_CENTER,
                         format!("{}{aliases}", c.name),
                         FontId::proportional(12.5),
-                        theme::TEXT,
+                        theme::text(),
                     );
                     ui.painter().text(
                         rect.right_center() - vec2(8.0, 0.0),
                         Align2::RIGHT_CENTER,
                         c.description,
                         FontId::proportional(10.5),
-                        theme::TEXT_DIM,
+                        theme::text_dim(),
                     );
                     if response.clicked() {
                         self.run(c.name);
@@ -134,9 +130,9 @@ impl OxidraftApp {
             return;
         }
         let line = |ui: &mut egui::Ui, text: &str, alpha: f32| {
-            ui.label(RichText::new(text).font(FontId::monospace(12.0)).color(theme::TEXT.gamma_multiply(alpha)));
+            ui.label(RichText::new(text).font(FontId::monospace(12.0)).color(theme::text().gamma_multiply(alpha)));
         };
-        Frame::NONE.fill(HISTORY_BG).inner_margin(Margin::symmetric(10, 4)).show(ui, |ui| {
+        Frame::NONE.fill(theme::command_history()).inner_margin(Margin::symmetric(10, 4)).show(ui, |ui| {
             ui.set_width(width - 20.0);
             if self.history_expanded {
                 // F2: the history scrolls, newest at the bottom.
@@ -163,43 +159,43 @@ impl OxidraftApp {
         let mut clicked_keyword = None;
         let mut entered = false;
         Frame::NONE
-            .fill(BAR_BG)
-            .stroke(Stroke::new(1.0, theme::TOOLTIP_EDGE))
+            .fill(theme::command_bar())
+            .stroke(Stroke::new(1.0, theme::tooltip_edge()))
             .corner_radius(CornerRadius::same(2))
             .inner_margin(Margin::symmetric(8, 5))
             .show(ui, |ui| {
                 ui.set_width(width - 16.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
-                    ui.label(RichText::new(">_").font(FontId::monospace(13.0)).color(theme::TEXT_DIM));
+                    ui.label(RichText::new(">_").font(FontId::monospace(13.0)).color(theme::text_dim()));
                     if let (Some(p), Some(name)) = (&prompt, name) {
-                        ui.label(RichText::new(name).font(FontId::proportional(12.5)).strong().color(theme::TEXT));
+                        ui.label(RichText::new(name).font(FontId::proportional(12.5)).strong().color(theme::text()));
                         let or = if p.keywords.is_empty() { "" } else { " or" };
                         ui.label(
                             RichText::new(format!("{}{or}", p.text))
                                 .font(FontId::proportional(12.5))
-                                .color(theme::TEXT),
+                                .color(theme::text()),
                         );
                         if !p.keywords.is_empty() {
                             ui.spacing_mut().item_spacing.x = 1.0;
-                            ui.label(RichText::new("[").color(theme::TEXT));
+                            ui.label(RichText::new("[").color(theme::text()));
                             for (i, k) in p.keywords.iter().enumerate() {
                                 if i > 0 {
-                                    ui.label(RichText::new("/").color(theme::TEXT));
+                                    ui.label(RichText::new("/").color(theme::text()));
                                 }
-                                let button = egui::Button::new(RichText::new(*k).color(theme::TEXT))
-                                    .fill(KEYWORD_BG)
+                                let button = egui::Button::new(RichText::new(*k).color(theme::text()))
+                                    .fill(theme::command_keyword())
                                     .corner_radius(2.0)
                                     .min_size(vec2(0.0, 18.0));
                                 if ui.add(button).clicked() {
                                     clicked_keyword = Some(*k);
                                 }
                             }
-                            ui.label(RichText::new("]").color(theme::TEXT));
+                            ui.label(RichText::new("]").color(theme::text()));
                         }
                         ui.spacing_mut().item_spacing.x = 1.0;
                         let default = p.default.as_deref().map_or(String::new(), |d| format!(" <{d}>"));
-                        ui.label(RichText::new(format!("{default}:")).color(theme::TEXT));
+                        ui.label(RichText::new(format!("{default}:")).color(theme::text()));
                         ui.spacing_mut().item_spacing.x = 4.0;
                     }
                     // A fixed id: an automatic one changes whenever the

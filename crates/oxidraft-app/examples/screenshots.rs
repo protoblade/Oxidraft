@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use eframe::egui::{Event, PointerButton, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 use oxidraft_app::{
-    OxidraftApp,
+    OxidraftApp, Settings,
+    theme::{Background, ColorTheme},
     update::{Release, UpdateState},
 };
 use oxidraft_geom::Point;
@@ -496,6 +497,23 @@ fn main() {
     }
     h.run_steps(2);
     save(&mut h, &dir, "27-image-detail");
+
+    // The light color theme, first around the dark drawing area (AutoCAD's
+    // default) with the Layer Properties Manager, then with a white one and
+    // the Options dialog; both with a selection.
+    for (name, background) in [("28-light-theme", Background::Dark), ("29-light-white-drawing", Background::White)] {
+        let mut h = harness();
+        let ctx = h.ctx.clone();
+        h.state_mut().apply_settings(&ctx, Settings { color_theme: ColorTheme::Light, background });
+        click(&mut h, Point::new(30.0, 0.0));
+        click(&mut h, Point::new(80.0, 30.0));
+        let dialog = if background == Background::White { "op" } else { "la" };
+        h.state_mut().type_command(dialog);
+        hover(&mut h, Point::new(45.0, 45.0));
+        h.run_steps(2);
+        save(&mut h, &dir, name);
+        h.state_mut().apply_settings(&ctx, Settings::default());
+    }
 
     // AutoComplete on the command line.
     let mut h = harness();

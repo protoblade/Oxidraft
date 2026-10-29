@@ -719,3 +719,32 @@ fn zooming_into_a_large_image_reads_the_part_on_screen_sharper() {
     assert!(h.state().picture_details().is_empty());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn light_theme_and_white_drawing_area() {
+    use oxidraft_app::{
+        Settings,
+        theme::{self, Background, ColorTheme},
+    };
+    let mut h = app_with_line();
+    h.state_mut().type_command("colortheme");
+    h.run_steps(1);
+    h.state_mut().type_command("1");
+    h.run_steps(2);
+    assert_eq!(theme::color_theme(), ColorTheme::Light);
+    assert_eq!(h.ctx.theme(), eframe::egui::Theme::Light);
+    // Color 7 stays white on the dark drawing area, and turns black on a white one.
+    assert_eq!(theme::aci(7), eframe::egui::Color32::WHITE);
+    let ctx = h.ctx.clone();
+    h.state_mut().apply_settings(&ctx, Settings { color_theme: ColorTheme::Light, background: Background::White });
+    h.run_steps(1);
+    assert_eq!(theme::aci(7), eframe::egui::Color32::BLACK);
+    assert_eq!(theme::swatch(7), eframe::egui::Color32::WHITE, "the layer swatch still says white");
+    assert_eq!(theme::model_bg(), eframe::egui::Color32::WHITE);
+    // OPTIONS shows the choices.
+    h.state_mut().type_command("op");
+    h.run_steps(2);
+    assert!(h.query_by_label("Color theme:").is_some() && h.query_by_label("Drawing background:").is_some());
+    h.state_mut().apply_settings(&ctx, Settings::default());
+    assert_eq!(theme::color_theme(), ColorTheme::Dark);
+}

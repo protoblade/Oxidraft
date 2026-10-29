@@ -234,6 +234,35 @@ impl Command for Ltscale {
     }
 }
 
+/// COLORTHEME: the ribbon, palettes and command line dark (0) or light (1).
+#[derive(Default)]
+pub struct ColorTheme {
+    current: u8,
+}
+
+impl Command for ColorTheme {
+    fn start(&mut self, vars: &crate::Vars) -> Option<String> {
+        self.current = vars.color_theme;
+        None
+    }
+
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Enter new value for COLORTHEME").with_default(self.current.to_string())
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match input {
+            Input::Value(v) if v == 0.0 || v == 1.0 => {
+                ctx.vars.color_theme = v as u8;
+                ctx.ui = Some(crate::UiRequest::ColorTheme(v as u8));
+                Ok(Step::Done)
+            }
+            Input::Enter => Ok(Step::Done),
+            _ => Err("Requires an integer between 0 and 1.".into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

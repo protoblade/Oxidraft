@@ -31,10 +31,10 @@ impl OxidraftApp {
         if !self.properties_open {
             return;
         }
-        let frame = Frame::NONE.fill(theme::RIBBON).inner_margin(Margin::same(8));
+        let frame = Frame::NONE.fill(theme::ribbon()).inner_margin(Margin::same(8));
         egui::Panel::left("properties").frame(frame).resizable(true).default_size(270.0).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("PROPERTIES").strong().color(theme::TEXT_DIM));
+                ui.label(RichText::new("PROPERTIES").strong().color(theme::text_dim()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add(egui::Button::new("x").frame(false)).on_hover_text("Close (Cmd+1)").clicked() {
                         self.properties_open = false;
@@ -327,7 +327,7 @@ impl OxidraftApp {
                 ui.label(label);
                 let changed = match value {
                     Value::Text(t) => {
-                        ui.colored_label(theme::TEXT_DIM, t);
+                        ui.colored_label(theme::text_dim(), t);
                         None
                     }
                     Value::Number(v) => self.number_field(ui, Id::unique(("prop", e.id, label)), v, false),
@@ -496,7 +496,7 @@ pub(crate) fn common<T: PartialEq>(mut items: impl Iterator<Item = T>) -> Option
 
 fn section(ui: &mut Ui, title: &str) {
     ui.add_space(6.0);
-    ui.label(RichText::new(title).strong().color(theme::ACCENT));
+    ui.label(RichText::new(title).strong().color(theme::accent()));
     ui.add_space(2.0);
 }
 

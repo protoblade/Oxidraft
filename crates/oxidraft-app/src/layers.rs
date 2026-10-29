@@ -35,11 +35,11 @@ pub enum LayerToggle {
 pub fn state_icon(ui: &mut Ui, kind: LayerToggle, on: bool, tip: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
     if response.hovered() {
-        ui.painter().rect_filled(rect, 2.0, theme::RIBBON_HOVER);
+        ui.painter().rect_filled(rect, 2.0, theme::ribbon_hover());
     }
     let p = ui.painter();
     let c = rect.center();
-    let dim = theme::TEXT_DISABLED;
+    let dim = theme::text_disabled();
     match kind {
         LayerToggle::On => {
             let bulb = if on { Color32::from_rgb(250, 210, 60) } else { dim };
@@ -48,7 +48,7 @@ pub fn state_icon(ui: &mut Ui, kind: LayerToggle, on: bool, tip: &str) -> Respon
             } else {
                 p.circle_stroke(c - vec2(0.0, 2.0), 5.0, Stroke::new(1.2, bulb));
             }
-            p.rect_filled(Rect::from_center_size(c + vec2(0.0, 5.0), vec2(5.0, 3.0)), 0.5, theme::TEXT_DIM);
+            p.rect_filled(Rect::from_center_size(c + vec2(0.0, 5.0), vec2(5.0, 3.0)), 0.5, theme::text_dim());
         }
         LayerToggle::Thawed => {
             if on {
@@ -69,7 +69,7 @@ pub fn state_icon(ui: &mut Ui, kind: LayerToggle, on: bool, tip: &str) -> Respon
             }
         }
         LayerToggle::Unlocked => {
-            let color = if on { theme::TEXT_DIM } else { Color32::from_rgb(230, 180, 60) };
+            let color = if on { theme::text_dim() } else { Color32::from_rgb(230, 180, 60) };
             let body = Rect::from_center_size(c + vec2(0.0, 2.5), vec2(10.0, 7.0));
             p.rect_filled(body, 1.0, color);
             // The shackle swings open when unlocked.
@@ -89,7 +89,7 @@ pub fn state_icon(ui: &mut Ui, kind: LayerToggle, on: bool, tip: &str) -> Respon
 /// A filled color square for an ACI color.
 pub fn swatch(ui: &mut Ui, aci: u8) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::click());
-    ui.painter().rect(rect, 1.0, theme::aci(aci), Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Inside);
+    ui.painter().rect(rect, 1.0, theme::swatch(aci), Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Inside);
     response
 }
 
@@ -202,7 +202,7 @@ impl OxidraftApp {
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     let shown = self.doc.layers().iter().filter(|l| l.is_shown()).count();
                     ui.colored_label(
-                        theme::TEXT_DIM,
+                        theme::text_dim(),
                         format!("All: {shown} layers displayed of {} total layers", self.doc.layers().len()),
                     );
                     ui.separator();
@@ -248,7 +248,7 @@ impl OxidraftApp {
         let linetypes: Vec<String> = self.doc.linetypes().into_iter().map(|l| l.name).collect();
         egui::Grid::new("layer_table").striped(true).num_columns(7).spacing([12.0, 4.0]).show(ui, |ui| {
             for title in ["Status", "Name", "On  Freeze  Lock", "Color", "Linetype", "Lineweight", "Objects"] {
-                ui.colored_label(theme::TEXT_DIM, title);
+                ui.colored_label(theme::text_dim(), title);
             }
             ui.end_row();
             for layer in layers {
@@ -316,16 +316,16 @@ impl OxidraftApp {
         }
         let (rect, label) = ui.allocate_exact_size(vec2(160.0, 18.0), Sense::click());
         if selected {
-            ui.painter().rect_filled(rect, 2.0, theme::ACCENT.gamma_multiply(0.35));
+            ui.painter().rect_filled(rect, 2.0, theme::accent().gamma_multiply(0.35));
         } else if label.hovered() {
-            ui.painter().rect_filled(rect, 2.0, theme::RIBBON_HOVER);
+            ui.painter().rect_filled(rect, 2.0, theme::ribbon_hover());
         }
         ui.painter().text(
             rect.left_center() + vec2(4.0, 0.0),
             egui::Align2::LEFT_CENTER,
             &layer.name,
             egui::FontId::proportional(12.5),
-            theme::TEXT,
+            theme::text(),
         );
         let label = label.on_hover_text("Double-click to rename");
         if label.clicked() {

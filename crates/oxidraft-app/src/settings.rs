@@ -1,0 +1,148 @@
+//! What's kept between runs, as AutoCAD keeps its options in the user's
+//! profile: the color theme and the drawing area's background, in a small
+//! JSON file in the user's configuration folder. The Options dialog
+//! (OPTIONS, OP) sets them.
+
+use std::path::{Path, PathBuf};
+
+use eframe::egui::{self, Align, Layout};
+use serde::{Deserialize, Serialize};
+
+use crate::app::OxidraftApp;
+use crate::theme::{self, Background, ColorTheme};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    pub color_theme: ColorTheme,
+    pub background: Background,
+}
+
+impl Settings {
+    /// Where they're kept: Application Support on macOS, AppData on
+    /// Windows, the XDG config folder elsewhere.
+    pub fn default_path() -> Option<PathBuf> {
+        let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+        let dir = if cfg!(target_os = "macos") {
+            env("HOME")?.join("Library/Application Support/Oxidraft")
+        } else if cfg!(windows) {
+            env("APPDATA")?.join("Oxidraft")
+        } else {
+            env("XDG_CONFIG_HOME").or_else(|| env("HOME").map(|h| h.join(".config")))?.join("oxidraft")
+        };
+        Some(dir.join("settings.json"))
+    }
+
+    /// The settings in `path`, or the defaults if there are none (or they
+    /// can't be read).
+    pub fn load(path: &Path) -> Settings {
+        std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        std::fs::write(path, text).map_err(|e| e.to_string())
+    }
+}
+
+/// The Options dialog's choices, applied with OK or Apply.
+pub(crate) struct OptionsDialog {
+    settings: Settings,
+}
+
+impl OxidraftApp {
+    /// Uses `settings` from now on: restyles the app and keeps them for
+    /// next time, when they're kept at all.
+    pub fn apply_settings(&mut self, ctx: &egui::Context, settings: Settings) {
+        theme::set(ctx, settings.color_theme, settings.background);
+        self.engine.vars.color_theme = u8::from(settings.color_theme == ColorTheme::Light);
+        if settings != self.settings
+            && let Some(path) = &self.settings_path
+            && let Err(e) = settings.save(path)
+        {
+            self.engine.log(format!("Could not save the options to {}: {e}", path.display()));
+        }
+        self.settings = settings;
+    }
+
+    pub(crate) fn open_options(&mut self) {
+        self.options = Some(OptionsDialog { settings: self.settings });
+    }
+
+    /// OPTIONS: the color theme of the ribbon and palettes, and the
+    /// drawing area's background, as on AutoCAD's Display tab.
+    pub(crate) fn options_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut d) = self.options.take() else { return };
+        let (mut open, mut ok, mut apply, mut cancel) = (true, false, false, false);
+        egui::Window::new("Options")
+            .id(egui::Id::unique("options"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_pos([380.0, 180.0])
+            .constrain_to(self.dialog_area(ctx))
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("Display").strong());
+                ui.add_space(4.0);
+                egui::Grid::new("options_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                    ui.label("Color theme:");
+                    egui::ComboBox::from_id_salt("options_color_theme")
+                        .selected_text(match d.settings.color_theme {
+                            ColorTheme::Dark => "Dark",
+                            ColorTheme::Light => "Light",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut d.settings.color_theme, ColorTheme::Dark, "Dark");
+                            ui.selectable_value(&mut d.settings.color_theme, ColorTheme::Light, "Light");
+                        });
+                    ui.end_row();
+                    ui.label("Drawing background:");
+                    egui::ComboBox::from_id_salt("options_background")
+                        .selected_text(match d.settings.background {
+                            Background::Dark => "Dark",
+                            Background::White => "White",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut d.settings.background, Background::Dark, "Dark");
+                            ui.selectable_value(&mut d.settings.background, Background::White, "White");
+                        });
+                    ui.end_row();
+                });
+                ui.add_space(6.0);
+                ui.separator();
+                let row = egui::vec2(ui.available_width().max(260.0), 24.0);
+                ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+                    apply = ui.button("Apply").clicked();
+                    cancel = ui.button("Cancel").clicked();
+                    ok = ui.button("OK").clicked();
+                });
+            });
+        if ok || apply {
+            self.apply_settings(ctx, d.settings);
+        }
+        if open && !ok && !cancel {
+            self.options = Some(d);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_round_trip_and_default_when_missing() {
+        let path = std::env::temp_dir().join(format!("oxidraft-settings-{}/settings.json", std::process::id()));
+        assert_eq!(Settings::load(&path), Settings::default());
+        let s = Settings { color_theme: ColorTheme::Light, background: Background::White };
+        s.save(&path).unwrap();
+        assert_eq!(Settings::load(&path), s);
+        // Unknown or missing fields fall back to the defaults.
+        std::fs::write(&path, r#"{"color_theme":"Light","later":1}"#).unwrap();
+        assert_eq!(Settings::load(&path), Settings { color_theme: ColorTheme::Light, ..Settings::default() });
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+}

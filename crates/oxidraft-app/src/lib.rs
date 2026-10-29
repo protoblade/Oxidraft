@@ -11,8 +11,9 @@ mod layers;
 mod plot;
 mod properties;
 mod qselect;
+mod settings;
 mod shortcut_menu;
-mod theme;
+pub mod theme;
 mod underlay;
 pub mod update;
 mod view;
@@ -20,6 +21,7 @@ mod xref;
 
 pub use app::OxidraftApp;
 pub use layers::LAYER_MANAGER;
+pub use settings::Settings;
 
 /// Opens the main window.
 pub fn run() -> eframe::Result {
@@ -39,6 +41,12 @@ pub fn run() -> eframe::Result {
         options,
         Box::new(|cc| {
             let mut app = OxidraftApp::new(cc);
+            // The options chosen last time, kept for next time.
+            if let Some(path) = settings::Settings::default_path() {
+                let kept = settings::Settings::load(&path);
+                app.keep_settings_in(path);
+                app.apply_settings(&cc.egui_ctx, kept);
+            }
             if let Some(path) = file {
                 app.open_path(path);
             }

@@ -99,7 +99,7 @@ impl OxidraftApp {
         self.request_details();
         if let Some(c) = &cursor {
             for g in self.engine.preview(c.point) {
-                self.draw_geometry(&painter, rect, &g, Stroke::new(1.0, theme::PREVIEW));
+                self.draw_geometry(&painter, rect, &g, Stroke::new(1.0, theme::preview()));
             }
         }
         self.draw_grips(&painter, rect, cursor.as_ref());
@@ -128,7 +128,7 @@ impl OxidraftApp {
             Align2::LEFT_TOP,
             "[-][Top][2D Wireframe]",
             FontId::proportional(12.0),
-            theme::TEXT_DIM,
+            theme::label(),
         );
         self.navigation_bar(ui, rect);
     }
@@ -137,7 +137,7 @@ impl OxidraftApp {
     /// Zoom with its options.
     fn navigation_bar(&mut self, ui: &Ui, rect: Rect) {
         let frame = egui::Frame::NONE
-            .fill(theme::RIBBON.gamma_multiply(0.9))
+            .fill(theme::ribbon().gamma_multiply(0.9))
             .corner_radius(3)
             .inner_margin(egui::Margin::same(3));
         egui::Area::new(egui::Id::unique("navigation_bar"))
@@ -358,11 +358,11 @@ impl OxidraftApp {
         while x <= max.x {
             let sx = self.view.to_screen(rect, Point::new(x, 0.0)).x.round() + 0.5;
             let color = if x.abs() < minor * 1e-6 {
-                theme::AXIS_Y
+                theme::axis_y()
             } else if is_major(x) {
-                theme::GRID_MAJOR
+                theme::grid_major()
             } else {
-                theme::GRID_MINOR
+                theme::grid_minor()
             };
             painter.line_segment([pos2(sx, rect.top()), pos2(sx, rect.bottom())], Stroke::new(1.0, color));
             x += minor;
@@ -371,11 +371,11 @@ impl OxidraftApp {
         while y <= max.y {
             let sy = self.view.to_screen(rect, Point::new(0.0, y)).y.round() + 0.5;
             let color = if y.abs() < minor * 1e-6 {
-                theme::AXIS_X
+                theme::axis_x()
             } else if is_major(y) {
-                theme::GRID_MAJOR
+                theme::grid_major()
             } else {
-                theme::GRID_MINOR
+                theme::grid_minor()
             };
             painter.line_segment([pos2(rect.left(), sy), pos2(rect.right(), sy)], Stroke::new(1.0, color));
             y += minor;
@@ -395,7 +395,7 @@ impl OxidraftApp {
         painter.rect_stroke(
             Rect::from_center_size(at, vec2(7.0, 7.0)),
             0.0,
-            Stroke::new(1.0, theme::TEXT_DIM),
+            Stroke::new(1.0, theme::label()),
             StrokeKind::Middle,
         );
         painter.text(at + vec2(len + 6.0, 0.0), Align2::LEFT_CENTER, "X", FontId::proportional(11.0), x_col);
@@ -451,7 +451,7 @@ impl OxidraftApp {
                 let width = if self.show_lineweights { lineweight_px(s.lineweight) } else { 1.0 };
                 let g = &s.geometry;
                 if selected.contains(&e.id) {
-                    self.draw_geometry(painter, rect, g, Stroke::new(width + 4.0, theme::SELECTION_GLOW));
+                    self.draw_geometry(painter, rect, g, Stroke::new(width + 4.0, theme::selection_glow()));
                     self.draw_dashed(painter, rect, g, Stroke::new(width, color), pattern.as_deref());
                 } else if hovered.contains(&e.id) {
                     self.draw_dashed(painter, rect, g, Stroke::new(width.max(2.5), color), pattern.as_deref());
@@ -711,7 +711,7 @@ impl OxidraftApp {
             painter.rect(
                 r,
                 0.0,
-                if hot { theme::GRIP_HOVER } else { theme::GRIP },
+                if hot { theme::grip_hover() } else { theme::grip() },
                 Stroke::new(1.0, Color32::from_gray(20)),
                 StrokeKind::Inside,
             );
@@ -725,11 +725,11 @@ impl OxidraftApp {
         let a = self.view.to_screen(rect, first);
         let r = Rect::from_two_pos(a, c.screen);
         if c.raw.x < first.x {
-            painter.rect_filled(r, 0.0, theme::CROSSING_FILL);
+            painter.rect_filled(r, 0.0, theme::crossing_fill());
             let pts = vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
-            painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, theme::CROSSING_EDGE), 6.0, 4.0));
+            painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, theme::crossing_edge()), 6.0, 4.0));
         } else {
-            painter.rect(r, 0.0, theme::WINDOW_FILL, Stroke::new(1.0, theme::WINDOW_EDGE), StrokeKind::Middle);
+            painter.rect(r, 0.0, theme::window_fill(), Stroke::new(1.0, theme::window_edge()), StrokeKind::Middle);
         }
     }
 
@@ -738,15 +738,15 @@ impl OxidraftApp {
         let Some((base, angle)) = c.tracked.and_then(|t| t.polar) else { return };
         let far = base.polar(self.view.units(rect.width() + rect.height()), angle);
         let pts = [self.view.to_screen(rect, base), self.view.to_screen(rect, far)];
-        painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, theme::TRACKING), 3.0, 4.0));
+        painter.extend(Shape::dashed_line(&pts, Stroke::new(1.0, theme::tracking()), 3.0, 4.0));
         let at = self.view.to_screen(rect, c.point);
-        painter.line_segment([at + vec2(-5.0, -5.0), at + vec2(5.0, 5.0)], Stroke::new(1.0, theme::TRACKING));
-        painter.line_segment([at + vec2(-5.0, 5.0), at + vec2(5.0, -5.0)], Stroke::new(1.0, theme::TRACKING));
+        painter.line_segment([at + vec2(-5.0, -5.0), at + vec2(5.0, 5.0)], Stroke::new(1.0, theme::tracking()));
+        painter.line_segment([at + vec2(-5.0, 5.0), at + vec2(5.0, -5.0)], Stroke::new(1.0, theme::tracking()));
     }
 
     /// Crosshair with pickbox; at "Select objects:" only the pickbox shows, as in AutoCAD.
     fn draw_cursor(&self, painter: &Painter, rect: Rect, c: &CursorState) {
-        let stroke = Stroke::new(1.0, theme::CROSSHAIR);
+        let stroke = Stroke::new(1.0, theme::crosshair());
         let at = pos2(c.screen.x.round() + 0.5, c.screen.y.round() + 0.5);
         let selecting_in_command = self.engine.is_active() && self.picks_objects();
         if !selecting_in_command {
@@ -812,11 +812,11 @@ impl OxidraftApp {
 fn nav_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
     if on {
-        ui.painter().rect_filled(rect, 2.0, theme::ACCENT.gamma_multiply(0.35));
+        ui.painter().rect_filled(rect, 2.0, theme::accent().gamma_multiply(0.35));
     } else if response.hovered() {
-        ui.painter().rect_filled(rect, 2.0, theme::RIBBON_HOVER);
+        ui.painter().rect_filled(rect, 2.0, theme::ribbon_hover());
     }
-    icons::paint(ui.painter(), rect.shrink(4.0), icon, theme::TEXT, true);
+    icons::paint(ui.painter(), rect.shrink(4.0), icon, theme::text(), true);
     response.on_hover_text(tip)
 }
 
@@ -848,7 +848,7 @@ fn lineweight_px(lw: Lineweight) -> f32 {
 
 /// AutoSnap markers in AutoCAD's shapes.
 fn draw_snap_marker(painter: &Painter, at: Pos2, kind: SnapKind) {
-    let stroke = Stroke::new(2.0, theme::AUTOSNAP);
+    let stroke = Stroke::new(2.0, theme::autosnap());
     let s = 6.0;
     match kind {
         SnapKind::Endpoint => {
@@ -910,13 +910,13 @@ fn tooltip(painter: &Painter, at: Pos2, lines: &[String], fields: Option<&[Strin
     let mut shapes = Vec::new();
     let mut height: f32 = 18.0;
     for line in lines {
-        let galley = painter.layout_no_wrap(line.clone(), font.clone(), theme::TEXT);
+        let galley = painter.layout_no_wrap(line.clone(), font.clone(), theme::text());
         height = height.max(galley.size().y);
         shapes.push((pos2(x, at.y + pad.y), galley, false));
         x += shapes.last().map_or(0.0, |s| s.1.size().x) + 8.0;
     }
     for f in fields.unwrap_or(&[]) {
-        let galley = painter.layout_no_wrap(f.clone(), font.clone(), theme::TEXT);
+        let galley = painter.layout_no_wrap(f.clone(), font.clone(), theme::text());
         height = height.max(galley.size().y);
         shapes.push((pos2(x + 4.0, at.y + pad.y), galley, true));
         x += shapes.last().map_or(0.0, |s| s.1.size().x).max(56.0) + 12.0;
@@ -925,16 +925,16 @@ fn tooltip(painter: &Painter, at: Pos2, lines: &[String], fields: Option<&[Strin
         return;
     }
     let bg = Rect::from_min_max(at, pos2(x - 8.0 + pad.x, at.y + height + pad.y * 2.0));
-    painter.rect(bg, 2.0, theme::TOOLTIP_BG, Stroke::new(1.0, theme::TOOLTIP_EDGE), StrokeKind::Inside);
+    painter.rect(bg, 2.0, theme::tooltip_bg(), Stroke::new(1.0, theme::tooltip_edge()), StrokeKind::Inside);
     let mut first_field = true;
     for (pos, galley, is_field) in shapes {
         if is_field {
             let w = galley.size().x.max(56.0);
             let r = Rect::from_min_size(pos - vec2(4.0, 2.0), vec2(w + 8.0, height + 4.0));
-            let edge = if first_field { theme::ACCENT } else { theme::TOOLTIP_EDGE };
-            painter.rect(r, 1.0, theme::INPUT_BG, Stroke::new(1.0, edge), StrokeKind::Inside);
+            let edge = if first_field { theme::accent() } else { theme::tooltip_edge() };
+            painter.rect(r, 1.0, theme::input_bg(), Stroke::new(1.0, edge), StrokeKind::Inside);
             first_field = false;
         }
-        painter.galley(pos, galley, theme::TEXT);
+        painter.galley(pos, galley, theme::text());
     }
 }

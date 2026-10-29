@@ -35,7 +35,7 @@ use crate::{
     inquiry::Area,
     inquiry::Dist,
     inquiry::Id,
-    inquiry::Ltscale,
+    inquiry::{ColorTheme, Ltscale},
     layer::LayIso,
     layer::LayMcur,
     layer::LayerPick,
@@ -378,6 +378,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(Ltscale::default())),
     },
     CommandInfo {
+        name: "COLORTHEME",
+        aliases: &[],
+        description: "Set the color theme: 0 dark, 1 light",
+        make: Some(|| Box::new(ColorTheme::default())),
+    },
+    CommandInfo {
         name: "ZOOM",
         aliases: &["Z"],
         description: "Zoom to a window, a scale, the extents, the previous view, …",
@@ -590,6 +596,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         description: "Clip an xref, block reference, image or PDF underlay",
         make: Some(|| Box::new(Clip::default())),
+    },
+    CommandInfo {
+        name: "OPTIONS",
+        aliases: &["OP"],
+        description: "Open the Options dialog: color theme and drawing background",
+        make: None,
     },
     CommandInfo { name: "PREVIEW", aliases: &["PRE"], description: "Show how the drawing will plot", make: None },
     CommandInfo {
@@ -1415,6 +1427,19 @@ mod tests {
         click(&mut e, &mut d, 1.0, 0.0);
         assert!(e.history().iter().any(|l| l == "Area = 3.1416, Circumference = 6.2832"));
         assert!(!d.can_undo() || d.undo_name() != Some("AREA"));
+    }
+
+    #[test]
+    fn colortheme_asks_the_app_to_switch() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["colortheme"]);
+        assert_eq!(e.prompt(), "Enter new value for COLORTHEME <0>:");
+        type_all(&mut e, &mut d, &["2"]);
+        assert!(e.is_active() && e.history().iter().any(|l| l == "Requires an integer between 0 and 1."));
+        type_all(&mut e, &mut d, &["1"]);
+        assert_eq!(e.take_ui_requests(), vec![UiRequest::ColorTheme(1)]);
+        type_all(&mut e, &mut d, &["colortheme"]);
+        assert_eq!(e.prompt(), "Enter new value for COLORTHEME <1>:");
     }
 
     #[test]
@@ -2826,10 +2851,11 @@ mod tests {
     #[test]
     fn autocomplete_prefers_exact_alias() {
         let names: Vec<_> = Engine::suggest("c").iter().map(|c| c.name).collect();
-        let expected = vec!["CIRCLE", "COPY", "CHAMFER", "COPYCLIP", "CUTCLIP", "COPYBASE", "CLIP", "PROPERTIES"];
+        let expected =
+            vec!["CIRCLE", "COPY", "CHAMFER", "COLORTHEME", "COPYCLIP", "CUTCLIP", "COPYBASE", "CLIP", "PROPERTIES"];
         assert_eq!(names, expected, "PROPERTIES via its CH alias");
         let names: Vec<_> = Engine::suggest("co").iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["COPY", "COPYCLIP", "COPYBASE"]);
+        assert_eq!(names, vec!["COPY", "COLORTHEME", "COPYCLIP", "COPYBASE"]);
         let names: Vec<_> = Engine::suggest("s").iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["STRETCH", "SPLINE", "SCALE", "SELECTSIMILAR"]);
     }

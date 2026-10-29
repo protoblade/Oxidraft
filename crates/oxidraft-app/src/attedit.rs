@@ -48,8 +48,8 @@ impl OxidraftApp {
                 ui.label(RichText::new(format!("Block: {block}")).strong());
                 ui.separator();
                 egui::Grid::new("attedit").num_columns(2).striped(true).spacing([16.0, 6.0]).show(ui, |ui| {
-                    ui.label(RichText::new("Tag").color(theme::TEXT_DIM));
-                    ui.label(RichText::new("Value").color(theme::TEXT_DIM));
+                    ui.label(RichText::new("Tag").color(theme::text_dim()));
+                    ui.label(RichText::new("Value").color(theme::text_dim()));
                     ui.end_row();
                     for (i, (tag, value)) in tags.iter().zip(editor.values.iter_mut()).enumerate() {
                         ui.label(tag);

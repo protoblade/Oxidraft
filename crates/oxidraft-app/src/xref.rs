@@ -223,16 +223,17 @@ impl OxidraftApp {
                         lost.push(format!("{} object(s) in layouts", d.paper_space));
                     }
                     ui.colored_label(
-                        theme::WARNING,
+                        theme::warning(),
                         format!(
                             "Oxidraft rewrites the file and can't keep {}; they'll be left out.",
                             lost.join(" or ")
                         ),
                     );
                 }
-                ui.colored_label(theme::TEXT_DIM, format!("The file as it is now is kept as {backup}."));
+                ui.colored_label(theme::text_dim(), format!("The file as it is now is kept as {backup}."));
                 ui.add_space(6.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let row = egui::vec2(ui.available_width(), 24.0);
+                ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
                     cancel = ui.button("Cancel").clicked();
                     ok = ui.button("OK").clicked();
                 });
@@ -404,7 +405,7 @@ impl OxidraftApp {
                     self.text_fields.push(field.id);
                     ui.end_row();
                     ui.label("Found in:");
-                    ui.colored_label(theme::TEXT_DIM, d.file.display().to_string());
+                    ui.colored_label(theme::text_dim(), d.file.display().to_string());
                     ui.end_row();
                     ui.label("Path type:");
                     egui::ComboBox::from_id_salt("attach_path_type")
@@ -561,7 +562,7 @@ impl OxidraftApp {
         egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
             egui::Grid::new("xref_table").num_columns(5).striped(true).spacing([16.0, 4.0]).show(ui, |ui| {
                 for h in ["Reference Name", "Status", "Size", "Type", "Saved Path"] {
-                    ui.label(RichText::new(h).color(theme::TEXT_DIM));
+                    ui.label(RichText::new(h).color(theme::text_dim()));
                 }
                 ui.end_row();
                 ui.label(RichText::new(self.file_name()).strong());
@@ -595,10 +596,10 @@ impl OxidraftApp {
                     for (name, path, status) in
                         self.nested_xrefs.get(&x.name.to_ascii_uppercase()).cloned().unwrap_or_default()
                     {
-                        ui.colored_label(theme::TEXT_DIM, format!("      └ {name}"));
-                        ui.colored_label(theme::TEXT_DIM, status.label());
+                        ui.colored_label(theme::text_dim(), format!("      └ {name}"));
+                        ui.colored_label(theme::text_dim(), status.label());
                         ui.label("");
-                        ui.colored_label(theme::TEXT_DIM, "Nested");
+                        ui.colored_label(theme::text_dim(), "Nested");
                         path_label(ui, &path, 300.0);
                         ui.end_row();
                     }
@@ -645,7 +646,7 @@ impl OxidraftApp {
         }
         let Some(x) = self.xref_selected.as_deref().and_then(|n| self.doc.xref(n)).cloned() else {
             ui.colored_label(
-                theme::TEXT_DIM,
+                theme::text_dim(),
                 "Select a reference to reload, unload, detach or bind it; Cmd- or Shift-click picks several images.",
             );
             return;

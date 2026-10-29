@@ -382,7 +382,7 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
         }
         Icon::SendToBack => {
             pen.filled(&[(0.4, 0.1), (0.9, 0.1), (0.9, 0.6), (0.4, 0.6)], blue);
-            pen.filled(&[(0.1, 0.4), (0.6, 0.4), (0.6, 0.9), (0.1, 0.9)], Color32::from_gray(60));
+            pen.filled(&[(0.1, 0.4), (0.6, 0.4), (0.6, 0.9), (0.1, 0.9)], crate::theme::ribbon());
             pen.closed(&[(0.1, 0.4), (0.6, 0.4), (0.6, 0.9), (0.1, 0.9)], c);
         }
         Icon::Image => {
