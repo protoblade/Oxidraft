@@ -1393,3 +1393,29 @@ fn the_selection_list_picks_for_one_object_prompts_too() {
     assert_eq!(offset.len(), 1, "the polyline was offset");
     assert_eq!(doc.entities().filter(|e| matches!(e.geometry, Geometry::Line { .. })).count(), 2, "the lines weren't");
 }
+
+#[test]
+fn space_turns_a_lasso_into_a_fence() {
+    let mut h = app_with_line();
+    let points: Vec<Pos2> = [(50.0, 50.0), (60.0, 50.0), (60.0, 62.0)].iter().map(|&(x, y)| screen(&h, x, y)).collect();
+    h.hover_at(points[0]);
+    h.run_steps(1);
+    button(&mut h, points[0], true);
+    for i in 1..=6 {
+        h.hover_at(points[0] + (points[1] - points[0]) * (i as f32 / 6.0));
+        h.run_steps(1);
+    }
+    // Window (it went right), then Crossing, then Fence.
+    for _ in 0..2 {
+        h.key_press(Key::Space);
+        h.run_steps(1);
+    }
+    for i in 1..=6 {
+        h.hover_at(points[1] + (points[2] - points[1]) * (i as f32 / 6.0));
+        h.run_steps(1);
+    }
+    button(&mut h, points[2], false);
+    // The fence crossed the upper line; Space didn't reach the command line.
+    assert_eq!(h.state_mut().engine_mut().selection().len(), 1);
+    assert!(!h.state_mut().engine_mut().is_active());
+}

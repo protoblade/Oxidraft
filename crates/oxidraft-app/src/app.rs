@@ -615,6 +615,17 @@ impl OxidraftApp {
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         let cmd = Modifiers::COMMAND;
         let none = Modifiers::NONE;
+        // Space while dragging a lasso cycles Window, Crossing and Fence,
+        // instead of reaching the command line.
+        if let Some(crate::canvas::Drag::Lasso { mode, .. }) = &mut self.drag
+            && ctx.input_mut(|i| {
+                let pressed = i.consume_key(none, Key::Space);
+                i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t == " "));
+                pressed
+            })
+        {
+            *mode = Some(mode.unwrap_or(crate::canvas::LassoMode::Window).next());
+        }
         // Ctrl+W, as in AutoCAD (Cmd+W is left to the window).
         if ctx.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::W)) {
             self.selection_cycling = !self.selection_cycling;

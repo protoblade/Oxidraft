@@ -687,6 +687,23 @@ struct Active {
     cmd: Box<dyn Command>,
 }
 
+/// What can be typed at "Select objects:" besides picking, as in AutoCAD:
+/// W, L, C, ALL, F, WP, CP, A, R, P and U.
+const SELECT_OPTIONS: &[&str] =
+    &["Window", "Last", "Crossing", "ALL", "Fence", "WPolygon", "CPolygon", "Add", "Remove", "Previous", "Undo"];
+
+/// A "Select objects:" option being given its points.
+#[derive(Debug, Clone, PartialEq)]
+enum Gathering {
+    /// Window or Crossing, whichever way it's dragged: the first corner
+    /// once given.
+    Window { crossing: bool, first: Option<Point> },
+    /// WPolygon or CPolygon: Enter closes it.
+    Polygon { crossing: bool, points: Vec<Point> },
+    /// Fence: Enter ends it.
+    Fence { points: Vec<Point> },
+}
+
 /// Runs commands against a document, owns the selection set, and keeps the
 /// command-line history.
 pub struct Engine {
@@ -707,6 +724,13 @@ pub struct Engine {
     selection_windows: Vec<Aabb>,
     /// The object picked from the Selection list, for the next pick.
     chosen: Option<EntityId>,
+    /// At "Select objects:": an option's points being given, Remove mode
+    /// (picks take objects out), what each pick added (for Undo), and the
+    /// last selection a command got (for Previous).
+    gathering: Option<Gathering>,
+    removing: bool,
+    added: Vec<Vec<EntityId>>,
+    previous: Vec<EntityId>,
     /// Lassos used to build `selection` (for STRETCH too).
     selection_lassos: Vec<Vec<Point>>,
     /// First corner of a selection window in progress.
@@ -747,6 +771,10 @@ impl Engine {
             selection_windows: Vec::new(),
             selection_lassos: Vec::new(),
             chosen: None,
+            gathering: None,
+            removing: false,
+            added: Vec::new(),
+            previous: Vec::new(),
             window_start: None,
             ortho: false,
             polar: true,
@@ -953,18 +981,53 @@ impl Engine {
 
     /// The active command's prompt, or `None` at the `Command:` prompt.
     pub fn current_prompt(&self) -> Option<Prompt> {
-        self.active.as_ref().map(|a| a.cmd.prompt())
+        self.selection_prompt().or_else(|| self.active.as_ref().map(|a| a.cmd.prompt()))
+    }
+
+    /// At "Select objects:", the prompt of an option being given its
+    /// points, or Remove mode's.
+    fn selection_prompt(&self) -> Option<Prompt> {
+        if self.active.is_none() || !self.is_selecting() {
+            return None;
+        }
+        Some(match &self.gathering {
+            Some(Gathering::Window { first: None, .. }) => Prompt::new("Specify first corner"),
+            Some(Gathering::Window { first: Some(_), .. }) => Prompt::new("Specify opposite corner"),
+            Some(Gathering::Polygon { points, .. }) if points.is_empty() => Prompt::new("First polygon point"),
+            Some(Gathering::Polygon { .. }) => Prompt::new("Specify endpoint of line").with_keywords(&["Undo"]),
+            Some(Gathering::Fence { points }) if points.is_empty() => Prompt::new("Specify first fence point"),
+            Some(Gathering::Fence { .. }) => Prompt::new("Specify next fence point").with_keywords(&["Undo"]),
+            None if self.removing => Prompt::new("Remove objects"),
+            None => return None,
+        })
     }
 
     /// Text to show before the command-line cursor.
     pub fn prompt(&self) -> String {
-        match &self.active {
-            Some(a) => a.cmd.prompt().to_string(),
+        match self.current_prompt() {
+            Some(p) => p.to_string(),
             None => "Command:".into(),
         }
     }
 
     pub fn preview(&self, cursor: Point) -> Vec<Geometry> {
+        // A selection option's window, polygon or fence, rubber-banded.
+        let ring = |points: &[Point], closed: bool| {
+            let vertices = points.iter().chain([&cursor]).map(|p| oxidraft_model::Vertex::at(*p)).collect();
+            vec![Geometry::Polyline { vertices, closed }]
+        };
+        match &self.gathering {
+            Some(_) if self.active.is_none() => {}
+            Some(Gathering::Window { first: Some(a), .. }) => {
+                return ring(&[*a, Point::new(cursor.x, a.y)], false)
+                    .into_iter()
+                    .chain(ring(&[Point::new(a.x, cursor.y), *a], false))
+                    .collect();
+            }
+            Some(Gathering::Polygon { points, .. }) if !points.is_empty() => return ring(points, true),
+            Some(Gathering::Fence { points }) if !points.is_empty() => return ring(points, false),
+            _ => {}
+        }
         self.active.as_ref().map(|a| a.cmd.preview(cursor)).unwrap_or_default()
     }
 
@@ -1167,7 +1230,7 @@ impl Engine {
             return;
         };
 
-        let prompt = active.cmd.prompt();
+        let prompt = self.current_prompt().unwrap_or_else(|| active.cmd.prompt());
         let selecting = active.cmd.wants_selection();
         if active.cmd.wants_text() {
             self.log(format!("{prompt} {text}"));
@@ -1177,6 +1240,9 @@ impl Engine {
         }
         let dyn_relative = self.dynamic_input && active.cmd.base_point().is_some();
         self.log(format!("{prompt} {text}"));
+        if selecting && self.select_typed(text, &prompt.keywords, doc, cursor, pick_tolerance) {
+            return;
+        }
         if selecting && text.is_empty() {
             self.window_start = None;
             let selection = self.take_selection();
@@ -1194,6 +1260,10 @@ impl Engine {
     /// `point` is the snapped/tracked point used when a command wants a point;
     /// `raw` is the bare cursor, used for picking objects and selection windows.
     pub fn click(&mut self, point: Point, raw: Point, shift: bool, doc: &mut Document, pick_tolerance: f64) {
+        if self.is_selecting() && self.active.is_some() && self.gathering.is_some() {
+            self.gather(raw, doc, pick_tolerance);
+            return;
+        }
         if self.is_selecting() {
             self.select_click(raw, shift, doc, pick_tolerance);
             return;
@@ -1208,7 +1278,146 @@ impl Engine {
         self.feed(Input::Point(point), doc, point, pick_tolerance);
     }
 
+    /// Text typed at "Select objects:": an option, its points, or a point
+    /// picking or starting a window there. Returns false for what the
+    /// command takes itself (Enter, its own options).
+    fn select_typed(
+        &mut self,
+        text: &str,
+        keywords: &[&'static str],
+        doc: &mut Document,
+        cursor: Point,
+        tolerance: f64,
+    ) -> bool {
+        if self.gathering.is_some() {
+            match parse_input(text, self.last_point, &["Undo"], false) {
+                Ok(Input::Enter) => self.finish_gathering(doc, cursor, tolerance),
+                Ok(Input::Point(p)) => {
+                    self.last_point = Some(p);
+                    self.gather(p, doc, tolerance);
+                }
+                Ok(Input::Keyword(_)) => {
+                    if let Some(Gathering::Polygon { points, .. } | Gathering::Fence { points }) = &mut self.gathering {
+                        points.pop();
+                    }
+                }
+                Ok(_) => self.log("Point or option keyword required."),
+                Err(e) => self.log(e),
+            }
+            return true;
+        }
+        if text.is_empty() || matches!(parse_input(text, None, keywords, false), Ok(Input::Keyword(_))) {
+            return false;
+        }
+        match parse_input(text, self.last_point, SELECT_OPTIONS, false) {
+            Ok(Input::Keyword(option)) => self.select_option(option, doc, cursor, tolerance),
+            Ok(Input::Point(p)) => {
+                self.last_point = Some(p);
+                self.select_click(p, false, doc, tolerance);
+            }
+            _ => {
+                self.log("*Invalid selection*");
+                self.log(
+                    "Expects a point or Window/Last/Crossing/ALL/Fence/WPolygon/CPolygon/Add/Remove/Previous/Undo",
+                );
+            }
+        }
+        true
+    }
+
+    fn select_option(&mut self, option: &'static str, doc: &mut Document, cursor: Point, tolerance: f64) {
+        let selectable = |doc: &Document| doc.entities().filter(|e| doc.is_selectable(e)).map(|e| e.id).collect();
+        let found: Vec<EntityId> = match option {
+            "Window" | "Crossing" => {
+                self.gathering = Some(Gathering::Window { crossing: option == "Crossing", first: None });
+                return;
+            }
+            "WPolygon" | "CPolygon" => {
+                self.gathering = Some(Gathering::Polygon { crossing: option == "CPolygon", points: Vec::new() });
+                return;
+            }
+            "Fence" => {
+                self.gathering = Some(Gathering::Fence { points: Vec::new() });
+                return;
+            }
+            "Add" | "Remove" => {
+                self.removing = option == "Remove";
+                return;
+            }
+            "Undo" => {
+                let undone = self.added.pop().unwrap_or_default();
+                self.selection.retain(|id| !undone.contains(id));
+                return;
+            }
+            "ALL" => selectable(doc),
+            // The newest object that can be selected.
+            "Last" => {
+                let all: Vec<EntityId> = selectable(doc);
+                all.into_iter().max().into_iter().collect()
+            }
+            _ => {
+                let all: Vec<EntityId> = selectable(doc);
+                self.previous.iter().copied().filter(|id| all.contains(id)).collect()
+            }
+        };
+        self.add_to_selection(found, self.removing);
+        self.end_single_selection(doc, cursor, tolerance);
+    }
+
+    /// A point for the option being given its points.
+    fn gather(&mut self, p: Point, doc: &mut Document, tolerance: f64) {
+        match &mut self.gathering {
+            Some(Gathering::Window { first: first @ None, .. }) => *first = Some(p),
+            Some(Gathering::Window { crossing, first: Some(a) }) => {
+                // Corners as a window or a crossing window would have them.
+                let b = Aabb::from_points(*a, p);
+                let (from, to) = if *crossing { (b.max, b.min) } else { (b.min, b.max) };
+                let ids = snap::window_select(doc, from, to);
+                self.gathering = None;
+                if !self.removing {
+                    self.selection_windows.push(b);
+                }
+                self.add_to_selection(ids, self.removing);
+                self.end_single_selection(doc, p, tolerance);
+            }
+            Some(Gathering::Polygon { points, .. } | Gathering::Fence { points }) => points.push(p),
+            None => {}
+        }
+    }
+
+    /// Enter after an option's points: the polygon closes, the fence ends.
+    fn finish_gathering(&mut self, doc: &mut Document, cursor: Point, tolerance: f64) {
+        let ids = match self.gathering.take() {
+            Some(Gathering::Polygon { crossing, points }) if points.len() >= 3 => {
+                let ids = snap::polygon_select(doc, &points, crossing);
+                if !self.removing {
+                    self.selection_lassos.push(points);
+                }
+                ids
+            }
+            Some(Gathering::Fence { points }) if points.len() >= 2 => snap::fence_select(doc, &points),
+            _ => return,
+        };
+        self.add_to_selection(ids, self.removing);
+        self.end_single_selection(doc, cursor, tolerance);
+    }
+
+    /// A fence dragged at a selection prompt (the lasso's Fence): the
+    /// objects it crosses join the selection (Shift: leave it).
+    pub fn select_fence(&mut self, path: Vec<Point>, shift: bool, doc: &mut Document, tolerance: f64) {
+        if !self.is_selecting() {
+            return;
+        }
+        self.window_start = None;
+        let ids = snap::fence_select(doc, &path);
+        let at = path.last().copied().unwrap_or(Point::ORIGIN);
+        self.add_to_selection(ids, shift != self.removing);
+        self.end_single_selection(doc, at, tolerance);
+    }
+
     fn select_click(&mut self, p: Point, shift: bool, doc: &mut Document, tolerance: f64) {
+        // In Remove mode picks take objects out, and Shift puts them back.
+        let shift = shift != self.removing;
         if let Some(first) = self.window_start.take() {
             let ids = snap::window_select(doc, first, p);
             if !shift {
@@ -1238,6 +1447,7 @@ impl Engine {
         self.window_start = None;
         let ids = snap::polygon_select(doc, &ring, crossing);
         let at = ring.last().copied().unwrap_or(Point::ORIGIN);
+        let shift = shift != self.removing;
         if !shift {
             self.selection_lassos.push(ring);
         }
@@ -1259,7 +1469,7 @@ impl Engine {
             return;
         }
         self.window_start = None;
-        self.add_to_selection(vec![id], shift);
+        self.add_to_selection(vec![id], shift != self.removing);
         self.end_single_selection(doc, at, tolerance);
     }
 
@@ -1275,6 +1485,9 @@ impl Engine {
     /// Shift+pick removes from the selection, as in AutoCAD.
     fn add_to_selection(&mut self, ids: Vec<EntityId>, remove: bool) {
         let count = ids.len();
+        if !remove {
+            self.added.push(ids.clone());
+        }
         if remove {
             self.selection.retain(|id| !ids.contains(id));
         } else {
@@ -1323,7 +1536,7 @@ impl Engine {
     /// Escape: ends the active command (keeping what it drew, as AutoCAD does),
     /// or drops the selection window, or clears the selection.
     pub fn cancel(&mut self, doc: &mut Document) {
-        if self.window_start.take().is_some() {
+        if self.window_start.take().is_some() || self.gathering.take().is_some() {
             return;
         }
         match self.active.take() {
@@ -1339,12 +1552,17 @@ impl Engine {
     }
 
     fn clear_selection(&mut self) {
+        (self.gathering, self.removing) = (None, false);
+        self.added.clear();
         self.selection.clear();
         self.selection_windows.clear();
         self.selection_lassos.clear();
     }
 
     fn take_selection(&mut self) -> Selection {
+        (self.gathering, self.removing) = (None, false);
+        self.added.clear();
+        self.previous = self.selection.clone();
         Selection {
             ids: std::mem::take(&mut self.selection),
             windows: std::mem::take(&mut self.selection_windows),
@@ -2271,6 +2489,52 @@ mod tests {
         assert_eq!(e.selection().len(), 1);
         e.select_lasso(ring(&[(-1.0, -1.0), (16.0, -1.0), (16.0, 1.0), (-1.0, 1.0)]), false, true, &mut d, 0.5);
         assert!(e.selection().is_empty());
+    }
+
+    #[test]
+    fn select_objects_takes_autocads_typed_options() {
+        let (mut e, mut d) = (engine(), Document::new());
+        // Three vertical lines at x = 0, 10 and 20, then a circle.
+        type_all(&mut e, &mut d, &["l", "0,0", "0,10", "", "l", "10,0", "10,10", "", "l", "20,0", "20,10", ""]);
+        type_all(&mut e, &mut d, &["c", "50,50", "1"]);
+        let count = |e: &Engine| e.selection().len();
+        type_all(&mut e, &mut d, &["move"]);
+        // Window by typed corners: the first line only.
+        type_all(&mut e, &mut d, &["w", "-1,-1", "1,11"]);
+        assert_eq!(count(&e), 1);
+        assert_eq!(e.prompt(), "Select objects:");
+        // Crossing: touching is enough.
+        type_all(&mut e, &mut d, &["c", "9,5", "21,6"]);
+        assert_eq!(count(&e), 3);
+        // Undo takes the last pick's objects out again; Remove mode takes picks out.
+        type_all(&mut e, &mut d, &["u"]);
+        assert_eq!(count(&e), 1);
+        type_all(&mut e, &mut d, &["r"]);
+        assert_eq!(e.prompt(), "Remove objects:");
+        type_all(&mut e, &mut d, &["0,5"]);
+        assert_eq!(count(&e), 0);
+        type_all(&mut e, &mut d, &["a", "f", "-5,5", "15,5", ""]);
+        assert_eq!(count(&e), 2, "the fence crossed two lines");
+        type_all(&mut e, &mut d, &["l"]);
+        assert_eq!(count(&e), 3, "Last: the circle");
+        type_all(&mut e, &mut d, &["", "0,0", "0,0"]);
+        assert!(!e.is_active());
+
+        // Previous: what MOVE got; ALL; a CPolygon round the middle line's top.
+        type_all(&mut e, &mut d, &["copy", "p"]);
+        assert_eq!(count(&e), 3);
+        e.cancel(&mut d);
+        e.cancel(&mut d);
+        type_all(&mut e, &mut d, &["erase", "all"]);
+        assert_eq!(count(&e), 4);
+        e.cancel(&mut d);
+        e.cancel(&mut d);
+        type_all(&mut e, &mut d, &["erase", "cp", "8,8", "12,8", "12,12", "8,12", ""]);
+        assert_eq!(count(&e), 1);
+        type_all(&mut e, &mut d, &["wp", "8,-1", "12,-1", "12,11", "8,11", ""]);
+        assert_eq!(count(&e), 1, "the same line, already in");
+        type_all(&mut e, &mut d, &[""]);
+        assert_eq!(d.len(), 3);
     }
 
     #[test]

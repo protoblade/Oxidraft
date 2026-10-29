@@ -372,6 +372,30 @@ pub fn polygon_select(doc: &Document, ring: &[Point], crossing: bool) -> Vec<Ent
         .collect()
 }
 
+/// Entities a fence crosses (AutoCAD's Fence): the open line through
+/// `path`.
+pub fn fence_select(doc: &Document, path: &[Point]) -> Vec<EntityId> {
+    let Some(&first) = path.first() else { return Vec::new() };
+    let bounds = path.iter().fold(Aabb::from_points(first, first), |b, p| b.union(Aabb::from_points(*p, *p)));
+    let overlaps = |b: &Aabb| {
+        b.max.x >= bounds.min.x && b.min.x <= bounds.max.x && b.max.y >= bounds.min.y && b.min.y <= bounds.max.y
+    };
+    let fence: Vec<oxidraft_geom::Segment> = path.windows(2).map(|w| oxidraft_geom::Segment::new(w[0], w[1])).collect();
+    doc.entities()
+        .filter(|e| doc.is_selectable(e) && overlaps(&doc.entity_bounds(e)))
+        .filter(|e| {
+            let parts: Vec<Geometry> = doc.expanded(e).into_iter().chain(doc.clip_frame(&e.geometry)).collect();
+            parts.iter().flat_map(Geometry::outline_runs).any(|run| {
+                run.windows(2).any(|w| {
+                    let s = oxidraft_geom::Segment::new(w[0], w[1]);
+                    fence.iter().any(|f| oxidraft_geom::intersect::segment_segment(s, *f).is_some())
+                })
+            })
+        })
+        .map(|e| e.id)
+        .collect()
+}
+
 /// The objects under the pickbox at `p` that are about as close as the
 /// nearest one (within `slack`): overlapping objects, to choose between.
 /// The one drawn on top comes first.
@@ -446,6 +470,19 @@ mod tests {
         crossed.sort_by_key(|id| id.0);
         assert_eq!(crossed, vec![inside, crossing, bridging]);
         assert!(!crossed.contains(&circle));
+    }
+
+    #[test]
+    fn a_fence_selects_what_it_crosses() {
+        let mut d = Document::new();
+        let crossed = d.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(0.0, 10.0) });
+        let missed = d.add(Geometry::Line { start: Point::new(20.0, 0.0), end: Point::new(20.0, 10.0) });
+        let circle = d.add(Geometry::Circle { center: Point::new(10.0, 5.0), radius: 2.0 });
+        let path = [Point::new(-5.0, 5.0), Point::new(9.0, 5.0), Point::new(9.0, 20.0)];
+        let mut ids = fence_select(&d, &path);
+        ids.sort_by_key(|id| id.0);
+        assert_eq!(ids, vec![crossed, circle]);
+        assert!(!ids.contains(&missed));
     }
 
     #[test]

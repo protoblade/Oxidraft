@@ -35,10 +35,38 @@ pub(crate) enum Drag {
     /// Press-drag on empty space: a lasso through these points (drawing
     /// units), as in AutoCAD. Dragged off to the right it's a window lasso
     /// (objects inside it), to the left a crossing one (inside or
-    /// crossing it); `crossing` is set once the drag has gone either way.
-    Lasso { points: Vec<Point>, crossing: Option<bool> },
+    /// crossing it); `mode` is set once the drag has gone either way, and
+    /// Space cycles it through Window, Crossing and Fence.
+    Lasso { points: Vec<Point>, mode: Option<LassoMode> },
     /// Press-drag on a grip: stretch it and drop it where the button is released.
     Grip,
+}
+
+/// What a lasso selects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LassoMode {
+    Window,
+    Crossing,
+    /// What the path crosses, as a fence.
+    Fence,
+}
+
+impl LassoMode {
+    pub(crate) fn next(self) -> LassoMode {
+        match self {
+            LassoMode::Window => LassoMode::Crossing,
+            LassoMode::Crossing => LassoMode::Fence,
+            LassoMode::Fence => LassoMode::Window,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            LassoMode::Window => "Window Lasso",
+            LassoMode::Crossing => "Crossing Lasso",
+            LassoMode::Fence => "Fence Lasso",
+        }
+    }
 }
 
 /// Selection cycling: a click on objects lying on top of each other lists
@@ -481,11 +509,11 @@ impl OxidraftApp {
                 self.engine.click(start, start, false, &mut self.doc, tolerance);
                 self.drag = Some(Drag::Grip);
             } else if snap::pick(&self.doc, start, tolerance).is_none() {
-                self.drag = Some(Drag::Lasso { points: vec![start], crossing: None });
+                self.drag = Some(Drag::Lasso { points: vec![start], mode: None });
             }
         }
         // The lasso follows the pointer: a point every few screen points.
-        if let Some(Drag::Lasso { points, crossing }) = &mut self.drag
+        if let Some(Drag::Lasso { points, mode }) = &mut self.drag
             && let Some(&last) = points.last()
         {
             let (view, rect) = (self.view, self.canvas_rect);
@@ -493,15 +521,20 @@ impl OxidraftApp {
                 points.push(c.raw);
             }
             let dx = c.screen.x - view.to_screen(rect, points[0]).x;
-            if crossing.is_none() && dx.abs() >= 4.0 {
-                *crossing = Some(dx < 0.0);
+            if mode.is_none() && dx.abs() >= 4.0 {
+                *mode = Some(if dx < 0.0 { LassoMode::Crossing } else { LassoMode::Window });
             }
         }
         if response.drag_stopped_by(PointerButton::Primary) {
             match self.drag.take() {
-                Some(Drag::Lasso { mut points, crossing }) => {
+                Some(Drag::Lasso { mut points, mode }) => {
                     points.push(c.raw);
-                    self.engine.select_lasso(points, crossing.unwrap_or(false), shift, &mut self.doc, tolerance);
+                    match mode.unwrap_or(LassoMode::Window) {
+                        LassoMode::Fence => self.engine.select_fence(points, shift, &mut self.doc, tolerance),
+                        m => {
+                            self.engine.select_lasso(points, m == LassoMode::Crossing, shift, &mut self.doc, tolerance)
+                        }
+                    }
                 }
                 // Dropped with snaps and tracking applied, like a second click.
                 Some(Drag::Grip) => self.engine.click(c.point, c.raw, false, &mut self.doc, tolerance),
@@ -628,9 +661,12 @@ impl OxidraftApp {
         // so does everything a selection window in progress would select
         // (AutoCAD's selection preview).
         let mut hovered: Vec<_> = match (cursor, self.engine.window_start(), &self.drag) {
-            (Some(c), _, Some(Drag::Lasso { points, crossing })) => {
+            (Some(c), _, Some(Drag::Lasso { points, mode })) => {
                 let ring: Vec<Point> = points.iter().copied().chain([c.raw]).collect();
-                snap::polygon_select(&self.doc, &ring, crossing.unwrap_or(false))
+                match mode.unwrap_or(LassoMode::Window) {
+                    LassoMode::Fence => snap::fence_select(&self.doc, &ring),
+                    m => snap::polygon_select(&self.doc, &ring, m == LassoMode::Crossing),
+                }
             }
             (Some(c), Some(first), _) => snap::window_select(&self.doc, first, c.raw),
             (Some(c), None, _) if self.picks_objects() => {
@@ -954,8 +990,8 @@ impl OxidraftApp {
     /// Selection window: blue solid for a window (left to right),
     /// green dashed for a crossing window (right to left).
     fn draw_window(&self, painter: &Painter, rect: Rect, c: &CursorState) {
-        if let Some(Drag::Lasso { points, crossing }) = &self.drag {
-            self.draw_lasso(painter, rect, points, c, crossing.unwrap_or(false));
+        if let Some(Drag::Lasso { points, mode }) = &self.drag {
+            self.draw_lasso(painter, rect, points, c, mode.unwrap_or(LassoMode::Window));
             return;
         }
         let Some(first) = self.engine.window_start() else { return };
@@ -971,9 +1007,18 @@ impl OxidraftApp {
     }
 
     /// A lasso being dragged: blue and solid as a window, green and dashed
-    /// when crossing, as the selection windows are.
-    fn draw_lasso(&self, painter: &Painter, rect: Rect, points: &[Point], c: &CursorState, crossing: bool) {
+    /// when crossing, as the selection windows are; a fence is its dashed
+    /// path alone. Beside the cursor, what it is and that Space changes it.
+    fn draw_lasso(&self, painter: &Painter, rect: Rect, points: &[Point], c: &CursorState, mode: LassoMode) {
         let ring: Vec<Point> = points.iter().copied().chain([c.raw]).collect();
+        let hint = format!("{} - Press Spacebar to cycle options", mode.name());
+        painter.text(c.screen + vec2(16.0, 18.0), Align2::LEFT_TOP, hint, FontId::proportional(11.5), theme::label());
+        if mode == LassoMode::Fence {
+            let path: Vec<Pos2> = ring.iter().map(|p| self.view.to_screen(rect, *p)).collect();
+            painter.extend(Shape::dashed_line(&path, Stroke::new(1.5, theme::crossing_edge()), 6.0, 4.0));
+            return;
+        }
+        let crossing = mode == LassoMode::Crossing;
         let fill = if crossing { theme::crossing_fill() } else { theme::window_fill() };
         let mut mesh = egui::Mesh::default();
         for t in oxidraft_model::hatch::triangles(std::slice::from_ref(&ring)) {
