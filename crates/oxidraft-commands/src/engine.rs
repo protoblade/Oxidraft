@@ -60,6 +60,9 @@ use crate::{
     matchprop::MatchProp,
     measuregeom::{Base, MeasureGeom},
     mirror::Mirror,
+    more_cmds::{
+        AddSelected, Browser, ClassicLeader, Elev, Isolate, MInsert, MRedo, OnOff, TableExport, ViewRes, XPlode,
+    },
     move_copy::MoveCopy,
     mview::{Mview, VpClip, VpMax},
     offset::Offset,
@@ -663,7 +666,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "RSCRIPT", aliases: &[], description: "Run the last script again", make: None },
     CommandInfo {
         name: "ADCENTER",
-        aliases: &["ADC", "DC"],
+        aliases: &["ADC", "DC", "ADCNAVIGATE"],
         description: "DesignCenter: blocks, layers, linetypes and text styles from other drawings (Ctrl+2)",
         make: None,
     },
@@ -798,7 +801,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(crate::field_cmd::XOpen::compare())),
     },
     CommandInfo { name: "IMPORT", aliases: &["IMP"], description: "Bring in a drawing, PDF or image", make: None },
-    CommandInfo { name: "ULAYERS", aliases: &[], description: "Show or hide a PDF underlay's layers", make: None },
+    CommandInfo {
+        name: "ULAYERS",
+        aliases: &["PDFLAYERS"],
+        description: "Show or hide a PDF underlay's layers",
+        make: None,
+    },
     CommandInfo {
         name: "PDFIMPORT",
         aliases: &[],
@@ -834,7 +842,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "CUI",
-        aliases: &[],
+        aliases: &["QUICKCUI"],
         description: "Customize keyboard shortcuts and the Quick Access Toolbar",
         make: None,
     },
@@ -863,6 +871,158 @@ pub const COMMANDS: &[CommandInfo] = &[
         name: "MARKUP",
         aliases: &["MARKUPIMPORT"],
         description: "Lay a marked-up plot (PDF or image) over its sheet, to work from",
+        make: None,
+    },
+    CommandInfo {
+        name: "ISOLATEOBJECTS",
+        aliases: &[],
+        description: "Show only the objects selected, for now",
+        make: Some(|| Box::new(Isolate::new(false))),
+    },
+    CommandInfo {
+        name: "HIDEOBJECTS",
+        aliases: &[],
+        description: "Hide the objects selected, for now",
+        make: Some(|| Box::new(Isolate::new(true))),
+    },
+    CommandInfo {
+        name: "UNISOLATEOBJECTS",
+        aliases: &["UNHIDE"],
+        description: "Show the objects isolation hid",
+        make: None,
+    },
+    CommandInfo {
+        name: "ADDSELECTED",
+        aliases: &[],
+        description: "Draw an object like the one picked, with its layer and properties",
+        make: Some(|| Box::new(AddSelected)),
+    },
+    CommandInfo {
+        name: "MINSERT",
+        aliases: &[],
+        description: "Insert a block in rows and columns, as one object",
+        make: Some(|| Box::new(MInsert::default())),
+    },
+    CommandInfo {
+        name: "XPLODE",
+        aliases: &["XP"],
+        description: "Explode, giving the parts a layer or color, or the reference's",
+        make: Some(|| Box::new(XPlode::default())),
+    },
+    CommandInfo { name: "MREDO", aliases: &[], description: "Redo several actions", make: Some(|| Box::new(MRedo)) },
+    CommandInfo {
+        name: "LEADER",
+        aliases: &["LEAD", "QLEADER", "LE"],
+        description: "A classic leader: points from the arrowhead, then text",
+        make: Some(|| Box::new(ClassicLeader::default())),
+    },
+    CommandInfo {
+        name: "ORTHO",
+        aliases: &[],
+        description: "Ortho mode on or off (F8)",
+        make: Some(|| Box::new(OnOff::new("ORTHOMODE", false))),
+    },
+    CommandInfo {
+        name: "REGENAUTO",
+        aliases: &[],
+        description: "Regenerate automatically on or off",
+        make: Some(|| Box::new(OnOff::new("REGENMODE", false))),
+    },
+    CommandInfo {
+        name: "DRAGMODE",
+        aliases: &[],
+        description: "How objects show while dragged: on, off or Auto",
+        make: Some(|| Box::new(OnOff::new("DRAGMODE", true))),
+    },
+    CommandInfo {
+        name: "ELEV",
+        aliases: &[],
+        description: "The elevation and thickness of new objects",
+        make: Some(|| Box::new(Elev::default())),
+    },
+    CommandInfo {
+        name: "VIEWRES",
+        aliases: &[],
+        description: "Fast zooms, and how smooth circles show",
+        make: Some(|| Box::new(ViewRes::default())),
+    },
+    CommandInfo {
+        name: "TABLEEXPORT",
+        aliases: &[],
+        description: "Save a table's cells as a CSV file",
+        make: Some(|| Box::new(TableExport)),
+    },
+    CommandInfo {
+        name: "BROWSER",
+        aliases: &[],
+        description: "Open a web page",
+        make: Some(|| Box::new(Browser::new(false))),
+    },
+    CommandInfo {
+        name: "GOTOURL",
+        aliases: &[],
+        description: "Open an object's hyperlink",
+        make: Some(|| Box::new(Browser::new(true))),
+    },
+    CommandInfo { name: "TEXTSCR", aliases: &[], description: "Show the whole command history", make: None },
+    CommandInfo {
+        name: "COPYHIST",
+        aliases: &[],
+        description: "Copy the command history to the clipboard",
+        make: None,
+    },
+    CommandInfo { name: "LOGFILEON", aliases: &[], description: "Write the command history to a log file", make: None },
+    CommandInfo { name: "LOGFILEOFF", aliases: &[], description: "Stop writing the log file", make: None },
+    CommandInfo { name: "ABOUT", aliases: &[], description: "Oxidraft's version and license", make: None },
+    CommandInfo { name: "RIBBON", aliases: &[], description: "Show the ribbon", make: None },
+    CommandInfo { name: "RIBBONCLOSE", aliases: &[], description: "Hide the ribbon", make: None },
+    CommandInfo { name: "COMMANDLINE", aliases: &[], description: "Show the command line (Ctrl+9)", make: None },
+    CommandInfo { name: "COMMANDLINEHIDE", aliases: &[], description: "Hide the command line (Ctrl+9)", make: None },
+    CommandInfo { name: "HIDEPALETTES", aliases: &["POFF"], description: "Hide the open palettes", make: None },
+    CommandInfo {
+        name: "SHOWPALETTES",
+        aliases: &["PON"],
+        description: "Show the palettes HIDEPALETTES hid",
+        make: None,
+    },
+    CommandInfo {
+        name: "PROPERTIESCLOSE",
+        aliases: &["PRCLOSE"],
+        description: "Close the Properties palette",
+        make: None,
+    },
+    CommandInfo { name: "LAYERCLOSE", aliases: &[], description: "Close the Layer Properties Manager", make: None },
+    CommandInfo {
+        name: "EXTERNALREFERENCESCLOSE",
+        aliases: &[],
+        description: "Close the External References palette",
+        make: None,
+    },
+    CommandInfo { name: "QCCLOSE", aliases: &[], description: "Close QuickCalc", make: None },
+    CommandInfo { name: "ARRAYCLOSE", aliases: &[], description: "Leave an array's in-place editing", make: None },
+    CommandInfo { name: "TIFOUT", aliases: &[], description: "Save the drawing area as a TIFF image", make: None },
+    CommandInfo {
+        name: "EXPORTLAYOUT",
+        aliases: &[],
+        description: "Save a layout's sheet as a drawing in model space",
+        make: None,
+    },
+    CommandInfo {
+        name: "DWGCONVERT",
+        aliases: &[],
+        description: "Save drawings again in another AutoCAD version",
+        make: None,
+    },
+    CommandInfo {
+        name: "PLOTSTAMP",
+        aliases: &[],
+        description: "Stamp plots with the drawing, layout and date",
+        make: None,
+    },
+    CommandInfo {
+        name: "WHOHAS",
+        aliases: &[],
+        description: "Who has a drawing open, and when it was saved",
         make: None,
     },
     CommandInfo { name: "CASCADE", aliases: &[], description: "Show the open drawings cascaded", make: None },
@@ -902,8 +1062,8 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "DXFIN", aliases: &[], description: "Open a DXF file", make: None },
     CommandInfo { name: "QNEW", aliases: &[], description: "Start a new drawing", make: None },
     CommandInfo { name: "SAVEALL", aliases: &[], description: "Save the drawing", make: None },
-    CommandInfo { name: "NEW", aliases: &[], description: "Start a new drawing (Cmd+N)", make: None },
-    CommandInfo { name: "OPEN", aliases: &[], description: "Open a drawing (Cmd+O)", make: None },
+    CommandInfo { name: "NEW", aliases: &["NEWTAB"], description: "Start a new drawing (Cmd+N)", make: None },
+    CommandInfo { name: "OPEN", aliases: &["FILEOPEN"], description: "Open a drawing (Cmd+O)", make: None },
     CommandInfo { name: "SAVE", aliases: &[], description: "Save the drawing (Cmd+S)", make: None },
     CommandInfo { name: "QSAVE", aliases: &[], description: "Save the drawing", make: None },
     CommandInfo { name: "SAVEAS", aliases: &[], description: "Save the drawing under another name", make: None },
@@ -1044,7 +1204,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "QUIT", aliases: &["EXIT"], description: "Quit Oxidraft (asks to save changes)", make: None },
     CommandInfo {
         name: "RECOVER",
-        aliases: &[],
+        aliases: &["RECOVERALL"],
         description: "Open a damaged drawing and fix what AUDIT finds",
         make: None,
     },
@@ -1080,7 +1240,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "ADJUST",
-        aliases: &[],
+        aliases: &["IMAGEADJUST", "PDFADJUST"],
         description: "Adjust an image's brightness, contrast and fade, or a PDF underlay's fade and monochrome",
         make: Some(|| Box::new(crate::picture_tools::Adjust::default())),
     },
@@ -1146,7 +1306,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "TEXTEDIT",
-        aliases: &["ED", "DDEDIT"],
+        aliases: &["ED", "DDEDIT", "MTEDIT"],
         description: "Edit text, attribute values or a table's cells (or double-click them)",
         make: Some(|| Box::new(crate::field_cmd::TextEdit::default())),
     },
@@ -1461,7 +1621,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "EATTEDIT",
-        aliases: &[],
+        aliases: &["ATTIPEDIT"],
         description: "Edit the attribute values of a block",
         make: Some(|| Box::new(EattEdit)),
     },
@@ -1524,11 +1684,16 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(LayMcur)),
     },
     // Handled by the app, which owns the windows and palettes.
-    CommandInfo { name: "LAYER", aliases: &["LA"], description: "Open the Layer Properties Manager", make: None },
+    CommandInfo {
+        name: "LAYER",
+        aliases: &["LA", "LAYERPALETTE"],
+        description: "Open the Layer Properties Manager",
+        make: None,
+    },
     CommandInfo { name: "PLOT", aliases: &["PRINT"], description: "Plot the drawing to a PDF file", make: None },
     CommandInfo {
         name: "EXTERNALREFERENCES",
-        aliases: &["ER", "XREF", "XR"],
+        aliases: &["ER", "XREF", "XR", "IMAGE", "CLASSICIMAGE", "CLASSICXREF"],
         description: "Open the External References palette",
         make: None,
     },
@@ -1707,7 +1872,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "PREVIEW", aliases: &["PRE"], description: "Show how the drawing will plot", make: None },
     CommandInfo {
         name: "PROPERTIES",
-        aliases: &["PR", "PROPS", "MO", "CH"],
+        aliases: &["PR", "PROPS", "MO", "CH", "QUICKPROPERTIES"],
         description: "Show the Properties palette",
         make: None,
     },
@@ -4588,8 +4753,10 @@ mod tests {
         // starting so, then other aliases starting so (CH: PROPERTIES).
         let c = names("c");
         assert_eq!(c[..3], ["CIRCLE", "COPY", "CHAMFER"]);
-        assert_eq!(c.last(), Some(&"PROPERTIES"), "via its CH alias, after the names");
-        assert!(c.iter().all(|n| n.starts_with('C') || *n == "PROPERTIES"));
+        // Those by an alias (CH: PROPERTIES) come after every name.
+        let by_alias = c.iter().position(|n| !n.starts_with('C')).unwrap();
+        assert!(c[by_alias..].iter().all(|n| !n.starts_with('C')), "{c:?}");
+        assert!(c[by_alias..].contains(&"PROPERTIES"));
         let co = names("co");
         assert_eq!(co[0], "COPY");
         assert!(co.iter().all(|n| n.starts_with("CO")));

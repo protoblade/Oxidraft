@@ -139,7 +139,7 @@ impl<'a> Plotter<'a> {
     fn objects(&mut self, entities: Vec<&'a Entity>, window: Aabb, frozen: &[String]) {
         let doc = self.doc;
         for e in entities {
-            if !doc.is_shown(&e.layer) || frozen.iter().any(|f| f.eq_ignore_ascii_case(&e.layer)) {
+            if !doc.object_shown(e) || frozen.iter().any(|f| f.eq_ignore_ascii_case(&e.layer)) {
                 continue;
             }
             if !e.geometry.is_infinite() && !overlaps(&doc.entity_bounds(e), &window) {

@@ -53,6 +53,7 @@ mod list;
 mod matchprop;
 mod measuregeom;
 mod mirror;
+mod more_cmds;
 mod move_copy;
 mod mview;
 mod offset;
@@ -216,6 +217,12 @@ pub enum UiRequest {
     /// WORKSPACE: an option (setCurrent, SAveas, Rename, Delete, ?), the
     /// workspace's name, and for Rename its new one.
     Workspace(String, String, String),
+    /// ADDSELECTED: this command, to draw with.
+    RunCommand(String),
+    /// TABLEEXPORT: this table, to write as CSV.
+    TableExport(EntityId),
+    /// BROWSER, GOTOURL: this address, to open.
+    OpenUrl(String),
 }
 
 /// Result of feeding one input to a command.
@@ -333,6 +340,14 @@ pub struct Vars {
     pub dim_assoc: u8,
     /// ARRAYASSOCIATIVITY: new arrays are one associative object.
     pub array_assoc: bool,
+    /// ELEV's elevation and thickness for new objects (ELEVATION, THICKNESS).
+    pub elevation: f64,
+    pub thickness: f64,
+    /// VIEWRES's circle zoom percent.
+    pub view_res: u32,
+    /// REGENMODE (REGENAUTO) and DRAGMODE (0 off, 1 on, 2 auto): kept.
+    pub regen_mode: bool,
+    pub drag_mode: u8,
     /// How far the view is turned (VIEWTWIST), kept by the app.
     pub view_rotation: f64,
     /// The last area AREA or MEASUREGEOM measured (for Volume).
@@ -385,6 +400,11 @@ impl Default for Vars {
             grid_spacing: 0.0,
             dim_assoc: 2,
             array_assoc: true,
+            elevation: 0.0,
+            thickness: 0.0,
+            view_res: 1000,
+            regen_mode: true,
+            drag_mode: 2,
             view_rotation: 0.0,
             erased: Vec::new(),
             last_area: 0.0,

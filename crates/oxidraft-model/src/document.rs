@@ -351,6 +351,9 @@ pub struct Document {
     named_ucs: Vec<crate::ucs::NamedUcs>,
     /// Associative dimensions: what each one's definition points follow.
     pub(crate) dim_assoc: BTreeMap<EntityId, crate::dimassoc::DimAssoc>,
+    /// Objects hidden for now (HIDEOBJECTS, ISOLATEOBJECTS): not drawn,
+    /// picked or plotted, but kept, saved and undone as ever.
+    hidden_objects: std::collections::HashSet<EntityId>,
     /// ULAYERS: each PDF underlay's layers turned off, by its name.
     pdf_layers_off: BTreeMap<String, Vec<String>>,
     /// CANNOSCALE: drawing units per paper unit; ANNOALLVISIBLE.
@@ -505,6 +508,7 @@ impl Document {
             named_ucs: Vec::new(),
             pdf_layers_off: BTreeMap::new(),
             dim_assoc: BTreeMap::new(),
+            hidden_objects: Default::default(),
             anno_scale: 1.0,
             anno_all_visible: true,
             limits: (Point::ORIGIN, Point::new(420.0, 297.0)),
@@ -1176,7 +1180,28 @@ impl Document {
     /// True if the object can be selected and edited: its layer allows it
     /// and, while a reference is edited in place, it's in the working set.
     pub fn is_selectable(&self, e: &Entity) -> bool {
-        self.is_editable(&e.layer) && self.refedit.as_ref().is_none_or(|r| r.in_working_set(e.id))
+        self.is_editable(&e.layer)
+            && !self.hidden_objects.contains(&e.id)
+            && self.refedit.as_ref().is_none_or(|r| r.in_working_set(e.id))
+    }
+
+    /// True if `e` is drawn: its layer shows and it isn't hidden.
+    pub fn object_shown(&self, e: &Entity) -> bool {
+        self.is_shown(&e.layer) && !self.hidden_objects.contains(&e.id)
+    }
+
+    /// HIDEOBJECTS: hides `ids` for now (not saved or undone).
+    pub fn hide_objects(&mut self, ids: impl IntoIterator<Item = EntityId>) {
+        self.hidden_objects.extend(ids);
+    }
+
+    /// UNISOLATEOBJECTS: shows every object hidden; how many there were.
+    pub fn unhide_objects(&mut self) -> usize {
+        std::mem::take(&mut self.hidden_objects).len()
+    }
+
+    pub fn hidden_count(&self) -> usize {
+        self.hidden_objects.len()
     }
 
     /// The block reference or xref being edited in place, if any.

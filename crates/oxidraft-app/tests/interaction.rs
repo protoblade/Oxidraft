@@ -3016,3 +3016,44 @@ fn sheet_sets_share_and_markup() {
     assert!(u.length() > 0.0 && v.length() > 0.0 && origin.x.is_finite());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn isolation_addselected_and_more_lt_commands() {
+    let mut h = app_with_line();
+    let ids: Vec<_> = h.state_mut().document_mut().entities().map(|e| e.id).collect();
+    // ISOLATEOBJECTS: only the first line shows (and can be picked).
+    h.state_mut().engine_mut().set_selection(vec![ids[0]]);
+    type_all(&mut h, &["isolateobjects"]);
+    assert_eq!(h.state_mut().document_mut().hidden_count(), 1);
+    let other = screen(&h, 50.0, 60.0);
+    click(&mut h, other);
+    assert!(h.state_mut().engine_mut().selection().is_empty(), "a hidden object isn't picked");
+    type_all(&mut h, &["unisolateobjects"]);
+    assert_eq!(h.state_mut().document_mut().hidden_count(), 0);
+    // ADDSELECTED: LINE starts, on the picked line's layer.
+    h.state_mut().document_mut().add_layer(oxidraft_model::Layer::new("Walls", 3));
+    let wall = ids[1];
+    h.state_mut().document_mut().update(wall, |e| e.layer = "Walls".into());
+    type_all(&mut h, &["addselected"]);
+    let at = screen(&h, 50.0, 60.0);
+    click(&mut h, at);
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().current_layer(), "Walls");
+    assert!(h.state_mut().engine_mut().is_active(), "LINE is running");
+    h.key_press(Key::Escape);
+    h.run_steps(1);
+    // LEADER: three points, then two lines of text.
+    type_all(&mut h, &["leader", "0,-20", "10,-10", "20,-10", "", "FIRST", "SECOND", ""]);
+    let leader = h.state_mut().document_mut().entities().find_map(|e| match &e.geometry {
+        Geometry::Leader { points, content, .. } => Some((points.len(), content.clone())),
+        _ => None,
+    });
+    assert_eq!(leader, Some((3, "FIRST\\PSECOND".to_string())));
+    // RIBBONCLOSE and RIBBON.
+    type_all(&mut h, &["ribbonclose"]);
+    h.run_steps(1);
+    assert!(h.query_by_label("Home").is_none());
+    type_all(&mut h, &["ribbon"]);
+    h.run_steps(1);
+    assert!(h.query_by_label("Home").is_some());
+}

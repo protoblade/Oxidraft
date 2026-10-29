@@ -253,7 +253,8 @@ impl OxidraftApp {
             let pictures = self.plot_pictures(true);
             oxidraft_plot::render_with_pictures(&self.doc, space, &settings, &pictures)
         };
-        let sheet = sheet.ok_or("There's nothing to plot.")?;
+        let mut sheet = sheet.ok_or("There's nothing to plot.")?;
+        self.stamp(&mut sheet, space);
         let bytes = self.plot_bytes(settings.plotter, std::slice::from_ref(&sheet))?;
         std::fs::write(path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
         let area = sheet.layout.clip;

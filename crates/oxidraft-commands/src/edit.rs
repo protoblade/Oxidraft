@@ -90,7 +90,7 @@ pub(crate) fn extend(g: &Geometry, boundaries: &[Seg], pick: f64) -> Result<Geom
 /// The curves of every other shown object (block contents included), which
 /// act as cutting or boundary edges.
 fn visible_others(doc: &Document, id: EntityId) -> Vec<Geometry> {
-    doc.entities().filter(|e| e.id != id && doc.is_shown(&e.layer)).flat_map(|e| doc.expanded(e)).collect()
+    doc.entities().filter(|e| e.id != id && doc.object_shown(e)).flat_map(|e| doc.expanded(e)).collect()
 }
 
 /// Only curves can be trimmed or extended.

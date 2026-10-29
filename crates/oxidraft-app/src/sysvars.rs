@@ -228,6 +228,10 @@ fn vars() -> Vec<Var> {
             a.engine.vars.dim_scale = parse_positive(v)?;
             Ok(())
         }),
+        var!("DRAGMODE", |a| a.engine.vars.drag_mode.to_string(), |a, v| {
+            a.engine.vars.drag_mode = parse_int(v, 0, 2)? as u8;
+            Ok(())
+        }),
         var!("DWGNAME", |a| a.file_name()),
         var!("DWGPREFIX", |a| {
             a.path
@@ -237,6 +241,10 @@ fn vars() -> Vec<Var> {
         }),
         var!("DYNMODE", |a| if a.engine.dynamic_input { "3".into() } else { "0".into() }, |a, v| {
             a.engine.dynamic_input = parse_int(v, -3, 3)? > 0;
+            Ok(())
+        }),
+        var!("ELEVATION", |a| number(a.engine.vars.elevation), |a, v| {
+            a.engine.vars.elevation = parse_number(v)?;
             Ok(())
         }),
         var!("EXTMAX", |a| a.doc.extents().map_or_else(String::new, |b| point(b.max))),
@@ -375,6 +383,10 @@ fn vars() -> Vec<Var> {
             a.doc.set_quick_text(parse_flag(v)?);
             Ok(())
         }),
+        var!("REGENMODE", |a| flag(a.engine.vars.regen_mode), |a, v| {
+            a.engine.vars.regen_mode = parse_flag(v)?;
+            Ok(())
+        }),
         var!("SNAPMODE", |a| flag(a.engine.vars.snap), |a, v| {
             a.engine.vars.snap = parse_flag(v)?;
             Ok(())
@@ -388,6 +400,10 @@ fn vars() -> Vec<Var> {
             Ok(())
         }),
         var!("TEXTSTYLE", |a| a.doc.current_text_style().name, |a, v| a.doc.set_current_text_style(v.trim())),
+        var!("THICKNESS", |a| number(a.engine.vars.thickness), |a, v| {
+            a.engine.vars.thickness = parse_number(v)?;
+            Ok(())
+        }),
         var!("TILEMODE", |a| flag(a.doc.space() == MODEL), |a, v| {
             if parse_flag(v)? {
                 a.switch_space(MODEL);

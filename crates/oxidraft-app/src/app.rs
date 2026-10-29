@@ -122,6 +122,15 @@ pub struct OxidraftApp {
     pub(crate) cui: Option<crate::customize::CuiDialog>,
     /// The Sheet Set Manager (SHEETSET).
     pub(crate) sheet_set: Option<crate::sheet_set::SheetSetPalette>,
+    /// RIBBONCLOSE and COMMANDLINEHIDE.
+    pub(crate) ribbon_hidden: bool,
+    pub(crate) command_line_hidden: bool,
+    /// The palettes HIDEPALETTES hid, for SHOWPALETTES.
+    pub(crate) hidden_palettes: Option<crate::more_app::HiddenPalettes>,
+    /// LOGFILEON: the log file, and how much of the history is in it.
+    pub(crate) log_file: Option<(std::path::PathBuf, usize)>,
+    /// PLOTSTAMP.
+    pub(crate) plot_stamp: bool,
     pub(crate) publish: Option<crate::publish::PublishDialog>,
     /// UNITS: the settings being chosen.
     pub(crate) units_dialog: Option<oxidraft_model::Units>,
@@ -330,6 +339,11 @@ impl OxidraftApp {
             plotter_manager: None,
             cui: None,
             sheet_set: None,
+            ribbon_hidden: false,
+            command_line_hidden: false,
+            hidden_palettes: None,
+            log_file: None,
+            plot_stamp: false,
             publish: None,
             units_dialog: None,
             rename: None,
@@ -712,6 +726,40 @@ impl OxidraftApp {
             }
             "PLOTTERMANAGER" => self.open_plotter_manager(),
             "CUI" => self.open_cui(),
+            "UNISOLATEOBJECTS" | "UNHIDE" => {
+                let n = self.doc.unhide_objects();
+                self.engine.log(format!("{n} object(s) shown again."));
+            }
+            "TEXTSCR" => self.history_expanded = true,
+            "COPYHIST" => {
+                let text = self.engine.history().join("\n");
+                match arboard::Clipboard::new().and_then(|mut c| c.set_text(text)) {
+                    Ok(()) => self.engine.log("Command history copied to the clipboard."),
+                    Err(e) => self.engine.log(format!("Could not copy: {e}")),
+                }
+            }
+            "LOGFILEON" => self.log_file_on(),
+            "LOGFILEOFF" => {
+                self.write_log();
+                self.log_file = None;
+            }
+            "ABOUT" => self.about(),
+            "RIBBON" => self.ribbon_hidden = false,
+            "RIBBONCLOSE" => self.ribbon_hidden = true,
+            "COMMANDLINE" => self.command_line_hidden = false,
+            "COMMANDLINEHIDE" => self.command_line_hidden = true,
+            "HIDEPALETTES" | "POFF" => self.hide_palettes(true),
+            "SHOWPALETTES" | "PON" => self.hide_palettes(false),
+            "PROPERTIESCLOSE" | "PRCLOSE" => self.properties_open = false,
+            "LAYERCLOSE" => self.layer_manager_open = false,
+            "EXTERNALREFERENCESCLOSE" => self.xref_palette_open = false,
+            "QCCLOSE" => self.quickcalc = None,
+            "ARRAYCLOSE" => self.engine.log("No array is being edited in place: ARRAYEDIT changes one."),
+            "TIFOUT" => self.image_out_command("TIFF", &["tif", "tiff"]),
+            "EXPORTLAYOUT" => self.export_layout(),
+            "DWGCONVERT" => self.dwg_convert(),
+            "PLOTSTAMP" => self.toggle_plot_stamp(),
+            "WHOHAS" => self.who_has(),
             "SHEETSET" | "SSM" => self.toggle_sheet_set(),
             "SHEETSETHIDE" => self.sheet_set = None,
             "OPENSHEETSET" => {
@@ -855,6 +903,13 @@ impl OxidraftApp {
                 UiRequest::Tiling(tiling) => self.set_tiling(tiling),
                 UiRequest::ChangeSpace(ids) => self.change_space(&ids),
                 UiRequest::WmfOut(ids) => self.wmf_out(&ids),
+                UiRequest::RunCommand(c) => self.run(&c),
+                UiRequest::TableExport(id) => self.table_export(id),
+                UiRequest::OpenUrl(url) => {
+                    if let Err(e) = crate::more_app::open_url(&url) {
+                        self.engine.log(format!("Could not open {url}: {e}"));
+                    }
+                }
                 UiRequest::Workspace(option, name, new) => self.workspace_option(&option, &name, &new),
                 UiRequest::ArrangeWindows(n) => {
                     let arrange = match n {
@@ -1165,7 +1220,7 @@ impl eframe::App for OxidraftApp {
 
         self.top_bar(ui);
         // Clean screen (Ctrl+0): the drawing, the command line and the status bar.
-        if !self.clean_screen {
+        if !self.clean_screen && !self.ribbon_hidden {
             self.ribbon(ui);
         }
         self.status_bar(ui);
@@ -1244,9 +1299,10 @@ impl eframe::App for OxidraftApp {
         self.blocks_palette(&ctx);
         self.update_window(&ctx);
         // Not in an image of the drawing (PNGOUT).
-        if !self.capturing_image() {
+        if !self.capturing_image() && !self.command_line_hidden {
             self.command_line(&ctx);
         }
+        self.write_log();
         self.publish_copied(&ctx);
         // Requests from what was typed this frame show on the next.
         if self.handle_ui_requests(&ctx) {

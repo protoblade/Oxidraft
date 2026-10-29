@@ -13,7 +13,7 @@ use oxidraft_raster::pdf_vectors::{PdfDrawing, pdf_vectors};
 use crate::app::OxidraftApp;
 
 /// The AutoCAD Color Index nearest an RGB color.
-fn nearest_aci(rgb: [u8; 3]) -> u8 {
+pub(crate) fn nearest_aci(rgb: [u8; 3]) -> u8 {
     let d = |i: u8| {
         let (r, g, b) = aci_rgb(i);
         let [x, y, z] = rgb.map(i32::from);

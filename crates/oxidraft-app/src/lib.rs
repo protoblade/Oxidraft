@@ -28,6 +28,7 @@ mod layer_walk;
 mod layers;
 mod layouts;
 mod manage;
+mod more_app;
 mod named_views;
 mod object_props;
 mod paste_scales;

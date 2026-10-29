@@ -74,7 +74,7 @@ fn find(parent: &mut [usize], i: usize) -> usize {
 /// polylines (block contents included), not text, dimensions or hatches.
 fn boundary_curves(doc: &Document) -> Vec<Seg> {
     doc.entities()
-        .filter(|e| doc.is_shown(&e.layer))
+        .filter(|e| doc.object_shown(e))
         .filter(|e| {
             !matches!(
                 e.geometry,

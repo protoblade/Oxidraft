@@ -308,7 +308,7 @@ impl OxidraftApp {
             .doc
             .space_in_draw_order(space)
             .into_iter()
-            .filter(|e| self.doc.is_shown(&e.layer) && Some(e.id) != skip)
+            .filter(|e| self.doc.object_shown(e) && Some(e.id) != skip)
             .filter(|e| matches!(e.geometry, Geometry::Viewport { on: true, .. }))
             .filter_map(|e| Frame::of(&self.doc, e.id))
             .collect();
@@ -840,7 +840,8 @@ impl OxidraftApp {
         for e in self.doc.space_in_draw_order(space) {
             let Some(e) = self.doc.shown_at(e, anno) else { continue };
             let e = e.as_ref();
-            if !self.shows_layer(&e.layer) || !on_screen(&self.doc.entity_bounds(e), &view) {
+            if !self.shows_layer(&e.layer) || !self.doc.object_shown(e) || !on_screen(&self.doc.entity_bounds(e), &view)
+            {
                 continue;
             }
             if frozen.iter().any(|f| f.eq_ignore_ascii_case(&e.layer)) {

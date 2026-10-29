@@ -203,7 +203,7 @@ fn collect(doc: &Document, cursor: Point, tolerance: f64, kinds: &[SnapKind], fr
     let mut all = Vec::new();
     // Only curves passing near the cursor can produce an intersection there.
     let mut near: Vec<Geometry> = Vec::new();
-    for e in doc.entities().filter(|e| doc.is_shown(&e.layer)) {
+    for e in doc.entities().filter(|e| doc.object_shown(e)) {
         match &e.geometry {
             Geometry::Insert { placement, .. } => {
                 all.push(Snap { point: placement.position, kind: SnapKind::Insertion })
@@ -277,7 +277,7 @@ pub fn find_override_snap(
 ) -> Option<Snap> {
     let mut all = Vec::new();
     let mut near: Vec<Geometry> = Vec::new();
-    for e in doc.entities().filter(|e| doc.is_shown(&e.layer)) {
+    for e in doc.entities().filter(|e| doc.object_shown(e)) {
         let touched = doc.entity_distance(e, cursor) <= tolerance;
         if touched {
             match &e.geometry {
@@ -426,7 +426,7 @@ pub fn pick(doc: &Document, p: Point, tolerance: f64) -> Option<EntityId> {
 /// Like [`pick`], but objects on locked layers count too (LAYULK).
 pub fn pick_locked(doc: &Document, p: Point, tolerance: f64) -> Option<EntityId> {
     let editing = |e: &Entity| doc.refedit().is_none_or(|r| r.in_working_set(e.id));
-    pick_where(doc, p, tolerance, |e| doc.is_shown(&e.layer) && editing(e))
+    pick_where(doc, p, tolerance, |e| doc.object_shown(e) && editing(e))
 }
 
 /// Like [`pick`], among the objects `ok` allows.
