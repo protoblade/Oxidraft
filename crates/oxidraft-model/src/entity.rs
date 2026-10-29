@@ -220,6 +220,21 @@ pub enum Geometry {
         /// rectangular one.
         clip: Vec<Point>,
     },
+    /// An attribute definition (ATTDEF). In a block, what its references
+    /// ask for (`prompt`, offering `default`) and show as attribute `tag`;
+    /// a constant one shows `default` in every reference. Outside a block,
+    /// it shows its tag.
+    AttributeDefinition {
+        tag: String,
+        prompt: String,
+        default: String,
+        position: Point,
+        height: f64,
+        rotation: f64,
+        attach: Attach,
+        invisible: bool,
+        constant: bool,
+    },
     /// A wipeout (WIPEOUT): the closed polygon through `points`, filled
     /// with the background, hiding what's drawn before it.
     Wipeout {
@@ -378,6 +393,7 @@ impl Geometry {
             Geometry::Viewport { .. } => "Viewport",
             Geometry::Table { .. } => "Table",
             Geometry::Wipeout { .. } => "Wipeout",
+            Geometry::AttributeDefinition { .. } => "Attribute Definition",
         }
     }
 
@@ -396,6 +412,16 @@ impl Geometry {
             }
             Geometry::Leader { points, content, scale } => Some(annotation::leader_primitives(points, content, *scale)),
             Geometry::Table { .. } => Some(crate::table::primitives(self)),
+            Geometry::AttributeDefinition { tag, position, height, rotation, attach, .. } => {
+                Some(vec![Geometry::Text {
+                    position: *position,
+                    height: *height,
+                    rotation: *rotation,
+                    width: 0.0,
+                    attach: *attach,
+                    content: tag.clone(),
+                }])
+            }
             _ => None,
         }
     }
@@ -478,6 +504,7 @@ impl Geometry {
             // leaders); points, text and hatches aren't curves.
             Geometry::Point { .. }
             | Geometry::Image { .. }
+            | Geometry::AttributeDefinition { .. }
             | Geometry::Insert { .. }
             | Geometry::Text { .. }
             | Geometry::Dimension { .. }
@@ -760,6 +787,30 @@ impl Geometry {
                 clip: clip.iter().map(|p| f(*p)).collect(),
             },
             Geometry::Wipeout { points } => Geometry::Wipeout { points: points.iter().map(|p| f(*p)).collect() },
+            Geometry::AttributeDefinition {
+                tag,
+                prompt,
+                default,
+                position,
+                height,
+                rotation,
+                attach,
+                invisible,
+                constant,
+            } => {
+                let turned = f(*position + Point::ORIGIN.polar(1.0, *rotation)) - f(*position);
+                Geometry::AttributeDefinition {
+                    tag: tag.clone(),
+                    prompt: prompt.clone(),
+                    default: default.clone(),
+                    position: f(*position),
+                    height: height * length_factor,
+                    rotation: Point::ORIGIN.angle_to(turned),
+                    attach: *attach,
+                    invisible: *invisible,
+                    constant: *constant,
+                }
+            }
             // It turns and scales, but stays upright text in rows: mirrored,
             // what was its upper-right corner becomes its upper-left.
             Geometry::Table { position, rotation, widths, heights, cells, text_height } => {
@@ -912,6 +963,7 @@ impl Geometry {
             Geometry::Image { origin, .. } => self.translated(shift(*origin) - *origin),
             Geometry::Table { position, .. } => self.translated(shift(*position) - *position),
             Geometry::Wipeout { points } => Geometry::Wipeout { points: points.iter().map(|p| shift(*p)).collect() },
+            Geometry::AttributeDefinition { position, .. } => self.translated(shift(*position) - *position),
             Geometry::Viewport { center, .. } => self.translated(shift(*center) - *center),
             Geometry::Insert { placement, .. } => self.translated(shift(placement.position) - placement.position),
             Geometry::Text { position, .. } => self.translated(shift(*position) - *position),
@@ -994,6 +1046,7 @@ impl Geometry {
             Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => vec![*base, *base + *direction],
             Geometry::Table { position, .. } => vec![*position],
             Geometry::Wipeout { points } => points.clone(),
+            Geometry::AttributeDefinition { position, .. } => vec![*position],
             Geometry::Viewport { center, clip, .. } if clip.len() >= 3 => {
                 std::iter::once(*center).chain(clip.iter().copied()).collect()
             }
@@ -1106,6 +1159,7 @@ impl Geometry {
             }
             (Geometry::Hatch { .. }, _) => self.translated(to - self.bounds().center()),
             (Geometry::Table { position, .. }, _) => self.translated(to - *position),
+            (Geometry::AttributeDefinition { position, .. }, _) => self.translated(to - *position),
             (Geometry::Wipeout { points }, i) => {
                 let mut points = points.clone();
                 if let Some(p) = points.get_mut(i) {

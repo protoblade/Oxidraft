@@ -10,6 +10,7 @@ mod align;
 mod annotate;
 mod arc;
 mod array;
+mod attdef;
 mod attribute;
 mod block;
 mod break_join;

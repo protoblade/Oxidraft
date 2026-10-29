@@ -133,6 +133,13 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
             out.push(at("View center:", *view_center));
             out.push(value("Scale:", format!("1:{}", n(view_height / height.max(1e-12)).trim())));
         }
+        Geometry::AttributeDefinition { tag, prompt, default, position, height, constant, .. } => {
+            out.push(value("Tag:", tag));
+            out.push(value("Prompt:", prompt));
+            out.push(value(if *constant { "Value (constant):" } else { "Default value:" }, default));
+            out.push(at("start point,", *position));
+            out.push(value("Height:", n(*height).trim()));
+        }
         Geometry::Wipeout { points } => {
             for p in points {
                 out.push(at("at point", *p));

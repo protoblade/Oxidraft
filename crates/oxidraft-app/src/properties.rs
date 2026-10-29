@@ -433,6 +433,27 @@ impl OxidraftApp {
                     ("View center Y", Value::Text(fmt(view_center.y))),
                 ]
             }
+            Geometry::AttributeDefinition {
+                tag,
+                prompt,
+                default,
+                position,
+                height,
+                rotation,
+                invisible,
+                constant,
+                ..
+            } => vec![
+                ("Tag", Value::Edit(tag.clone())),
+                ("Prompt", Value::Edit(prompt.clone())),
+                ("Default", Value::Edit(default.clone())),
+                ("Position X", Value::Number(position.x)),
+                ("Position Y", Value::Number(position.y)),
+                ("Height", Value::Number(*height)),
+                ("Rotation", Value::Angle(*rotation)),
+                ("Invisible", yes_no(*invisible)),
+                ("Constant", yes_no(*constant)),
+            ],
             Geometry::Wipeout { points } => vec![
                 ("Vertices", Value::Text(points.len().to_string())),
                 ("Area", Value::Text(fmt(hatch::signed_area(points).abs()))),
@@ -675,6 +696,10 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
         (Geometry::Viewport { height, view_height, locked: false, .. }, "Custom scale") if v > 0.0 => {
             *view_height = *height / v;
         }
+        (Geometry::AttributeDefinition { position, .. }, "Position X") => position.x = v,
+        (Geometry::AttributeDefinition { position, .. }, "Position Y") => position.y = v,
+        (Geometry::AttributeDefinition { height, .. }, "Height") if v > 0.0 => *height = v,
+        (Geometry::AttributeDefinition { rotation, .. }, "Rotation") => *rotation = v.rem_euclid(360.0),
         (Geometry::Table { position, .. }, "Position X") => position.x = v,
         (Geometry::Table { position, .. }, "Position Y") => position.y = v,
         (Geometry::Table { rotation, .. }, "Rotation") => *rotation = v.rem_euclid(360.0),
@@ -712,6 +737,13 @@ fn with_text_property(g: &Geometry, label: &str, s: &str) -> Option<Geometry> {
         }
         (Geometry::Hatch { pattern, .. }, "Pattern") => *pattern = HatchPattern::from_name(s)?,
         (Geometry::Viewport { on, .. }, "On") => *on = s == "Yes",
+        (Geometry::AttributeDefinition { tag, .. }, "Tag") if !s.trim().is_empty() && !s.contains(' ') => {
+            *tag = s.trim().to_uppercase();
+        }
+        (Geometry::AttributeDefinition { prompt, .. }, "Prompt") => *prompt = s.to_string(),
+        (Geometry::AttributeDefinition { default, .. }, "Default") => *default = s.to_string(),
+        (Geometry::AttributeDefinition { invisible, .. }, "Invisible") => *invisible = s == "Yes",
+        (Geometry::AttributeDefinition { constant, .. }, "Constant") => *constant = s == "Yes",
         (Geometry::Viewport { locked, .. }, "Display locked") => *locked = s == "Yes",
         (Geometry::Viewport { height, view_height, locked: false, .. }, "Standard scale") => {
             *view_height = *height * scale_ratio(s)?;

@@ -121,6 +121,17 @@ const BLOCK_SMALL: &[Tool] = &[
     tool(Icon::CreateBlock, "Create", Some("BLOCK"), "Creates a block from objects (B)"),
     tool(Icon::EditReference, "Edit", Some("BEDIT"), "Edits a block definition in the Block Editor (BE)"),
 ];
+/// The Insert tab's Block Definition panel.
+const BLOCK_DEFINITION: &[Tool] = &[
+    tool(
+        Icon::Text,
+        "Define Attributes",
+        Some("ATTDEF"),
+        "Defines an attribute for a block's references to ask for (ATT)",
+    ),
+    tool(Icon::EditReference, "Edit Attribute", Some("EATTEDIT"), "Edits a reference's attribute values"),
+    tool(Icon::Properties, "Synchronize", Some("ATTSYNC"), "Gives a block's references the attributes it now defines"),
+];
 const LAYER_TOOLS: &[Tool] = &[
     tool(Icon::LayerIsolate, "", Some("LAYISO"), "Isolate: locks every layer but those of the selected objects"),
     tool(Icon::LayerUnisolate, "", Some("LAYUNISO"), "Unisolate: puts back the layers Isolate changed"),
@@ -306,6 +317,13 @@ impl OxidraftApp {
             self.large_tool(ui, &BLOCK_INSERT);
             ui.vertical(|ui| {
                 for t in BLOCK_SMALL {
+                    self.small_tool(ui, t);
+                }
+            });
+        });
+        ribbon_panel(ui, "Block Definition", |ui| {
+            ui.vertical(|ui| {
+                for t in BLOCK_DEFINITION {
                     self.small_tool(ui, t);
                 }
             });

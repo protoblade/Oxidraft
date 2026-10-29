@@ -137,6 +137,72 @@ pub struct Block {
     pub entities: Vec<BlockEntity>,
 }
 
+impl Block {
+    /// What a new reference asks for: the block's attribute definitions
+    /// that aren't constant, as (tag, prompt, default).
+    pub fn attribute_prompts(&self) -> Vec<(String, String, String)> {
+        self.entities
+            .iter()
+            .filter_map(|be| match &be.geometry {
+                Geometry::AttributeDefinition { tag, prompt, default, constant: false, .. } => {
+                    Some((tag.clone(), prompt.clone(), default.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A reference's attributes, placed as it is: each definition's value
+    /// is `value_of` its tag (or its default).
+    pub fn attributes_for(
+        &self,
+        placement: &crate::entity::Placement,
+        value_of: impl Fn(&str) -> Option<String>,
+    ) -> Vec<crate::entity::Attribute> {
+        self.entities
+            .iter()
+            .filter_map(|be| {
+                let Geometry::AttributeDefinition {
+                    tag,
+                    default,
+                    position,
+                    height,
+                    rotation,
+                    attach,
+                    invisible,
+                    constant: false,
+                    ..
+                } = &be.geometry
+                else {
+                    return None;
+                };
+                let text = Geometry::Text {
+                    position: *position,
+                    height: *height,
+                    rotation: *rotation,
+                    width: 0.0,
+                    attach: *attach,
+                    content: String::new(),
+                };
+                let Geometry::Text { position, height, rotation, .. } = placement.place(self.base, &text) else {
+                    return None;
+                };
+                Some(crate::entity::Attribute {
+                    tag: tag.clone(),
+                    value: value_of(tag).unwrap_or_else(|| default.clone()),
+                    layer: be.layer.clone(),
+                    color: be.color,
+                    position,
+                    height,
+                    rotation,
+                    attach: *attach,
+                    invisible: *invisible,
+                })
+            })
+            .collect()
+    }
+}
+
 /// The layer table and the current layer, recorded whole for undo.
 #[derive(Debug, Clone, PartialEq)]
 struct LayerTable {
@@ -857,8 +923,31 @@ impl Document {
         if let Some(def) = self.block(block).filter(|_| depth < MAX_BLOCK_DEPTH) {
             for be in &def.entities {
                 let inner_layer = if be.layer == "0" { layer } else { &be.layer };
+                // Attribute definitions are the references' attributes; a
+                // constant one shows its value as text.
+                let geometry = match &be.geometry {
+                    Geometry::AttributeDefinition { constant: false, .. } => continue,
+                    Geometry::AttributeDefinition {
+                        default,
+                        position,
+                        height,
+                        rotation,
+                        attach,
+                        invisible: false,
+                        ..
+                    } => Geometry::Text {
+                        position: *position,
+                        height: *height,
+                        rotation: *rotation,
+                        width: 0.0,
+                        attach: *attach,
+                        content: default.clone(),
+                    },
+                    Geometry::AttributeDefinition { .. } => continue,
+                    g => g.clone(),
+                };
                 if self.is_shown(inner_layer) {
-                    let placed = placement.place(def.base, &be.geometry);
+                    let placed = placement.place(def.base, &geometry);
                     let inner = (be.color, be.linetype.as_str(), be.lineweight);
                     self.expand_into(&placed, inner_layer, inner, &own, depth + 1, out);
                 }

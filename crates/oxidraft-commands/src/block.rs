@@ -61,16 +61,15 @@ impl Command for DefineBlock {
                         geometry: e.geometry.clone(),
                     })
                     .collect();
-                ctx.doc.define_block(Block { name: name.clone(), base: *base, entities });
+                let block = Block { name: name.clone(), base: *base, entities };
+                // The objects become a reference, its attributes at their defaults.
+                let placement = Placement::at(*base);
+                let attributes = block.attributes_for(&placement, |_| None);
+                ctx.doc.define_block(block);
                 for e in &selected {
                     ctx.doc.remove(e.id);
                 }
-                ctx.doc.add(Geometry::Insert {
-                    block: name.clone(),
-                    placement: Placement::at(*base),
-                    attributes: Vec::new(),
-                    clip: None,
-                });
+                ctx.doc.add(Geometry::Insert { block: name.clone(), placement, attributes, clip: None });
                 // INSERT will offer the new block first.
                 ctx.vars.insert_name = Some(name.clone());
                 let n = selected.len();
@@ -100,6 +99,9 @@ enum InsertStage {
     Point,
     Scale,
     Rotate,
+    /// Asking for the block's attribute values, one by one: where it goes,
+    /// and the values given so far.
+    Attributes(Point, Vec<String>),
 }
 
 /// INSERT: places a reference to a block, with optional scale and rotation.
@@ -130,6 +132,18 @@ impl InsertBlock {
     fn placement(&self, at: Point) -> Placement {
         Placement { position: at, scale: self.scale, rotation: self.rotation, mirror: false }
     }
+
+    /// The reference, its attributes the `values` given in turn.
+    fn place(&self, at: Point, values: Vec<String>, ctx: &mut Ctx) -> Step {
+        let Some(block) = &self.block else { return Step::Done };
+        let placement = self.placement(at);
+        let tags: Vec<String> = block.attribute_prompts().into_iter().map(|p| p.0).collect();
+        let value_of = |tag: &str| tags.iter().position(|t| t == tag).and_then(|i| values.get(i).cloned());
+        let attributes = block.attributes_for(&placement, value_of);
+        ctx.doc.add(Geometry::Insert { block: block.name.clone(), placement, attributes, clip: None });
+        ctx.vars.insert_name = Some(block.name.clone());
+        Step::Done
+    }
 }
 
 impl Command for InsertBlock {
@@ -139,7 +153,7 @@ impl Command for InsertBlock {
     }
 
     fn prompt(&self) -> Prompt {
-        match self.stage {
+        match &self.stage {
             InsertStage::Name => {
                 let p = Prompt::new("Enter block name or [?]");
                 match &self.default_name {
@@ -150,6 +164,16 @@ impl Command for InsertBlock {
             InsertStage::Point => Prompt::new("Specify insertion point").with_keywords(&["Scale", "Rotate"]),
             InsertStage::Scale => Prompt::new("Specify scale factor").with_default(format!("{:.4}", self.scale)),
             InsertStage::Rotate => Prompt::new("Specify rotation angle").with_default(format!("{:.0}", self.rotation)),
+            InsertStage::Attributes(_, values) => {
+                let prompts = self.block.as_ref().map(|b| b.attribute_prompts()).unwrap_or_default();
+                match prompts.get(values.len()) {
+                    Some((tag, prompt, default)) => {
+                        let text = if prompt.trim().is_empty() { tag.clone() } else { prompt.clone() };
+                        Prompt::new(text).with_default(default.clone())
+                    }
+                    None => Prompt::new("Enter attribute value"),
+                }
+            }
         }
     }
 
@@ -170,14 +194,28 @@ impl Command for InsertBlock {
             },
             (InsertStage::Point, Input::Point(at)) => {
                 let block = self.block.as_ref().ok_or("No block chosen.")?;
-                ctx.doc.add(Geometry::Insert {
-                    block: block.name.clone(),
-                    placement: self.placement(at),
-                    attributes: Vec::new(),
-                    clip: None,
+                // A block with attributes asks for their values first.
+                if !block.attribute_prompts().is_empty() {
+                    ctx.messages.push("Enter attribute values".into());
+                    self.stage = InsertStage::Attributes(at, Vec::new());
+                    return Ok(Step::Continue);
+                }
+                return Ok(self.place(at, Vec::new(), ctx));
+            }
+            (InsertStage::Attributes(at, values), input @ (Input::Text(_) | Input::Enter)) => {
+                let prompts = self.block.as_ref().map(|b| b.attribute_prompts()).unwrap_or_default();
+                let default = prompts.get(values.len()).map(|p| p.2.clone()).unwrap_or_default();
+                let mut values = values.clone();
+                values.push(match input {
+                    Input::Text(t) => t,
+                    _ => default,
                 });
-                ctx.vars.insert_name = Some(block.name.clone());
-                return Ok(Step::Done);
+                if values.len() < prompts.len() {
+                    self.stage = InsertStage::Attributes(*at, values);
+                    return Ok(Step::Continue);
+                }
+                let at = *at;
+                return Ok(self.place(at, values, ctx));
             }
             (InsertStage::Point, Input::Keyword("Scale")) => self.stage = InsertStage::Scale,
             (InsertStage::Point, Input::Keyword("Rotate")) => self.stage = InsertStage::Rotate,
@@ -204,6 +242,10 @@ impl Command for InsertBlock {
     }
 
     fn wants_text(&self) -> bool {
-        matches!(self.stage, InsertStage::Name)
+        matches!(self.stage, InsertStage::Name | InsertStage::Attributes(..))
+    }
+
+    fn text_with_spaces(&self) -> bool {
+        matches!(self.stage, InsertStage::Attributes(..))
     }
 }

@@ -447,6 +447,34 @@ impl Exporter {
             // The dxf crate has no VIEWPORT: they're added with their layouts.
             Geometry::Viewport { .. } => Vec::new(),
             Geometry::Wipeout { points } => wipeout_to_dxf(points).into_iter().collect(),
+            Geometry::AttributeDefinition {
+                tag,
+                prompt,
+                default,
+                position,
+                height,
+                rotation,
+                attach,
+                invisible,
+                constant,
+            } => {
+                let (horizontal_text_justification, vertical_text_justification) = to_text_justification(*attach);
+                let mut a = dxf::entities::AttributeDefinition {
+                    text_tag: tag.clone(),
+                    prompt: prompt.clone(),
+                    value: default.clone(),
+                    location: to_dxf(*position),
+                    second_alignment_point: to_dxf(*position),
+                    text_height: *height,
+                    rotation: *rotation,
+                    horizontal_text_justification,
+                    vertical_text_justification,
+                    ..Default::default()
+                };
+                a.set_is_invisible(*invisible);
+                a.set_is_constant(*constant);
+                vec![EntityType::AttributeDefinition(a)]
+            }
             // A table goes out as its lines and text.
             Geometry::Table { .. } => {
                 g.primitives().unwrap_or_default().iter().flat_map(|p| self.entities(p, layer)).collect()
@@ -863,17 +891,20 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
                 content: decode_control_codes(&t.value),
             }
         }
-        // Constant attribute definitions draw as text in every reference;
-        // the others are templates for ATTRIBs and aren't drawn.
-        EntityType::AttributeDefinition(a) if a.is_constant() => {
+        // Attribute definitions: in blocks, what references ask for (or,
+        // constant, show); elsewhere drawn as their tags.
+        EntityType::AttributeDefinition(a) => {
             let (attach, second) = text_justification(a.horizontal_text_justification, a.vertical_text_justification);
-            Geometry::Text {
+            Geometry::AttributeDefinition {
+                tag: a.text_tag.clone(),
+                prompt: a.prompt.clone(),
+                default: decode_control_codes(&a.value),
                 position: from_dxf(if second { &a.second_alignment_point } else { &a.location }),
                 height: a.text_height,
                 rotation: a.rotation,
-                width: 0.0,
                 attach,
-                content: decode_control_codes(&a.value),
+                invisible: a.is_invisible(),
+                constant: a.is_constant(),
             }
         }
         EntityType::MText(m) => {
@@ -974,10 +1005,10 @@ fn dimension_override(base: &dxf::entities::DimensionBase) -> Option<String> {
     Some(base.text.clone()).filter(|t| !t.is_empty() && t != "<>")
 }
 
-/// Attribute definitions other than constant ones only describe the
-/// attributes of future references; they aren't unsupported content.
-fn is_template(e: &EntityType) -> bool {
-    matches!(e, EntityType::AttributeDefinition(a) if !a.is_constant())
+/// Nothing read is only a template now: attribute definitions are
+/// objects of their own.
+fn is_template(_e: &EntityType) -> bool {
+    false
 }
 
 /// Builds a document from a DXF drawing. Attributes take their reference's
@@ -2182,7 +2213,9 @@ mod tests {
         assert_eq!(imported.skipped, 0, "attribute definitions and paper space aren't 'unsupported'");
         let doc = imported.document;
         assert_eq!(doc.len(), 2, "the reference and the text; the paper-space line stays out");
-        assert_eq!(doc.block("PRPARC").unwrap().entities.len(), 1, "only the symbol is block content");
+        // The symbol, and the attribute definition new references ask from.
+        let content: Vec<&str> = doc.block("PRPARC").unwrap().entities.iter().map(|e| e.geometry.name()).collect();
+        assert_eq!(content, ["Attribute Definition", "Circle"]);
 
         let reference = doc.entities().find(|e| matches!(e.geometry, Geometry::Insert { .. })).unwrap();
         let Geometry::Insert { attributes, .. } = &reference.geometry else { unreachable!() };

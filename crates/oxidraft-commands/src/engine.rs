@@ -11,6 +11,7 @@ use crate::{
     arc::Arc,
     array::Array,
     array::ArrayKind,
+    attdef::{AttDef, AttSync},
     attribute::AttDisp,
     attribute::EattEdit,
     block::DefineBlock,
@@ -348,6 +349,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["DBA"],
         description: "Add linear dimensions from the same baseline",
         make: Some(|| Box::new(DimChain::baseline())),
+    },
+    CommandInfo {
+        name: "ATTDEF",
+        aliases: &["ATT"],
+        description: "Define an attribute: what a block's references ask for and show",
+        make: Some(|| Box::new(AttDef::default())),
+    },
+    CommandInfo {
+        name: "ATTSYNC",
+        aliases: &[],
+        description: "Give a block's references the attributes its definitions now have",
+        make: Some(|| Box::new(AttSync)),
     },
     CommandInfo {
         name: "GROUP",
