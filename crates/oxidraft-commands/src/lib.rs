@@ -72,9 +72,10 @@ use oxidraft_model::{Document, EntityId, Geometry};
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Selection {
     pub ids: Vec<EntityId>,
-    /// The selection windows used, in drawing units. STRETCH moves only the
-    /// points inside them.
+    /// The selection windows and lassos used, in drawing units. STRETCH
+    /// moves only the points inside them.
     pub windows: Vec<Aabb>,
+    pub lassos: Vec<Vec<Point>>,
 }
 
 /// What a command asks for next.

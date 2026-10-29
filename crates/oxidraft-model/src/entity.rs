@@ -397,6 +397,21 @@ impl Geometry {
         }
     }
 
+    /// The outline as runs of points, arcs cut into chords of 10° at
+    /// most: what a lasso is tested against.
+    pub fn outline_runs(&self) -> Vec<Vec<Point>> {
+        self.outline()
+            .iter()
+            .map(|s| match s {
+                Seg::Line(l) => vec![l.start, l.end],
+                Seg::Arc(a) => {
+                    let n = ((a.sweep.abs() / 10.0).ceil() as usize).max(2);
+                    (0..=n).map(|i| s.point_at(i as f64 / n as f64)).collect()
+                }
+            })
+            .collect()
+    }
+
     /// True if `p` is inside a text box or a hatched area.
     pub fn contains(&self, p: Point) -> bool {
         match self {
@@ -810,7 +825,12 @@ impl Geometry {
     /// STRETCH: moves the defining points that lie inside any of `windows` by `d`.
     /// A circle can't deform, so it moves only when its center is inside.
     pub fn stretched(&self, windows: &[Aabb], d: Point) -> Geometry {
-        let inside = |p: Point| windows.iter().any(|w| w.contains(p));
+        self.stretched_where(&|p| windows.iter().any(|w| w.contains(p)), d)
+    }
+
+    /// Like [`Geometry::stretched`], moving the points `inside` says are
+    /// in the selection's windows or lassos.
+    pub fn stretched_where(&self, inside: &dyn Fn(Point) -> bool, d: Point) -> Geometry {
         let shift = |p: Point| if inside(p) { p + d } else { p };
         match self {
             Geometry::Point { position } => Geometry::Point { position: shift(*position) },

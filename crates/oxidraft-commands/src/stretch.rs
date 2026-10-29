@@ -1,5 +1,5 @@
 use oxidraft_geom::{Aabb, Point};
-use oxidraft_model::{Entity, Geometry};
+use oxidraft_model::{Entity, Geometry, snap};
 
 use crate::{
     Command, Ctx, Input, Prompt, Step, Vars,
@@ -18,18 +18,23 @@ pub struct Stretch {
     stage: Stage,
     selected: Vec<Entity>,
     windows: Vec<Aabb>,
+    lassos: Vec<Vec<Point>>,
 }
 
 impl Default for Stretch {
     fn default() -> Self {
-        Self { stage: Stage::Select, selected: Vec::new(), windows: Vec::new() }
+        Self { stage: Stage::Select, selected: Vec::new(), windows: Vec::new(), lassos: Vec::new() }
     }
 }
 
 impl Stretch {
+    /// Whether `p` is in one of the selection's windows or lassos.
+    fn inside(&self, p: Point) -> bool {
+        self.windows.iter().any(|w| w.contains(p)) || self.lassos.iter().any(|l| snap::in_polygon(l, p))
+    }
+
     fn finish(&self, d: Point, ctx: &mut Ctx) -> Step {
-        let windows = &self.windows;
-        apply(&self.selected, false, ctx, |g| g.stretched(windows, d));
+        apply(&self.selected, false, ctx, |g| g.stretched_where(&|p| self.inside(p), d));
         Step::Done
     }
 }
@@ -51,8 +56,8 @@ impl Command for Stretch {
         match (&self.stage, input) {
             (Stage::Select, Input::Selection(s)) => {
                 self.selected = selected_entities(&s, ctx);
-                self.windows = s.windows;
-                if self.windows.is_empty() && !self.selected.is_empty() {
+                (self.windows, self.lassos) = (s.windows, s.lassos);
+                if self.windows.is_empty() && self.lassos.is_empty() && !self.selected.is_empty() {
                     ctx.messages.push("No crossing window was used, so there is nothing to stretch.".into());
                     return Ok(Step::Done);
                 }
@@ -82,7 +87,8 @@ impl Command for Stretch {
     fn preview(&self, cursor: Point) -> Vec<Geometry> {
         let Stage::Second(base) = self.stage else { return Vec::new() };
         let d = cursor - base;
-        let mut out: Vec<Geometry> = self.selected.iter().map(|e| e.geometry.stretched(&self.windows, d)).collect();
+        let mut out: Vec<Geometry> =
+            self.selected.iter().map(|e| e.geometry.stretched_where(&|p| self.inside(p), d)).collect();
         out.push(Geometry::Line { start: base, end: cursor });
         out
     }

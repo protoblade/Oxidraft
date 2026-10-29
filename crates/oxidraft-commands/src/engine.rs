@@ -699,6 +699,8 @@ pub struct Engine {
     selection: Vec<EntityId>,
     /// Windows used to build `selection` (for STRETCH).
     selection_windows: Vec<Aabb>,
+    /// Lassos used to build `selection` (for STRETCH too).
+    selection_lassos: Vec<Vec<Point>>,
     /// First corner of a selection window in progress.
     window_start: Option<Point>,
     ortho: bool,
@@ -735,6 +737,7 @@ impl Engine {
             inputs: Vec::new(),
             selection: Vec::new(),
             selection_windows: Vec::new(),
+            selection_lassos: Vec::new(),
             window_start: None,
             ortho: false,
             polar: true,
@@ -1002,6 +1005,7 @@ impl Engine {
         self.window_start = None;
         self.selection = doc.entities().filter(|e| doc.is_selectable(e)).map(|e| e.id).collect();
         self.selection_windows.clear();
+        self.selection_lassos.clear();
     }
 
     /// Replaces the selection (QSELECT, SELECTSIMILAR), when no command runs.
@@ -1012,6 +1016,7 @@ impl Engine {
         self.window_start = None;
         self.selection = ids;
         self.selection_windows.clear();
+        self.selection_lassos.clear();
     }
 
     pub fn selection(&self) -> &[EntityId] {
@@ -1214,6 +1219,34 @@ impl Engine {
         self.end_single_selection(doc, p, tolerance);
     }
 
+    /// A lasso dragged at a selection prompt (or with no command): the
+    /// objects inside it, or with `crossing` inside or crossing it, join
+    /// the selection (Shift: leave it).
+    pub fn select_lasso(&mut self, ring: Vec<Point>, crossing: bool, shift: bool, doc: &mut Document, tolerance: f64) {
+        if !self.is_selecting() {
+            return;
+        }
+        self.window_start = None;
+        let ids = snap::polygon_select(doc, &ring, crossing);
+        let at = ring.last().copied().unwrap_or(Point::ORIGIN);
+        if !shift {
+            self.selection_lassos.push(ring);
+        }
+        self.add_to_selection(ids, shift);
+        self.end_single_selection(doc, at, tolerance);
+    }
+
+    /// One object picked at a selection prompt, as clicking it alone would
+    /// (the Selection list of overlapping objects).
+    pub fn select_object(&mut self, id: EntityId, at: Point, shift: bool, doc: &mut Document, tolerance: f64) {
+        if !self.is_selecting() {
+            return;
+        }
+        self.window_start = None;
+        self.add_to_selection(vec![id], shift);
+        self.end_single_selection(doc, at, tolerance);
+    }
+
     /// At a one-object prompt, the first object found ends the selection.
     fn end_single_selection(&mut self, doc: &mut Document, cursor: Point, tolerance: f64) {
         let single = self.active.as_ref().is_some_and(|a| a.cmd.single_selection());
@@ -1292,10 +1325,15 @@ impl Engine {
     fn clear_selection(&mut self) {
         self.selection.clear();
         self.selection_windows.clear();
+        self.selection_lassos.clear();
     }
 
     fn take_selection(&mut self) -> Selection {
-        Selection { ids: std::mem::take(&mut self.selection), windows: std::mem::take(&mut self.selection_windows) }
+        Selection {
+            ids: std::mem::take(&mut self.selection),
+            windows: std::mem::take(&mut self.selection_windows),
+            lassos: std::mem::take(&mut self.selection_lassos),
+        }
     }
 
     /// Starts a command by name, as if typed. Returns false if unknown.
@@ -2192,6 +2230,42 @@ mod tests {
         click(&mut e, &mut d, 8.0, 2.0);
         type_all(&mut e, &mut d, &["stretch", "0,0", "0,5"]);
         assert_eq!(lines(&d), vec![(Point::new(0.0, 0.0), Point::new(10.0, 5.0))]);
+    }
+
+    fn ring(points: &[(f64, f64)]) -> Vec<Point> {
+        points.iter().map(|&(x, y)| Point::new(x, y)).collect()
+    }
+
+    #[test]
+    fn a_lasso_selects_and_stretch_moves_the_points_inside_it() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["l", "0,0", "10,0", "10,10", ""]);
+        // A crossing lasso round the shared corner, at STRETCH's prompt.
+        type_all(&mut e, &mut d, &["s"]);
+        e.select_lasso(ring(&[(8.0, -2.0), (12.0, -2.0), (12.0, 2.0), (8.0, 2.0)]), true, false, &mut d, 0.5);
+        assert_eq!(e.selection().len(), 2);
+        type_all(&mut e, &mut d, &["", "0,0", "5,0"]);
+        assert_eq!(
+            lines(&d),
+            vec![(Point::new(0.0, 0.0), Point::new(15.0, 0.0)), (Point::new(15.0, 0.0), Point::new(10.0, 10.0))]
+        );
+        // A window lasso takes only what's wholly inside; Shift takes it out again.
+        e.select_lasso(ring(&[(-1.0, -1.0), (16.0, -1.0), (16.0, 1.0), (-1.0, 1.0)]), false, false, &mut d, 0.5);
+        assert_eq!(e.selection().len(), 1);
+        e.select_lasso(ring(&[(-1.0, -1.0), (16.0, -1.0), (16.0, 1.0), (-1.0, 1.0)]), false, true, &mut d, 0.5);
+        assert!(e.selection().is_empty());
+    }
+
+    #[test]
+    fn an_object_picked_from_the_selection_list_joins_the_selection() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["l", "0,0", "10,0", "", "l", "0,0", "10,0", ""]);
+        let under = d.entities().map(|x| x.id).min().unwrap();
+        type_all(&mut e, &mut d, &["e"]);
+        e.select_object(under, Point::new(5.0, 0.0), false, &mut d, 0.5);
+        type_all(&mut e, &mut d, &[""]);
+        assert_eq!(d.len(), 1);
+        assert!(d.entity(under).is_none(), "the one chosen went");
     }
 
     fn shift_click(e: &mut Engine, d: &mut Document, x: f64, y: f64) {

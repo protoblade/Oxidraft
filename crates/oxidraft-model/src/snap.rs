@@ -318,6 +318,80 @@ pub fn window_select(doc: &Document, first: Point, second: Point) -> Vec<EntityI
         .collect()
 }
 
+/// Whether `p` is inside the polygon `ring` (even-odd).
+pub fn in_polygon(ring: &[Point], p: Point) -> bool {
+    let mut inside = false;
+    for (i, a) in ring.iter().enumerate() {
+        let b = ring[(i + 1) % ring.len()];
+        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// Whether the segment from `a` to `b` crosses an edge of `ring`.
+fn crosses(ring: &[Point], a: Point, b: Point) -> bool {
+    let s = oxidraft_geom::Segment::new(a, b);
+    (0..ring.len()).any(|i| {
+        let edge = oxidraft_geom::Segment::new(ring[i], ring[(i + 1) % ring.len()]);
+        oxidraft_geom::intersect::segment_segment(s, edge).is_some()
+    })
+}
+
+/// Entities selected by a lasso, as AutoCAD's WPolygon and CPolygon:
+/// those entirely inside `ring`, or with `crossing` those inside it or
+/// crossing it (or, for a hatch or text, with the lasso inside them).
+pub fn polygon_select(doc: &Document, ring: &[Point], crossing: bool) -> Vec<EntityId> {
+    let Some(&first) = ring.first() else { return Vec::new() };
+    if ring.len() < 3 {
+        return Vec::new();
+    }
+    let bounds = ring.iter().fold(Aabb::from_points(first, first), |b, p| b.union(Aabb::from_points(*p, *p)));
+    let overlaps = |b: &Aabb| {
+        b.max.x >= bounds.min.x && b.min.x <= bounds.max.x && b.max.y >= bounds.min.y && b.min.y <= bounds.max.y
+    };
+    doc.entities()
+        .filter(|e| doc.is_selectable(e))
+        .filter(|e| {
+            let b = doc.entity_bounds(e);
+            if crossing { overlaps(&b) } else { bounds.contains_aabb(&b) }
+        })
+        .filter(|e| {
+            let parts: Vec<Geometry> = doc.expanded(e).into_iter().chain(doc.clip_frame(&e.geometry)).collect();
+            let runs: Vec<Vec<Point>> = parts.iter().flat_map(Geometry::outline_runs).collect();
+            let cut = || runs.iter().any(|r| r.windows(2).any(|w| crosses(ring, w[0], w[1])));
+            let mut points = runs.iter().flatten();
+            if crossing {
+                points.any(|p| in_polygon(ring, *p)) || cut() || parts.iter().any(|g| g.contains(first))
+            } else {
+                points.all(|p| in_polygon(ring, *p)) && !cut()
+            }
+        })
+        .map(|e| e.id)
+        .collect()
+}
+
+/// The objects under the pickbox at `p` that are about as close as the
+/// nearest one (within `slack`): overlapping objects, to choose between.
+/// The one drawn on top comes first.
+pub fn pick_overlapping(doc: &Document, p: Point, tolerance: f64, slack: f64) -> Vec<EntityId> {
+    let near: Vec<(f64, &Entity)> = doc
+        .entities_in_draw_order()
+        .into_iter()
+        .filter(|e| doc.is_selectable(e))
+        .map(|e| (doc.entity_distance(e, p), e))
+        .filter(|(d, _)| *d <= tolerance)
+        .collect();
+    let nearest = near.iter().map(|(d, _)| *d).fold(f64::INFINITY, f64::min);
+    let mut ids: Vec<EntityId> = near.iter().filter(|(d, _)| *d <= nearest + slack).map(|(_, e)| e.id).collect();
+    ids.reverse();
+    if ids.is_empty() {
+        ids.extend(pick(doc, p, tolerance));
+    }
+    ids
+}
+
 /// The entity whose curve is closest to `p`, if within `tolerance`.
 /// Objects on locked, off or frozen layers can't be picked, nor, while a
 /// reference is edited in place, objects outside its working set.
@@ -352,8 +426,41 @@ pub fn pick_where(doc: &Document, p: Point, tolerance: f64, ok: impl Fn(&Entity)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Vertex;
 
     const RUNNING: [SnapKind; 7] = SnapKind::DEFAULT_RUNNING;
+
+    #[test]
+    fn a_lasso_selects_inside_or_crossing_it() {
+        let mut d = Document::new();
+        let inside = d.add(Geometry::Line { start: Point::new(1.0, 1.0), end: Point::new(2.0, 1.0) });
+        let crossing = d.add(Geometry::Line { start: Point::new(3.0, 1.0), end: Point::new(9.0, 1.0) });
+        // Its ends are in the lasso's arms, but it leaves through the notch.
+        let bridging = d.add(Geometry::Line { start: Point::new(1.0, 4.0), end: Point::new(5.0, 4.0) });
+        let circle = d.add(Geometry::Circle { center: Point::new(20.0, 20.0), radius: 1.0 });
+        // A U: two arms joined at the bottom, the notch between them open at the top.
+        let ring = [(0.0, 0.0), (6.0, 0.0), (6.0, 5.0), (4.0, 5.0), (4.0, 2.0), (2.0, 2.0), (2.0, 5.0), (0.0, 5.0)]
+            .map(|(x, y)| Point::new(x, y));
+        assert_eq!(polygon_select(&d, &ring, false), vec![inside]);
+        let mut crossed = polygon_select(&d, &ring, true);
+        crossed.sort_by_key(|id| id.0);
+        assert_eq!(crossed, vec![inside, crossing, bridging]);
+        assert!(!crossed.contains(&circle));
+    }
+
+    #[test]
+    fn overlapping_objects_are_all_offered_top_first() {
+        let mut d = Document::new();
+        let under = d.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });
+        let over = d.add(Geometry::Polyline {
+            vertices: vec![Vertex::at(Point::new(0.0, 0.0)), Vertex::at(Point::new(10.0, 0.0))],
+            closed: false,
+        });
+        let near = d.add(Geometry::Line { start: Point::new(0.0, 0.8), end: Point::new(10.0, 0.8) });
+        assert_eq!(pick_overlapping(&d, Point::new(5.0, 0.0), 1.0, 0.1), vec![over, under]);
+        // Close by, but not on top of each other: only the nearest.
+        assert_eq!(pick_overlapping(&d, Point::new(5.0, 0.7), 1.0, 0.1), vec![near]);
+    }
 
     #[test]
     fn snaps_to_nearest_endpoint_or_midpoint() {
