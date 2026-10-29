@@ -818,6 +818,7 @@ impl OxidraftApp {
             Geometry::Text { .. } => return self.draw_text(painter, rect, g, stroke),
             Geometry::Hatch { .. } => return self.draw_hatch(painter, rect, g, stroke),
             Geometry::Image { .. } => return self.draw_image(painter, rect, g, stroke),
+            Geometry::Wipeout { points } => return self.draw_wipeout(painter, rect, points, stroke),
             Geometry::Polyline { vertices, closed }
                 if vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0) =>
             {
@@ -828,6 +829,25 @@ impl OxidraftApp {
         let points = self.screen_path(rect, g);
         if points.len() >= 2 {
             painter.add(Shape::line(points, stroke));
+        }
+    }
+
+    /// A wipeout: its polygon in the background's color, hiding what's
+    /// under it, and its frame unless WIPEOUTFRAME hides it.
+    fn draw_wipeout(&self, painter: &Painter, rect: Rect, points: &[Point], stroke: Stroke) {
+        let mut mesh = egui::Mesh::default();
+        let fill = theme::background_now();
+        for t in oxidraft_model::hatch::triangles(&[points.to_vec()]) {
+            let i = mesh.vertices.len() as u32;
+            for p in t {
+                mesh.colored_vertex(self.view.to_screen(rect, p), fill);
+            }
+            mesh.add_triangle(i, i + 1, i + 2);
+        }
+        painter.add(Shape::mesh(mesh));
+        if self.doc.wipeout_frame() != 0 {
+            let ring: Vec<Pos2> = points.iter().map(|p| self.view.to_screen(rect, *p)).collect();
+            painter.add(Shape::closed_line(ring, stroke));
         }
     }
 

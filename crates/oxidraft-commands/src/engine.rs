@@ -3,6 +3,7 @@ use oxidraft_model::{Document, EntityId, Geometry, snap};
 
 use crate::{
     Command, Ctx, Input, Prompt, Selection, Step, UiRequest, Vars, ViewRequest,
+    align::{Align, ArrayPath, ChangeSpace, Reverse},
     annotate::Dimension,
     annotate::MLeader,
     annotate::MText,
@@ -70,6 +71,7 @@ use crate::{
     underlay::AttachImage,
     underlay::ImageClip,
     views::{Toggle, ViewCommand, Vports},
+    wipeout::Wipeout,
     xclip::{Clip, XClipCommand},
     xline::ConstructionLine,
     xref::AttachXref,
@@ -345,6 +347,36 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["DBA"],
         description: "Add linear dimensions from the same baseline",
         make: Some(|| Box::new(DimChain::baseline())),
+    },
+    CommandInfo {
+        name: "ALIGN",
+        aliases: &["AL"],
+        description: "Move, turn and scale objects so two points land on two others",
+        make: Some(|| Box::new(Align::default())),
+    },
+    CommandInfo {
+        name: "REVERSE",
+        aliases: &[],
+        description: "Reverse the direction of lines, polylines and splines",
+        make: Some(|| Box::new(Reverse)),
+    },
+    CommandInfo {
+        name: "ARRAYPATH",
+        aliases: &[],
+        description: "Copy objects evenly along a path curve",
+        make: Some(|| Box::new(ArrayPath::default())),
+    },
+    CommandInfo {
+        name: "CHSPACE",
+        aliases: &[],
+        description: "Move objects between a layout's paper space and model space through a viewport",
+        make: Some(|| Box::new(ChangeSpace)),
+    },
+    CommandInfo {
+        name: "WIPEOUT",
+        aliases: &[],
+        description: "Hide what's under a polygon of points or a closed polyline; Frames shows or hides frames",
+        make: Some(|| Box::new(Wipeout::default())),
     },
     CommandInfo {
         name: "TABLE",
@@ -3393,6 +3425,7 @@ mod tests {
             "CIRCLE",
             "COPY",
             "CHAMFER",
+            "CHSPACE",
             "COLORTHEME",
             "COPYCLIP",
             "CUTCLIP",

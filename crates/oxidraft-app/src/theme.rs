@@ -219,6 +219,12 @@ pub fn model_bg() -> Color32 {
     model().background
 }
 
+/// What's behind the drawing being drawn now: a layout's white sheet,
+/// or the drawing area's background (what a wipeout fills with).
+pub fn background_now() -> Color32 {
+    if PAPER.get() { Color32::WHITE } else { model_bg() }
+}
+
 /// Oxidraft's own app button (rust orange), in either theme.
 pub const BRAND: Color32 = Color32::from_rgb(196, 84, 30);
 

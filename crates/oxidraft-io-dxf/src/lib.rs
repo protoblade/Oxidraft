@@ -446,6 +446,7 @@ impl Exporter {
             Geometry::Image { .. } => underlay_dxf::entity(g, &self.images).into_iter().collect(),
             // The dxf crate has no VIEWPORT: they're added with their layouts.
             Geometry::Viewport { .. } => Vec::new(),
+            Geometry::Wipeout { points } => wipeout_to_dxf(points).into_iter().collect(),
             // A table goes out as its lines and text.
             Geometry::Table { .. } => {
                 g.primitives().unwrap_or_default().iter().flat_map(|p| self.entities(p, layer)).collect()
@@ -701,8 +702,57 @@ fn clip_filter(
 }
 
 /// Converts one DXF entity, or `None` for types Oxidraft doesn't support yet.
+/// A WIPEOUT: its boundary, given in the unit image's pixels (from its
+/// center, y down) and placed by its corner and vectors.
+fn wipeout_from_dxf(w: &dxf::entities::Wipeout) -> Option<Geometry> {
+    let (o, u, v) =
+        (from_dxf(&w.location), Point::new(w.u_vector.x, w.u_vector.y), Point::new(w.v_vector.x, w.v_vector.y));
+    let (sx, sy) = (w.image_size.x.max(1.0), w.image_size.y.max(1.0));
+    let place = |p: &DxfPoint| o + u * (p.x + 0.5) + v * (sy - (p.y + 0.5));
+    let mut points: Vec<Point> = w.clipping_vertices.iter().map(place).collect();
+    // A rectangle is given by two corners.
+    if points.len() == 2 {
+        let (a, b) = (points[0], points[1]);
+        points = vec![a, Point::new(b.x, a.y), b, Point::new(a.x, b.y)];
+    }
+    if points.len() > 3 && points[0].distance(points[points.len() - 1]) < 1e-9 {
+        points.pop();
+    }
+    if points.len() < 3 {
+        // No boundary: the whole unit image.
+        points = vec![o, o + u * sx, o + u * sx + v * sy, o + v * sy];
+    }
+    Some(Geometry::Wipeout { points })
+}
+
+/// A wipeout as a DXF WIPEOUT: a unit image over its bounds, clipped to
+/// its boundary.
+fn wipeout_to_dxf(points: &[Point]) -> Option<EntityType> {
+    let &first = points.first()?;
+    let b = points
+        .iter()
+        .fold(oxidraft_geom::Aabb::from_points(first, first), |b, p| b.union(oxidraft_geom::Aabb::from_points(*p, *p)));
+    let (w, h) = (b.width().max(1e-9), b.height().max(1e-9));
+    let local = |p: &Point| DxfPoint::new((p.x - b.min.x) / w - 0.5, 0.5 - (p.y - b.min.y) / h, 0.0);
+    let mut vertices: Vec<DxfPoint> = points.iter().map(local).collect();
+    vertices.push(local(&first));
+    Some(EntityType::Wipeout(dxf::entities::Wipeout {
+        location: DxfPoint::new(b.min.x, b.min.y, 0.0),
+        u_vector: dxf::Vector::new(w, 0.0, 0.0),
+        v_vector: dxf::Vector::new(0.0, h, 0.0),
+        image_size: dxf::Vector::new(1.0, 1.0, 0.0),
+        display_options_flags: 7,
+        use_clipping: true,
+        clipping_type: dxf::enums::ImageClippingBoundaryType::Polygonal,
+        clipping_vertex_count: vertices.len() as i32,
+        clipping_vertices: vertices,
+        ..Default::default()
+    }))
+}
+
 fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
     Some(match specific {
+        EntityType::Wipeout(w) => return wipeout_from_dxf(w),
         EntityType::ModelPoint(p) => Geometry::Point { position: from_dxf(&p.location) },
         EntityType::Line(l) => Geometry::Line { start: from_dxf(&l.p1), end: from_dxf(&l.p2) },
         EntityType::Circle(c) => Geometry::Circle { center: from_dxf(&c.center), radius: c.radius },
@@ -936,6 +986,24 @@ struct Raw {
     layouts: layout_dxf::RawLayouts,
 }
 
+/// WIPEOUT boundaries as the file has them, to put right what the dxf
+/// crate read: by handle, or else in file order.
+struct RawWipeouts<'a> {
+    all: &'a [(u64, Vec<Point>)],
+    next: usize,
+}
+
+impl RawWipeouts<'_> {
+    fn mend(&mut self, g: &mut Geometry, handle: u64) {
+        let Geometry::Wipeout { points } = g else { return };
+        let found = self.all.iter().position(|(h, _)| *h == handle && handle != 0).unwrap_or(self.next);
+        if let Some((_, raw)) = self.all.get(found).filter(|(_, p)| p.len() >= 3) {
+            *points = raw.clone();
+        }
+        self.next = found + 1;
+    }
+}
+
 /// An INSERT's clip from the file, if it has one.
 fn attach_clip(g: &mut Geometry, e: &DxfEntity, clips: &HashMap<u64, oxidraft_model::XClip>) {
     if let Geometry::Insert { clip, .. } = g
@@ -1112,6 +1180,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
     let mut placed: Vec<(u64, f64, EntityId)> = Vec::new();
     let total: usize = drawing.entities().map(attribute_count).sum();
     let styles = raw.attributes.filter(|s| s.len() == total);
+    let mut wipeouts = RawWipeouts { all: &raw.layouts.wipeouts, next: 0 };
     let mut next = 0;
     for (position, e) in drawing.entities().enumerate() {
         let n = attribute_count(e);
@@ -1136,6 +1205,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         };
         match picture.or_else(|| geometry_from_dxf(&e.specific)) {
             Some(mut g) => {
+                wipeouts.mend(&mut g, e.common.handle.0);
                 style_attributes(&mut g, style, &e.common.layer);
                 attach_clip(&mut g, e, &raw.clips);
                 let (color, linetype) = (from_dxf_color(&e.common.color), linetype_from_dxf(&e.common.line_type_name));
@@ -1166,6 +1236,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
             };
             match picture.or_else(|| geometry_from_dxf(&e.specific)) {
                 Some(mut g) => {
+                    wipeouts.mend(&mut g, e.common.handle.0);
                     style_attributes(&mut g, None, &e.common.layer);
                     attach_clip(&mut g, e, &raw.clips);
                     let id = doc.add_styled(
@@ -1759,10 +1830,18 @@ mod tests {
         };
         doc.save_view(view.clone()).unwrap();
         doc.add(oxidraft_model::table::new_table(Point::new(0.0, 0.0), 2, 1, 10.0, 5.0, 2.5));
+        let triangle = vec![Point::new(100.0, 0.0), Point::new(140.0, 0.0), Point::new(120.0, 30.0)];
+        doc.add(Geometry::Wipeout { points: triangle.clone() });
         let mut buf = Vec::new();
         write(&doc, &mut buf).unwrap();
         let back = read(&mut buf.as_slice()).unwrap().document;
         assert_eq!(back.views(), &[view]);
+        let wipeout = back.entities().find_map(|e| match &e.geometry {
+            Geometry::Wipeout { points } => Some(points.clone()),
+            _ => None,
+        });
+        let wipeout = wipeout.expect("the wipeout came back");
+        assert!(wipeout.len() == 3 && wipeout.iter().zip(&triangle).all(|(a, b)| a.distance(*b) < 1e-6), "{wipeout:?}");
         // Three rows: four lines across, three down; and the title.
         let lines = back.entities().filter(|e| matches!(e.geometry, Geometry::Line { .. })).count();
         let texts = back.entities().filter(|e| matches!(e.geometry, Geometry::Text { .. })).count();

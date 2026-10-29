@@ -586,8 +586,9 @@ impl OxidraftApp {
     /// Opens what commands asked for. Returns true if there was anything.
     fn handle_ui_requests(&mut self, ctx: &egui::Context) -> bool {
         let requests = self.engine.take_ui_requests();
-        for r in &requests {
-            match *r {
+        let any = !requests.is_empty();
+        for r in requests {
+            match r {
                 UiRequest::EditAttributes(id) => {
                     self.edit_attributes(id);
                 }
@@ -595,6 +596,7 @@ impl OxidraftApp {
                 UiRequest::MaximizeViewport(id) => self.enter_viewport(id, true),
                 UiRequest::EditTable(id) => self.open_table_editor(id),
                 UiRequest::Tiling(tiling) => self.set_tiling(tiling),
+                UiRequest::ChangeSpace(ids) => self.change_space(&ids),
                 UiRequest::SaveXrefEdit => self.prepare_xref_edit_save(),
                 UiRequest::ColorTheme(n) => {
                     let color_theme = if n == 1 { ColorTheme::Light } else { ColorTheme::Dark };
@@ -610,7 +612,7 @@ impl OxidraftApp {
                 }
             }
         }
-        !requests.is_empty()
+        any
     }
 
     /// Where dialogs may go: above the command line, which floats over

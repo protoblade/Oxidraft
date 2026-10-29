@@ -220,6 +220,11 @@ pub enum Geometry {
         /// rectangular one.
         clip: Vec<Point>,
     },
+    /// A wipeout (WIPEOUT): the closed polygon through `points`, filled
+    /// with the background, hiding what's drawn before it.
+    Wipeout {
+        points: Vec<Point>,
+    },
     /// A table (TABLE): rows of cells hanging from its upper-left corner
     /// `position`, turned `rotation` degrees. `widths` are its columns',
     /// `heights` its rows', `cells` each row's texts (one per column) at
@@ -372,6 +377,7 @@ impl Geometry {
             Geometry::Image { .. } => "Raster Image",
             Geometry::Viewport { .. } => "Viewport",
             Geometry::Table { .. } => "Table",
+            Geometry::Wipeout { .. } => "Wipeout",
         }
     }
 
@@ -438,6 +444,7 @@ impl Geometry {
                 hatch::contains(&[b.to_vec()], p)
             }
             Geometry::Hatch { loops, .. } => hatch::contains(&hatch::polygons(loops), p),
+            Geometry::Wipeout { points } => hatch::contains(std::slice::from_ref(points), p),
             _ => false,
         }
     }
@@ -483,6 +490,10 @@ impl Geometry {
                 let grid = crate::table::Grid { position: *position, rotation: *rotation, widths, heights };
                 grid.lines().into_iter().map(Seg::Line).collect()
             }
+            Geometry::Wipeout { points } if points.len() >= 2 => {
+                (0..points.len()).map(|i| Seg::Line(Segment::new(points[i], points[(i + 1) % points.len()]))).collect()
+            }
+            Geometry::Wipeout { .. } => Vec::new(),
             // Its boundary, if it isn't rectangular.
             Geometry::Viewport { clip, .. } if clip.len() >= 3 => {
                 (0..clip.len()).map(|i| Seg::Line(Segment::new(clip[i], clip[(i + 1) % clip.len()]))).collect()
@@ -496,7 +507,7 @@ impl Geometry {
 
     pub fn is_closed(&self) -> bool {
         match self {
-            Geometry::Circle { .. } => true,
+            Geometry::Circle { .. } | Geometry::Wipeout { .. } => true,
             Geometry::Polyline { closed, .. } => *closed,
             Geometry::Ellipse(e) => e.is_full(),
             Geometry::Spline(s) => s.is_closed(),
@@ -748,6 +759,7 @@ impl Geometry {
                 v: f(*origin + *v) - f(*origin),
                 clip: clip.iter().map(|p| f(*p)).collect(),
             },
+            Geometry::Wipeout { points } => Geometry::Wipeout { points: points.iter().map(|p| f(*p)).collect() },
             // It turns and scales, but stays upright text in rows: mirrored,
             // what was its upper-right corner becomes its upper-left.
             Geometry::Table { position, rotation, widths, heights, cells, text_height } => {
@@ -899,6 +911,7 @@ impl Geometry {
             Geometry::Xline { base, .. } | Geometry::Ray { base, .. } => self.translated(shift(*base) - *base),
             Geometry::Image { origin, .. } => self.translated(shift(*origin) - *origin),
             Geometry::Table { position, .. } => self.translated(shift(*position) - *position),
+            Geometry::Wipeout { points } => Geometry::Wipeout { points: points.iter().map(|p| shift(*p)).collect() },
             Geometry::Viewport { center, .. } => self.translated(shift(*center) - *center),
             Geometry::Insert { placement, .. } => self.translated(shift(placement.position) - placement.position),
             Geometry::Text { position, .. } => self.translated(shift(*position) - *position),
@@ -980,6 +993,7 @@ impl Geometry {
             Geometry::Image { origin, u, v, .. } => crate::underlay::image_corners(*origin, *u, *v).to_vec(),
             Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => vec![*base, *base + *direction],
             Geometry::Table { position, .. } => vec![*position],
+            Geometry::Wipeout { points } => points.clone(),
             Geometry::Viewport { center, clip, .. } if clip.len() >= 3 => {
                 std::iter::once(*center).chain(clip.iter().copied()).collect()
             }
@@ -1092,6 +1106,13 @@ impl Geometry {
             }
             (Geometry::Hatch { .. }, _) => self.translated(to - self.bounds().center()),
             (Geometry::Table { position, .. }, _) => self.translated(to - *position),
+            (Geometry::Wipeout { points }, i) => {
+                let mut points = points.clone();
+                if let Some(p) = points.get_mut(i) {
+                    *p = to;
+                }
+                Geometry::Wipeout { points }
+            }
             (Geometry::Viewport { center, .. }, 0) => self.translated(to - *center),
             // A boundary's vertex: the viewport fits round the new shape.
             (Geometry::Viewport { clip, .. }, i) if clip.len() >= 3 => {

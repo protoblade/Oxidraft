@@ -433,6 +433,10 @@ impl OxidraftApp {
                     ("View center Y", Value::Text(fmt(view_center.y))),
                 ]
             }
+            Geometry::Wipeout { points } => vec![
+                ("Vertices", Value::Text(points.len().to_string())),
+                ("Area", Value::Text(fmt(hatch::signed_area(points).abs()))),
+            ],
             Geometry::Table { position, rotation, widths, heights, text_height, .. } => vec![
                 ("Position X", Value::Number(position.x)),
                 ("Position Y", Value::Number(position.y)),

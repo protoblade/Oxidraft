@@ -224,6 +224,17 @@ impl Spline {
         self
     }
 
+    /// The same curve run the other way (REVERSE).
+    pub fn reversed(&self) -> Option<Spline> {
+        let d = &self.def;
+        let (a, b) = (d.knots[0], d.knots[d.knots.len() - 1]);
+        let knots = d.knots.iter().rev().map(|k| a + b - k).collect();
+        let control = d.control.iter().rev().copied().collect();
+        let weights = d.weights.iter().rev().copied().collect();
+        let fit = d.fit.iter().rev().copied().collect();
+        Some(Spline::new(self.degree, control, knots, weights, self.closed)?.with_fit(fit))
+    }
+
     /// The same curve, remembering the fit points it was drawn through.
     pub fn with_fit(mut self, fit: Vec<Point>) -> Spline {
         Arc::make_mut(&mut self.def).fit = fit;

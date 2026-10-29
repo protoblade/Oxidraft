@@ -442,7 +442,9 @@ pub fn pick_where(doc: &Document, p: Point, tolerance: f64, ok: impl Fn(&Entity)
             doc.entities_in_draw_order()
                 .into_iter()
                 .filter(|e| ok(e))
-                .rfind(|e| matches!(e.geometry, Geometry::Hatch { .. }) && e.geometry.contains(p))
+                .rfind(|e| {
+                    matches!(e.geometry, Geometry::Hatch { .. } | Geometry::Wipeout { .. }) && e.geometry.contains(p)
+                })
                 .map(|e| e.id)
         })
 }

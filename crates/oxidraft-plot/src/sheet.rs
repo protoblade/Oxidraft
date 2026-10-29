@@ -253,6 +253,14 @@ impl<'a> Plotter<'a> {
                 self.items.push(Item::Image { name: image.clone(), origin: o, u: pu, v: pv, clip, gray });
             }
             Geometry::Text { .. } => self.text(g, color),
+            // White paper over what's under it, and its frame (WIPEOUTFRAME 1).
+            Geometry::Wipeout { points } => {
+                let polygon: Vec<Point> = points.iter().map(|p| self.paper(*p)).collect();
+                self.items.push(Item::Fill { polygons: vec![polygon.clone()], color: [255, 255, 255] });
+                if self.doc.wipeout_frame() == 1 {
+                    self.push_stroke(vec![Path { points: polygon, closed: true }], width, color, false);
+                }
+            }
             Geometry::Hatch { .. } => self.hatch(g, color, width),
             Geometry::Point { position } => self.point(*position, color, width),
             Geometry::Polyline { vertices, closed }

@@ -1672,3 +1672,31 @@ fn count_selects_a_blocks_references() {
     let history = h.state_mut().engine_mut().history().join("\n");
     assert!(history.contains("3 reference(s) of block \"TREE\"."));
 }
+
+#[test]
+fn chspace_moves_objects_onto_the_sheet_looking_the_same() {
+    let mut h = app_with_line();
+    h.get_by_role_and_label(Role::Tab, "Layout1").click();
+    h.run_steps(3);
+    type_all(&mut h, &["mv", "f", "ms"]);
+    h.run_steps(2);
+    let (id, before) = {
+        let doc = h.state_mut().document_mut();
+        let e = doc.entities().next().unwrap();
+        (e.id, e.geometry.clone())
+    };
+    let Geometry::Line { start, end } = before else { panic!() };
+    let on_screen = (h.state().screen_pos(start), h.state().screen_pos(end));
+    h.state_mut().engine_mut().set_selection(vec![id]);
+    type_all(&mut h, &["chspace"]);
+    h.run_steps(2);
+    // Out of model space, onto the sheet, where it showed.
+    type_all(&mut h, &["ps"]);
+    h.run_steps(2);
+    let doc = h.state_mut().document_mut();
+    let e = doc.entity(id).unwrap();
+    assert_eq!(e.space, doc.space());
+    let Geometry::Line { start, end } = e.geometry.clone() else { panic!() };
+    let now = (h.state().screen_pos(start), h.state().screen_pos(end));
+    assert!((now.0 - on_screen.0).length() < 1.0 && (now.1 - on_screen.1).length() < 1.0, "{now:?} vs {on_screen:?}");
+}

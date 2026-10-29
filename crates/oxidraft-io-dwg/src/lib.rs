@@ -442,6 +442,32 @@ mod tests {
     }
 
     #[test]
+    fn wipeouts_survive() {
+        let mut doc = Document::new();
+        // Not a rectangle: its bounds alone wouldn't do.
+        let square = vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(4.0, 10.0)];
+        doc.add(Geometry::Wipeout { points: square.clone() });
+        for version in [Version::R2018, Version::R2000] {
+            let back = read(&write(&doc, version).unwrap()).unwrap().imported.document;
+            let got = back.entities().find_map(|e| match &e.geometry {
+                Geometry::Wipeout { points } => Some(points.clone()),
+                _ => None,
+            });
+            let got = got.unwrap_or_else(|| panic!("no wipeout ({version:?})"));
+            assert!(
+                got.len() == 3 && got.iter().zip(&square).all(|(a, b)| a.distance(*b) < 1e-6),
+                "{version:?}: {got:?}"
+            );
+        }
+        let dxf = write_dxf(&doc).unwrap();
+        let back = oxidraft_io_dxf::read(&mut dxf.as_slice()).unwrap().document;
+        assert!(
+            back.entities().any(|e| matches!(&e.geometry, Geometry::Wipeout { points } if points.len() == 3)),
+            "via acadrust's DXF"
+        );
+    }
+
+    #[test]
     fn rejects_what_isnt_dwg() {
         assert!(read(b"0\nSECTION\n").is_err());
         assert!(is_dwg("plan.DWG") && !is_dwg("plan.dxf"));

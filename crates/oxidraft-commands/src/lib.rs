@@ -6,6 +6,7 @@
 //! [`Engine`] owns the active command, parses what the user types on the
 //! command line, and wraps each command run in one undo transaction.
 
+mod align;
 mod annotate;
 mod arc;
 mod array;
@@ -57,6 +58,7 @@ mod table;
 mod trim_extend;
 mod underlay;
 mod views;
+mod wipeout;
 mod xclip;
 mod xline;
 mod xref;
@@ -146,7 +148,7 @@ pub enum ViewRequest {
 }
 
 /// Something a command asks the app to show.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UiRequest {
     /// The Enhanced Attribute Editor for a block reference (EATTEDIT).
     EditAttributes(EntityId),
@@ -165,6 +167,8 @@ pub enum UiRequest {
     EditTable(EntityId),
     /// VPORTS: model space split into panes.
     Tiling(Tiling),
+    /// CHSPACE: these objects to the other space, through a viewport.
+    ChangeSpace(Vec<EntityId>),
 }
 
 /// Result of feeding one input to a command.

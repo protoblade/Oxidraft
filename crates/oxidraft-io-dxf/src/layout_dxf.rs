@@ -45,6 +45,9 @@ pub(crate) struct RawLayouts {
     /// The objects that are viewports' boundaries, which the viewports
     /// draw themselves.
     pub boundaries: Vec<u64>,
+    /// Each WIPEOUT's handle and boundary, in file order (the dxf crate
+    /// reads their boundaries' y wrongly).
+    pub wipeouts: Vec<(u64, Vec<Point>)>,
 }
 
 fn paper(plot: &[(i32, &str)]) -> Paper {
@@ -144,6 +147,10 @@ pub(crate) fn read(dxf: &[u8]) -> RawLayouts {
                     shapes.insert(h, (kind, i, end));
                 }
             }
+            "WIPEOUT" if section == "ENTITIES" || section == "BLOCKS" => {
+                let handle = body.iter().find(|p| p.0 == 5).and_then(|p| u64::from_str_radix(p.1, 16).ok());
+                out.wipeouts.push((handle.unwrap_or(0), wipeout(body)));
+            }
             "VIEWPORT" if section == "ENTITIES" => out.viewports.push(viewport(body, None)),
             "VIEWPORT" if section == "BLOCKS" => out.viewports.push(viewport(body, block.clone())),
             "BLOCK_RECORD" if section == "TABLES" => {
@@ -180,6 +187,26 @@ pub(crate) fn read(dxf: &[u8]) -> RawLayouts {
         }
     }
     out
+}
+
+/// A WIPEOUT's boundary: its vertices are in the unit image's pixels,
+/// from its center with y down, placed by its corner and vectors.
+fn wipeout(body: &[(i32, &str)]) -> Vec<Point> {
+    let num = |s: &str| s.parse::<f64>().unwrap_or(0.0);
+    let get = |code: i32| body.iter().find(|p| p.0 == code).map_or(0.0, |p| num(p.1));
+    let (o, u, v) = (Point::new(get(10), get(20)), Point::new(get(11), get(21)), Point::new(get(12), get(22)));
+    let sy = get(23).max(1.0);
+    let xs = body.iter().filter(|p| p.0 == 14).map(|p| num(p.1));
+    let ys = body.iter().filter(|p| p.0 == 24).map(|p| num(p.1));
+    let mut points: Vec<Point> = xs.zip(ys).map(|(x, y)| o + u * (x + 0.5) + v * (sy - (y + 0.5))).collect();
+    if points.len() == 2 {
+        let (a, b) = (points[0], points[1]);
+        points = vec![a, Point::new(b.x, a.y), b, Point::new(a.x, b.y)];
+    }
+    if points.len() > 3 && points[0].distance(points[points.len() - 1]) < 1e-9 {
+        points.pop();
+    }
+    points
 }
 
 /// A boundary's outline: a polyline's vertices, or a circle as 64 sides.

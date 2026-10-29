@@ -133,6 +133,11 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
             out.push(at("View center:", *view_center));
             out.push(value("Scale:", format!("1:{}", n(view_height / height.max(1e-12)).trim())));
         }
+        Geometry::Wipeout { points } => {
+            for p in points {
+                out.push(at("at point", *p));
+            }
+        }
         Geometry::Table { position, widths, heights, cells, .. } => {
             out.push(at("Insertion point:", *position));
             out.push(value("Columns:", widths.len().to_string()));

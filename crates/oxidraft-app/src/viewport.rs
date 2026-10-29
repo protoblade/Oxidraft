@@ -183,6 +183,75 @@ impl OxidraftApp {
         Some((frame, on_screen))
     }
 
+    /// CHSPACE: working in a viewport, the objects go from model space
+    /// onto its sheet; on a sheet, into model space through the viewport
+    /// worked in last (or the only one). Scaled and turned so they look
+    /// the same.
+    pub(crate) fn change_space(&mut self, ids: &[EntityId]) {
+        let (layout, id, to_paper) = match self.active_viewport {
+            Some(a) => (a.layout, a.id, true),
+            None => {
+                let space = self.doc.space();
+                if self.doc.layout(space).is_none() {
+                    self.engine.log("** Command not allowed in Model Tab **");
+                    return;
+                }
+                let on: Vec<EntityId> = self
+                    .doc
+                    .entities()
+                    .filter(|e| matches!(e.geometry, Geometry::Viewport { on: true, .. }))
+                    .map(|e| e.id)
+                    .collect();
+                let last = self.last_viewport.get(&space).copied().filter(|v| on.contains(v));
+                match last.or_else(|| (on.len() == 1).then(|| on[0])) {
+                    Some(v) => (space, v, false),
+                    None => {
+                        self.engine.log(
+                            "Work in the viewport to change space through first (double-click it), then CHSPACE there.",
+                        );
+                        return;
+                    }
+                }
+            }
+        };
+        let Some(f) = Frame::of(&self.doc, id) else { return };
+        let k = f.height / f.view_height;
+        // Model to paper: about the view center, turned by the twist, k times
+        // smaller, onto the viewport's center; paper to model undoes it.
+        let to_sheet = |g: &Geometry| {
+            g.translated(Point::ORIGIN - f.view_center)
+                .rotated(Point::ORIGIN, f.twist)
+                .scaled(Point::ORIGIN, k)
+                .translated(f.center - Point::ORIGIN)
+        };
+        let to_model = |g: &Geometry| {
+            g.translated(Point::ORIGIN - f.center)
+                .scaled(Point::ORIGIN, 1.0 / k)
+                .rotated(Point::ORIGIN, -f.twist)
+                .translated(f.view_center - Point::ORIGIN)
+        };
+        let target = if to_paper { layout } else { MODEL };
+        self.doc.begin("CHSPACE");
+        let mut count = 0;
+        for &e in ids {
+            let Some(g) = self.doc.entity(e).map(|x| x.geometry.clone()) else { continue };
+            if matches!(g, Geometry::Viewport { .. }) {
+                continue;
+            }
+            let moved = if to_paper { to_sheet(&g) } else { to_model(&g) };
+            self.doc.update(e, |x| {
+                x.geometry = moved;
+                x.space = target;
+            });
+            count += 1;
+        }
+        self.doc.commit();
+        let (from, to) = if to_paper { ("MODEL", "PAPER") } else { ("PAPER", "MODEL") };
+        self.engine.log(format!("{count} object(s) changed from {from} space to {to} space."));
+        let factor = if to_paper { k } else { 1.0 / k };
+        self.engine.log(format!("Objects were scaled by a factor of {factor:.6} to maintain visual appearance."));
+    }
+
     /// MSPACE: the viewport worked in last, or the layout's first.
     pub(crate) fn model_space_command(&mut self) {
         if self.active_viewport.is_some() {

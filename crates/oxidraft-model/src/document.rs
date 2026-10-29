@@ -251,6 +251,9 @@ pub struct Document {
     space: crate::layout::Space,
     /// Named views (VIEW), by name.
     views: Vec<NamedView>,
+    /// WIPEOUTFRAME: wipeouts' frames shown and plotted (1), shown but
+    /// not plotted (2), or neither (0).
+    wipeout_frame: u8,
 }
 
 /// A view saved by name (VIEW): what's shown, `height` tall and `width`
@@ -295,6 +298,7 @@ impl Document {
             layouts: Vec::new(),
             space: crate::layout::MODEL,
             views: Vec::new(),
+            wipeout_frame: 1,
         }
     }
 
@@ -346,6 +350,18 @@ impl Document {
         after.push(layout);
         self.set_layouts(after);
         id
+    }
+
+    /// WIPEOUTFRAME.
+    pub fn wipeout_frame(&self) -> u8 {
+        self.wipeout_frame
+    }
+
+    pub fn set_wipeout_frame(&mut self, mode: u8) {
+        if mode <= 2 && mode != self.wipeout_frame {
+            self.wipeout_frame = mode;
+            self.revision += 1;
+        }
     }
 
     /// The named views, by name.

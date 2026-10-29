@@ -85,7 +85,7 @@ impl Command for PointStyle {
 
 /// The point at distance `d` along consecutive segments, and the direction
 /// there (degrees).
-fn at_length(segs: &[Seg], mut d: f64) -> Option<(Point, f64)> {
+pub(crate) fn at_length(segs: &[Seg], mut d: f64) -> Option<(Point, f64)> {
     for s in segs {
         let len = s.length();
         if d <= len + EPSILON {
