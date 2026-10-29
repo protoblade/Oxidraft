@@ -135,6 +135,8 @@ pub struct OxidraftApp {
     pub(crate) font_map: String,
     /// VSLIDE's slide, shown until REDRAW.
     pub(crate) slide: Option<oxidraft_plot::slide::Slide>,
+    /// DATALINK's file, and the newest object before its table was placed.
+    pub(crate) pending_data_link: Option<(String, oxidraft_model::EntityId)>,
     /// QVLAYOUT's list open.
     pub(crate) qv_layouts: bool,
     /// APERTURE: how far object snaps reach, in screen points.
@@ -362,6 +364,7 @@ impl OxidraftApp {
             plot_stamp: false,
             font_map: String::new(),
             slide: None,
+            pending_data_link: None,
             qv_layouts: false,
             aperture: crate::canvas::APERTURE,
             save_time: 10,
@@ -823,6 +826,10 @@ impl OxidraftApp {
                 self.log_toggle("Hyperlink tooltips", !self.hyperlink_tips_off);
             }
             "MARKUPCLOSE" => self.markup_close(),
+            "DATALINK" | "DL" => self.data_link(),
+            "DATALINKUPDATE" | "DLU" => {
+                self.data_link_update();
+            }
             "MSLIDE" => self.make_slide(),
             "VSLIDE" => self.view_slide_file(),
             "DRAWINGRECOVERY" | "DRM" => self.recovery_open = true,
@@ -1348,6 +1355,7 @@ impl eframe::App for OxidraftApp {
         self.quick_view_layouts(&ctx);
         self.drawing_recovery(&ctx);
         self.autosave_tick();
+        self.finish_data_link();
         self.publish_dialog(&ctx);
         self.units_dialog(&ctx);
         self.rename_dialog(&ctx);

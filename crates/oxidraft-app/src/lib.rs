@@ -13,6 +13,7 @@ mod clipboard;
 mod cmdline;
 mod compare;
 mod customize;
+mod datalink;
 mod design_center;
 mod diminspect;
 mod drafting;

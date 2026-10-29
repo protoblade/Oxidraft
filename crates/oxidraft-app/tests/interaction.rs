@@ -3127,3 +3127,34 @@ fn slides_made_and_shown() {
     assert!(!h.state().showing_slide(), "REDRAW puts the drawing back");
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn data_linked_tables_place_and_update() {
+    let mut h = app_with_line();
+    let dir = std::env::temp_dir().join(format!("oxidraft-datalink-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let csv = dir.join("Doors.csv");
+    std::fs::write(&csv, "Mark,Width\nD1,900\n").unwrap();
+    h.state_mut().data_link_file(&csv).unwrap();
+    h.run_steps(1);
+    let at = screen(&h, 20.0, 40.0);
+    click(&mut h, at);
+    h.run_steps(2);
+    let table = |h: &mut Harness<'_, OxidraftApp>| {
+        h.state_mut().document_mut().entities().find_map(|e| match &e.geometry {
+            Geometry::Table { cells, .. } => Some((cells.clone(), e.hyperlink.as_ref().map(|l| l.description.clone()))),
+            _ => None,
+        })
+    };
+    let (cells, link) = table(&mut h).expect("the table was placed");
+    assert_eq!(cells[0][0], "Doors");
+    assert_eq!(cells[2], ["D1", "900"]);
+    assert_eq!(link.as_deref(), Some("Data link"));
+    // The spreadsheet changes; DATALINKUPDATE brings it in.
+    std::fs::write(&csv, "Mark,Width\nD1,900\nD2,1000\n").unwrap();
+    assert_eq!(h.state_mut().data_link_update(), 1);
+    let (cells, _) = table(&mut h).unwrap();
+    assert_eq!(cells.len(), 4);
+    assert_eq!(cells[3], ["D2", "1000"]);
+    std::fs::remove_dir_all(&dir).ok();
+}

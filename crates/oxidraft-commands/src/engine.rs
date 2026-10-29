@@ -1120,6 +1120,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: None,
     },
     CommandInfo { name: "GETENV", aliases: &[], description: "Oxidraft's environment settings", make: None },
+    CommandInfo {
+        name: "DATALINK",
+        aliases: &["DL"],
+        description: "A table from a spreadsheet (CSV or Excel), linked to it",
+        make: None,
+    },
+    CommandInfo {
+        name: "DATALINKUPDATE",
+        aliases: &["DLU"],
+        description: "Fill linked tables from their spreadsheets again",
+        make: None,
+    },
     CommandInfo { name: "MSLIDE", aliases: &[], description: "Save the view as a slide (.sld)", make: None },
     CommandInfo { name: "VSLIDE", aliases: &[], description: "Show a slide (.sld) until REDRAW", make: None },
     CommandInfo {
