@@ -1,12 +1,15 @@
 //! AutoCAD slides (.sld): a snapshot of the view as colored vectors in
 //! screen dots, from the lower left. MSLIDE writes them, VSLIDE shows them.
 
-/// A slide: its size in dots, and its vectors (color, from, to).
+/// A vector: its color, from, to (dots from the lower left).
+pub type Vector = (u8, (i16, i16), (i16, i16));
+
+/// A slide: its size in dots, and its vectors.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Slide {
     pub width: u16,
     pub height: u16,
-    pub vectors: Vec<(u8, (i16, i16), (i16, i16))>,
+    pub vectors: Vec<Vector>,
 }
 
 const ID: &[u8; 17] = b"AutoCAD Slide\r\n\x1a\0";
