@@ -830,6 +830,11 @@ impl OxidraftApp {
             "DATALINKUPDATE" | "DLU" => {
                 self.data_link_update();
             }
+            "DGNIMPORT" => self.dgn_import(),
+            "DGNATTACH" => self.dgn_attach(),
+            "DGNEXPORT" => self.dgn_export(),
+            "DGNCLIP" => self.run("XCLIP"),
+            "DGNADJUST" => self.engine.log("A DGN file is attached as a block: LAYER and XCLIP work on it."),
             "DWFATTACH" => self.dwf_attach(),
             "DWFCLIP" => self.run("XCLIP"),
             "DWFADJUST" | "DWFLAYERS" => self

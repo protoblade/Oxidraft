@@ -3174,3 +3174,25 @@ fn dwfx_sheets_attach_as_blocks() {
     assert!(doc.block("DWF-Plan").is_some_and(|b| b.entities.len() == n));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn dgn_files_import_and_attach() {
+    let mut h = app_with_line();
+    let dir = std::env::temp_dir().join(format!("oxidraft-dgn-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut site = Document::new();
+    site.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(30.0, 40.0) });
+    site.add(Geometry::Circle { center: Point::new(5.0, 5.0), radius: 2.0 });
+    let file = dir.join("site.dgn");
+    std::fs::write(&file, oxidraft_app_dgn(&site)).unwrap();
+    let before = h.state_mut().document_mut().len();
+    assert_eq!(h.state_mut().dgn_import_file(&file), Ok(2));
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.len(), before + 2);
+    assert!(doc.layer("Level 1").is_some(), "a layer for the level");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+fn oxidraft_app_dgn(doc: &Document) -> Vec<u8> {
+    oxidraft_app::dgn_bytes(doc)
+}

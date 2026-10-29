@@ -15,6 +15,7 @@ mod compare;
 mod customize;
 mod datalink;
 mod design_center;
+mod dgn;
 mod diminspect;
 mod drafting;
 mod drawing_units;
@@ -70,6 +71,11 @@ mod xref;
 
 pub use app::OxidraftApp;
 pub use drawings::Drawings;
+
+/// A drawing's model space as a DGN (V7) file's bytes.
+pub fn dgn_bytes(doc: &oxidraft_model::Document) -> Vec<u8> {
+    dgn::write_dgn(doc)
+}
 pub use layers::LAYER_MANAGER;
 pub use settings::Settings;
 pub use wblock::{Afterwards, WblockSource};
