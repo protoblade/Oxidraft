@@ -556,6 +556,46 @@ mod tests {
     }
 
     #[test]
+    fn edited_dimensions_survive() {
+        use oxidraft_model::annotation::DimExtra;
+        let mut doc = Document::new();
+        let extra = DimExtra {
+            text_at: Some(Point::new(30.0, 10.0)),
+            text_angle: Some(15.0),
+            oblique: Some(60.0),
+            breaks: Vec::new(),
+        };
+        doc.add(Geometry::Dimension {
+            p1: Point::new(0.0, 0.0),
+            p2: Point::new(40.0, 0.0),
+            line: Point::new(30.0, 10.0),
+            rotation: 0.0,
+            aligned: false,
+            text: None,
+            scale: 1.0,
+            extra: Box::new(extra.clone()),
+        });
+        let check = |back: &Document, how: &str| {
+            let got = back.entities().find_map(|e| match &e.geometry {
+                Geometry::Dimension { extra, .. } => Some((**extra).clone()),
+                _ => None,
+            });
+            let got = got.unwrap_or_else(|| panic!("no dimension ({how})"));
+            assert_eq!(got.text_angle.map(|a| (a * 1e6).round() / 1e6), Some(15.0), "{how}");
+            assert_eq!(got.oblique.map(|a| (a * 1e6).round() / 1e6), Some(60.0), "{how}");
+            let at = got.text_at.unwrap_or_else(|| panic!("text not where it was put ({how})"));
+            assert!((at.x - 30.0).abs() < 1e-6, "{how}: {at:?}");
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        check(&oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
     fn units_survive() {
         let mut doc = Document::new();
         doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });

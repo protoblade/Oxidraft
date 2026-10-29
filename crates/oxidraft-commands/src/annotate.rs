@@ -345,6 +345,7 @@ impl Dimension {
 
     fn geometry(&self, p1: Point, p2: Point, at: Point) -> Geometry {
         Geometry::Dimension {
+            extra: Default::default(),
             p1,
             p2,
             line: at,

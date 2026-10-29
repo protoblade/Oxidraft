@@ -134,7 +134,7 @@ impl Command for DimRadial {
 
 /// What an angular dimension measures, before its arc is placed.
 #[derive(Clone, Copy)]
-enum Angle {
+pub(crate) enum Angle {
     /// A vertex and a point on each ray (three points, an arc, or a circle).
     Points { vertex: Point, p1: Point, p2: Point },
     /// Two lines that aren't parallel: which of the four angles between
@@ -144,7 +144,7 @@ enum Angle {
 
 impl Angle {
     /// Vertex and the two ray points, counterclockwise around the arc's location.
-    fn rays(self, at: Point) -> (Point, Point, Point) {
+    pub(crate) fn rays(self, at: Point) -> (Point, Point, Point) {
         match self {
             Angle::Points { vertex, p1, p2 } => {
                 let (p1, p2) = angle_around(vertex, p1, p2, at);
@@ -343,6 +343,7 @@ impl DimChain {
 
     fn geometry(&self, b: Base) -> Geometry {
         Geometry::Dimension {
+            extra: Default::default(),
             p1: b.p1,
             p2: b.p2,
             line: b.line,

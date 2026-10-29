@@ -142,6 +142,8 @@ pub enum Geometry {
         aligned: bool,
         text: Option<String>,
         scale: f64,
+        /// Moved or turned text, slanted extension lines and breaks.
+        extra: Box<crate::annotation::DimExtra>,
     },
     /// A radius (DIMRADIUS) or diameter (DIMDIAMETER) dimension of the
     /// circle around `center` through `point`, with its text at `text_at`.
@@ -438,9 +440,9 @@ impl Geometry {
     /// `None` for everything else.
     pub fn primitives(&self) -> Option<Vec<Geometry>> {
         match self {
-            Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale } => {
-                Some(annotation::dimension_primitives(*p1, *p2, *line, *rotation, *aligned, text.as_deref(), *scale))
-            }
+            Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale, extra } => Some(
+                annotation::dimension_primitives(*p1, *p2, *line, *rotation, *aligned, text.as_deref(), *scale, extra),
+            ),
             Geometry::RadialDimension { center, point, text_at, diameter, text, scale } => {
                 Some(annotation::radial_primitives(*center, *point, *text_at, *diameter, text.as_deref(), *scale))
             }
@@ -946,7 +948,8 @@ impl Geometry {
                 attach: *attach,
                 content: content.clone(),
             },
-            Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale } => Geometry::Dimension {
+            Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale, extra } => Geometry::Dimension {
+                extra: Box::new(extra.mapped(f, &|a| mapped_angle(f, *p1, a))),
                 p1: f(*p1),
                 p2: f(*p2),
                 line: f(*line),
@@ -1069,7 +1072,8 @@ impl Geometry {
             Geometry::Viewport { center, .. } => self.translated(shift(*center) - *center),
             Geometry::Insert { placement, .. } => self.translated(shift(placement.position) - placement.position),
             Geometry::Text { position, .. } => self.translated(shift(*position) - *position),
-            Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale } => Geometry::Dimension {
+            Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale, extra } => Geometry::Dimension {
+                extra: Box::new(extra.mapped(&shift, &|a| a)),
                 p1: shift(*p1),
                 p2: shift(*p2),
                 line: shift(*line),
@@ -1221,10 +1225,12 @@ impl Geometry {
             }
             (Geometry::Insert { placement, .. }, _) => self.translated(to - placement.position),
             (Geometry::Text { position, .. }, _) => self.translated(to - *position),
-            (Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale }, i) => {
+            (Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale, extra }, i) => {
                 let mut pts = [*p1, *p2, *line];
                 pts[i.min(2)] = to;
                 Geometry::Dimension {
+                    // Breaks are where other objects crossed it as it was.
+                    extra: Box::new(crate::annotation::DimExtra { breaks: Vec::new(), ..(**extra).clone() }),
                     p1: pts[0],
                     p2: pts[1],
                     line: pts[2],

@@ -186,6 +186,14 @@ const ANNOTATE_DIMENSIONS: &[Tool] = &[
     tool(Icon::Dimension, "Ordinate", Some("DIMORDINATE"), "Dimensions a feature's X or Y (DOR)"),
     tool(Icon::DimContinue, "Quick", Some("QDIM"), "Dimensions the points of the selected objects at once"),
 ];
+/// The Dimensions panel's slide-out: editing dimensions.
+const ANNOTATE_DIMENSIONS_MORE: &[Tool] = &[
+    tool(Icon::Break, "Break", Some("DIMBREAK"), "Cuts gaps where objects cross a dimension"),
+    tool(Icon::DimBaseline, "Adjust Space", Some("DIMSPACE"), "Spaces parallel dimensions evenly"),
+    tool(Icon::Dimension, "Linear", Some("DIMLINEAR"), "Creates a horizontal or vertical dimension (DLI)"),
+    tool(Icon::Text, "Edit Dimension", Some("DIMEDIT"), "New text, text angle, or oblique extension lines (DED)"),
+    tool(Icon::Move, "Move Dimension Text", Some("DIMTEDIT"), "Moves or turns a dimension's text"),
+];
 const UTILITIES_LARGE: &[Tool] = &[tool(
     Icon::Measure,
     "Measure",
@@ -602,10 +610,10 @@ impl OxidraftApp {
         if text_panel.clicked() {
             self.run("STYLE");
         }
-        ribbon_panel(ui, "Dimensions", |ui| {
+        let dimensions = ribbon_panel_more(ui, "Dimensions", |ui| {
             self.large_tool(
                 ui,
-                &tool(Icon::Dimension, "Linear", Some("DIMLINEAR"), "Creates a horizontal or vertical dimension (DLI)"),
+                &tool(Icon::Dimension, "Dimension", Some("DIM"), "Dimensions what you pick, or two points (DIM)"),
             );
             for column in ANNOTATE_DIMENSIONS.chunks(3) {
                 ui.vertical(|ui| {
@@ -613,6 +621,11 @@ impl OxidraftApp {
                         self.small_tool(ui, t);
                     }
                 });
+            }
+        });
+        egui::Popup::menu(&dimensions).show(|ui| {
+            for t in ANNOTATE_DIMENSIONS_MORE {
+                self.small_tool(ui, t);
             }
         });
         ribbon_panel(ui, "Dimension Style", |ui| {

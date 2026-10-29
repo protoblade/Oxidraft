@@ -383,8 +383,10 @@ impl Exporter {
                     ..Default::default()
                 })]
             }
-            Geometry::Dimension { p1, p2, line, rotation, aligned, text, .. } => {
+            Geometry::Dimension { p1, p2, line, rotation, aligned, text, extra, .. } => {
                 let (block_name, text_mid) = self.dimension_block(g, layer);
+                let readable =
+                    oxidraft_model::annotation::readable(if *aligned { p1.angle_to(*p2) } else { *rotation });
                 let r = if *aligned { p1.angle_to(*p2) } else { *rotation };
                 let u = Point::ORIGIN.polar(1.0, r);
                 let on_line = *line + u * (*p2 - *line).dot(u);
@@ -400,11 +402,15 @@ impl Exporter {
                         },
                         actual_measurement: oxidraft_model::annotation::measurement(*p1, *p2, *rotation, *aligned),
                         text: text.clone().unwrap_or_default(),
+                        // Text moved (DIMTEDIT) or turned from along the line.
+                        is_at_user_defined_location: extra.text_at.is_some(),
+                        text_rotation_angle: extra.text_angle.map_or(0.0, |a| a - readable),
                         ..Default::default()
                     },
                     definition_point_2: to_dxf(*p1),
                     definition_point_3: to_dxf(*p2),
                     rotation_angle: if *aligned { 0.0 } else { *rotation },
+                    extension_line_angle: extra.oblique.unwrap_or(0.0),
                     ..Default::default()
                 })]
             }
@@ -1136,9 +1142,19 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
         EntityType::RotatedDimension(d) => {
             let base = &d.dimension_base;
             let aligned = matches!(base.dimension_type, DimensionType::Aligned);
+            let (p1, p2) = (from_dxf(&d.definition_point_2), from_dxf(&d.definition_point_3));
+            let readable =
+                oxidraft_model::annotation::readable(if aligned { p1.angle_to(p2) } else { d.rotation_angle });
+            let some = |a: f64| (a.abs() > 1e-9).then_some(a);
             Geometry::Dimension {
-                p1: from_dxf(&d.definition_point_2),
-                p2: from_dxf(&d.definition_point_3),
+                extra: Box::new(oxidraft_model::annotation::DimExtra {
+                    text_at: base.is_at_user_defined_location.then(|| from_dxf(&base.text_mid_point)),
+                    text_angle: some(base.text_rotation_angle).map(|a| readable + a),
+                    oblique: some(d.extension_line_angle),
+                    breaks: Vec::new(),
+                }),
+                p1,
+                p2,
                 line: from_dxf(&base.definition_point_1),
                 rotation: d.rotation_angle,
                 aligned,
@@ -2367,6 +2383,7 @@ mod tests {
             content: "TITLE".into(),
         };
         let dim = Geometry::Dimension {
+            extra: Default::default(),
             p1: Point::new(0.0, 0.0),
             p2: Point::new(10.0, 3.0),
             line: Point::new(5.0, 8.0),
@@ -2376,6 +2393,7 @@ mod tests {
             scale: 1.0,
         };
         let aligned = Geometry::Dimension {
+            extra: Default::default(),
             p1: Point::new(0.0, 0.0),
             p2: Point::new(3.0, 4.0),
             line: Point::new(-1.0, 2.0),

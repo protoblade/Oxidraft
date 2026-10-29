@@ -854,6 +854,7 @@ mod tests {
         ));
         assert_eq!(with_text_property(&hatch, "Pattern", "nope"), None);
         let dim = Geometry::Dimension {
+            extra: Default::default(),
             p1: Point::ORIGIN,
             p2: Point::new(1.0, 0.0),
             line: Point::new(0.0, 1.0),

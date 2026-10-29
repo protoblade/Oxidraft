@@ -72,7 +72,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Point::new(100.0, 0.0), Point::new(100.0, 60.0), Point::new(109.0, 30.0), 90.0),
         (Point::new(0.0, 60.0), Point::new(60.0, 60.0), Point::new(30.0, 66.0), 0.0),
     ] {
-        doc.add(Geometry::Dimension { p1, p2, line, rotation, aligned: false, text: None, scale: 1.0 });
+        doc.add(Geometry::Dimension {
+            extra: Default::default(),
+            p1,
+            p2,
+            line,
+            rotation,
+            aligned: false,
+            text: None,
+            scale: 1.0,
+        });
     }
     doc.add(Geometry::Leader {
         points: vec![Point::new(82.2, 32.2), Point::new(92.0, 42.0)],

@@ -318,7 +318,7 @@ pub fn arrowhead(tip: Point, into: Point, size: f64) -> Geometry {
 }
 
 /// Readable text angle in (-90, 90]: text along a line never reads upside down.
-fn readable(angle: f64) -> f64 {
+pub fn readable(angle: f64) -> f64 {
     let a = angle.rem_euclid(360.0);
     if a > 90.0 && a <= 270.0 {
         a - 180.0
@@ -330,6 +330,7 @@ fn readable(angle: f64) -> f64 {
 }
 
 /// Extension lines, dimension line, arrowheads and text of a linear dimension.
+#[allow(clippy::too_many_arguments)]
 pub fn dimension_primitives(
     p1: Point,
     p2: Point,
@@ -338,12 +339,25 @@ pub fn dimension_primitives(
     aligned: bool,
     text: Option<&str>,
     scale: f64,
+    extra: &DimExtra,
 ) -> Vec<Geometry> {
     let s = &dim_style();
     let r = if aligned { p1.angle_to(p2) } else { rotation };
     let u = Point::ORIGIN.polar(1.0, r);
-    let d1 = line + u * (p1 - line).dot(u);
-    let d2 = line + u * (p2 - line).dot(u);
+    // Where each extension line meets the dimension line: straight across,
+    // or slanted (Oblique) along its own angle.
+    let meet = |p: Point| {
+        if let Some(o) = extra.oblique {
+            let v = Point::ORIGIN.polar(1.0, o);
+            let n = Point::ORIGIN.polar(1.0, r + 90.0);
+            let across = v.dot(n);
+            if across.abs() > 1e-9 {
+                return p + v * ((line - p).dot(n) / across);
+            }
+        }
+        line + u * (p - line).dot(u)
+    };
+    let (d1, d2) = (meet(p1), meet(p2));
     let mut out = Vec::new();
     for (p, d) in [(p1, d1), (p2, d2)] {
         let v = d - p;
@@ -353,24 +367,101 @@ pub fn dimension_primitives(
             out.push(Geometry::Line { start: p + v * (s.ext_offset * scale), end: d + v * (s.ext_beyond * scale) });
         }
     }
-    out.push(Geometry::Line { start: d1, end: d2 });
+    // Text moved along the line (DIMTEDIT) takes the line with it past an end.
+    let text_mid = extra.text_at.map_or(d1.midpoint(d2), |t| d1 + u * (t - d1).dot(u));
+    let along = |p: Point| (p - d1).dot(u);
+    let (lo, hi) = (along(d1).min(along(d2)).min(along(text_mid)), along(d1).max(along(d2)).max(along(text_mid)));
+    out.push(Geometry::Line { start: d1 + u * lo, end: d1 + u * hi });
+    let mut out = cut_breaks(out, &extra.breaks);
     let len = d1.distance(d2);
     if len > EPSILON {
         let w = (d2 - d1) * (1.0 / len);
         out.push(arrowhead(d1, w, s.arrow_size * scale));
         out.push(arrowhead(d2, -w, s.arrow_size * scale));
     }
-    let angle = readable(r);
-    let up = Point::ORIGIN.polar(1.0, angle + 90.0);
+    let angle = extra.text_angle.unwrap_or_else(|| readable(r));
+    let up = Point::ORIGIN.polar(1.0, readable(r) + 90.0);
     out.push(Geometry::Text {
         look: Default::default(),
-        position: d1.midpoint(d2) + up * (s.gap * scale),
+        position: text_mid + up * (s.gap * scale),
         height: s.text_height * scale,
         rotation: angle,
         width: 0.0,
         attach: Attach::BottomCenter,
         content: dimension_text(text, measurement(p1, p2, rotation, aligned)),
     });
+    out
+}
+
+/// What DIMEDIT, DIMTEDIT and DIMBREAK change on a linear dimension.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DimExtra {
+    /// Where its text sits when moved along its line (DIMTEDIT).
+    pub text_at: Option<Point>,
+    /// The text's angle when set (DIMTEDIT Angle, DIMEDIT Rotate).
+    pub text_angle: Option<f64>,
+    /// The extension lines' angle when slanted (DIMEDIT Oblique).
+    pub oblique: Option<f64>,
+    /// Gaps cut in its lines (DIMBREAK): each from one point to another
+    /// on the same line.
+    pub breaks: Vec<(Point, Point)>,
+}
+
+impl DimExtra {
+    pub fn is_plain(&self) -> bool {
+        *self == DimExtra::default()
+    }
+
+    /// The same, with its points moved by `f` and angles turned by `turn`.
+    pub fn mapped(&self, f: &dyn Fn(Point) -> Point, turn: &dyn Fn(f64) -> f64) -> DimExtra {
+        DimExtra {
+            text_at: self.text_at.map(f),
+            text_angle: self.text_angle.map(turn),
+            oblique: self.oblique.map(turn),
+            breaks: self.breaks.iter().map(|(a, b)| (f(*a), f(*b))).collect(),
+        }
+    }
+}
+
+/// `lines` with the gaps cut out that lie along them.
+pub fn cut_breaks(lines: Vec<Geometry>, breaks: &[(Point, Point)]) -> Vec<Geometry> {
+    if breaks.is_empty() {
+        return lines;
+    }
+    let mut out = Vec::new();
+    for g in lines {
+        let Geometry::Line { start, end } = g else {
+            out.push(g);
+            continue;
+        };
+        let d = end - start;
+        let len2 = d.dot(d);
+        if len2 <= EPSILON * EPSILON {
+            out.push(g);
+            continue;
+        }
+        let on = |p: Point| (p - start).cross(d).abs() / len2.sqrt() < 1e-6 * (1.0 + len2.sqrt());
+        let mut gaps: Vec<(f64, f64)> = breaks
+            .iter()
+            .filter(|(a, b)| on(*a) && on(*b))
+            .map(|(a, b)| {
+                let (ta, tb) = ((*a - start).dot(d) / len2, (*b - start).dot(d) / len2);
+                (ta.min(tb).max(0.0), ta.max(tb).min(1.0))
+            })
+            .filter(|(a, b)| b > a)
+            .collect();
+        gaps.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let mut t = 0.0;
+        for (a, b) in gaps {
+            if a > t {
+                out.push(Geometry::Line { start: start + d * t, end: start + d * a });
+            }
+            t = t.max(b);
+        }
+        if t < 1.0 {
+            out.push(Geometry::Line { start: start + d * t, end });
+        }
+    }
     out
 }
 
@@ -737,6 +828,7 @@ mod tests {
             false,
             None,
             1.0,
+            &DimExtra::default(),
         );
         let text = prims.iter().find_map(|g| match g {
             Geometry::Text { content, position, .. } => Some((content.clone(), *position)),

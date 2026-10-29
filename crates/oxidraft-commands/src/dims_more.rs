@@ -256,6 +256,7 @@ impl QDim {
         };
         let step = BASELINE_SPACING * self.scale * away;
         let dim = |p1: Point, p2: Point, line: Point| Geometry::Dimension {
+            extra: Default::default(),
             p1,
             p2,
             line,
