@@ -101,6 +101,9 @@ pub enum Icon {
     Overkill,
     Audit,
     Aliases,
+    Compare,
+    CompareExit,
+    Count,
 }
 
 /// Accent colors used inside icons, as in AutoCAD's icon set.
@@ -444,6 +447,22 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
             pen.line(&[(0.25, 0.65), (0.35, 0.35), (0.45, 0.65)], blue);
             pen.line(&[(0.29, 0.54), (0.41, 0.54)], blue);
             pen.line(&[(0.58, 0.35), (0.58, 0.65), (0.75, 0.65)], yellow);
+        }
+        // Two sheets, one green-edged and one red-edged.
+        Icon::Compare | Icon::CompareExit => {
+            pen.closed(&[(0.1, 0.1), (0.55, 0.1), (0.55, 0.7), (0.1, 0.7)], green);
+            pen.closed(&[(0.45, 0.3), (0.9, 0.3), (0.9, 0.9), (0.45, 0.9)], red);
+            if icon == Icon::CompareExit {
+                pen.line(&[(0.18, 0.78), (0.38, 0.98)], c);
+                pen.line(&[(0.18, 0.98), (0.38, 0.78)], c);
+            }
+        }
+        // A hash, for a count.
+        Icon::Count => {
+            pen.line(&[(0.38, 0.12), (0.3, 0.88)], c);
+            pen.line(&[(0.7, 0.12), (0.62, 0.88)], c);
+            pen.line(&[(0.15, 0.36), (0.88, 0.36)], blue);
+            pen.line(&[(0.12, 0.64), (0.85, 0.64)], blue);
         }
         Icon::Leader => {
             pen.arrow((0.55, 0.45), (0.12, 0.88), c);

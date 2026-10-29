@@ -271,6 +271,8 @@ impl OxidraftApp {
                     self.home_tab(ui);
                 } else if self.ribbon_tab == LAYOUT_TAB {
                     self.layout_ribbon(ui);
+                } else if RIBBON_TABS[self.ribbon_tab] == "Collaborate" {
+                    self.collaborate_tab(ui);
                 } else if RIBBON_TABS[self.ribbon_tab] == "Manage" {
                     self.manage_tab(ui);
                 } else if RIBBON_TABS[self.ribbon_tab] == "View" {
@@ -446,6 +448,35 @@ impl OxidraftApp {
             if self.toggle_tool(ui, Icon::LayoutTabs, "Layout\nTabs", layouts, "Shows the Model and layout tabs") {
                 self.show_layout_tabs = !layouts;
             }
+        });
+    }
+
+    /// The Collaborate tab: comparing with another drawing, and counting
+    /// blocks.
+    fn collaborate_tab(&mut self, ui: &mut Ui) {
+        ribbon_panel(ui, "Compare", |ui| {
+            self.large_tool(
+                ui,
+                &tool(
+                    Icon::Compare,
+                    "DWG\nCompare",
+                    Some("COMPARE"),
+                    "Shows what's only here, only in another drawing, or in both",
+                ),
+            );
+            let exit = tool(Icon::CompareExit, "Exit\nCompare", Some("COMPAREEXIT"), "Stops comparing (COMPAREEXIT)");
+            self.large_tool(ui, &exit);
+        });
+        ribbon_panel(ui, "Count", |ui| {
+            self.large_tool(
+                ui,
+                &tool(
+                    Icon::Count,
+                    "Count",
+                    Some("COUNT"),
+                    "Counts a block's references and selects them; Enter lists every block",
+                ),
+            );
         });
     }
 

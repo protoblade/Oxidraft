@@ -201,6 +201,12 @@ impl OxidraftApp {
         }
         self.sheet_scale = self.active_viewport.filter(|_| active.is_some()).map(|a| a.page.scale);
         self.draw_entities(&model, rect, cursor.as_ref(), self.doc.space(), &frozen);
+        // Comparing drawings: what's only in the other one, red.
+        if let Some(c) = self.comparison.as_ref().filter(|_| self.doc.space() == MODEL) {
+            for g in &c.only_there {
+                self.draw_geometry(&model, rect, g, Stroke::new(1.5, crate::compare::THERE));
+            }
+        }
         self.sheet_scale = None;
         // The sheet's own objects over it, and the frame worked in.
         if let (Some((_, r)), Some(a)) = (&active, self.active_viewport) {
@@ -708,8 +714,12 @@ impl OxidraftApp {
             let faded = refedit.is_some_and(|r| !r.in_working_set(e.id));
             // Attached drawings draw faded (AutoCAD's XDWGFADECTL).
             let xref = matches!(&e.geometry, Geometry::Insert { block, .. } if self.doc.xref(block).is_some());
+            // Comparing drawings: green only here, gray in both.
+            let compared = self.comparison.as_ref().filter(|_| space == MODEL);
+            let compare_color =
+                compared.map(|c| if c.only_here.contains(&e.id) { crate::compare::HERE } else { crate::compare::BOTH });
             for s in self.doc.expanded_styled(e) {
-                let mut color = theme::aci(s.color);
+                let mut color = compare_color.unwrap_or_else(|| theme::aci(s.color));
                 // Locked layers draw faded (AutoCAD's LAYLOCKFADECTL).
                 if self.doc.layer(&s.layer).is_some_and(|l| l.locked) {
                     color = color.gamma_multiply(0.45);

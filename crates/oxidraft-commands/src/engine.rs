@@ -18,7 +18,7 @@ use crate::{
     break_join::Join,
     chamfer::Chamfer,
     circle::Circle,
-    cleanup::{Audit, Overkill, Purge},
+    cleanup::{Audit, Count, Overkill, Purge},
     clipboard::CopyClip,
     clipboard::Paste,
     dims::DimAngular,
@@ -691,6 +691,19 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Check the drawing for broken objects, and mend them",
         make: Some(|| Box::new(Audit)),
     },
+    CommandInfo {
+        name: "COUNT",
+        aliases: &[],
+        description: "Count a block's references, or list every block's count",
+        make: Some(|| Box::new(Count)),
+    },
+    CommandInfo {
+        name: "COMPARE",
+        aliases: &[],
+        description: "Compare this drawing with another: what's only here, only there, or the same",
+        make: None,
+    },
+    CommandInfo { name: "COMPAREEXIT", aliases: &[], description: "Stop comparing drawings", make: None },
     CommandInfo { name: "ALIASEDIT", aliases: &[], description: "Edit your own command aliases", make: None },
     CommandInfo {
         name: "VPORTS",
@@ -3370,11 +3383,23 @@ mod tests {
     #[test]
     fn autocomplete_prefers_exact_alias() {
         let names: Vec<_> = Engine::suggest("c").iter().map(|c| c.name).collect();
-        let expected =
-            vec!["CIRCLE", "COPY", "CHAMFER", "COLORTHEME", "COPYCLIP", "CUTCLIP", "COPYBASE", "CLIP", "PROPERTIES"];
+        let expected = vec![
+            "CIRCLE",
+            "COPY",
+            "CHAMFER",
+            "COLORTHEME",
+            "COPYCLIP",
+            "CUTCLIP",
+            "COPYBASE",
+            "CLIP",
+            "COUNT",
+            "COMPARE",
+            "COMPAREEXIT",
+            "PROPERTIES",
+        ];
         assert_eq!(names, expected, "PROPERTIES via its CH alias");
         let names: Vec<_> = Engine::suggest("co").iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["COPY", "COLORTHEME", "COPYCLIP", "COPYBASE"]);
+        assert_eq!(names, vec!["COPY", "COLORTHEME", "COPYCLIP", "COPYBASE", "COUNT", "COMPARE", "COMPAREEXIT"]);
         let names: Vec<_> = Engine::suggest("s").iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["STRETCH", "SPLINE", "SCALE", "SNAP", "SELECTSIMILAR"]);
     }

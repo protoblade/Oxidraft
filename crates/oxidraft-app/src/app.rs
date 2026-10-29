@@ -103,6 +103,8 @@ pub struct OxidraftApp {
     pub(crate) show_layout_tabs: bool,
     /// PURGE's and ALIASEDIT's dialogs.
     pub(crate) purge: Option<crate::manage::PurgeDialog>,
+    /// COMPARE: the drawing compared with, while comparing.
+    pub(crate) comparison: Option<crate::compare::Comparison>,
     pub(crate) alias_dialog: Option<crate::manage::AliasDialog>,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
@@ -238,6 +240,7 @@ impl OxidraftApp {
             show_file_tabs: true,
             show_layout_tabs: true,
             purge: None,
+            comparison: None,
             alias_dialog: None,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
@@ -325,6 +328,7 @@ impl OxidraftApp {
         self.active_viewport = None;
         self.last_viewport.clear();
         self.tiles = Default::default();
+        self.comparison = None;
         self.view_space = self.doc.space();
         self.view_history.clear();
     }
@@ -539,6 +543,8 @@ impl OxidraftApp {
             "VIEW" | "V" => self.open_view_manager(),
             "PURGE" | "PU" => self.open_purge(),
             "ALIASEDIT" => self.open_aliases(),
+            "COMPARE" => self.compare_command(),
+            "COMPAREEXIT" => self.comparison = None,
             "FILETAB" => self.show_file_tabs = true,
             "FILETABCLOSE" => self.show_file_tabs = false,
             // Viewports and layouts are made on the sheets: out of the
@@ -869,6 +875,7 @@ impl eframe::App for OxidraftApp {
         self.table_editor_dialog(&ctx);
         self.view_manager_dialog(&ctx);
         self.purge_dialog(&ctx);
+        self.compare_bar(&ctx);
         self.alias_dialog(&ctx);
         self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);

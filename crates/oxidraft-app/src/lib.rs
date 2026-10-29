@@ -7,6 +7,7 @@ mod canvas;
 mod chrome;
 mod clipboard;
 mod cmdline;
+mod compare;
 mod icons;
 mod layers;
 mod layouts;

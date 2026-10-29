@@ -1621,3 +1621,54 @@ fn edit_aliases_adds_a_shortcut_of_your_own() {
     type_all(&mut h, &["qq"]);
     assert_eq!(h.state_mut().engine_mut().active_name(), Some("CIRCLE"));
 }
+
+#[test]
+fn compare_shows_what_is_only_here_only_there_or_in_both() {
+    let dir = std::env::temp_dir().join(format!("oxidraft-compare-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // The other drawing: the first test line, and a circle.
+    let mut other = Document::new();
+    other.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(100.0, 0.0) });
+    other.add(Geometry::Circle { center: Point::new(50.0, 30.0), radius: 5.0 });
+    let path = dir.join("other.dxf");
+    oxidraft_io_dwg::save_dxf(&other, &path).unwrap();
+
+    let mut h = app_with_line();
+    h.state_mut().compare_with(&path);
+    h.run_steps(2);
+    let history = h.state_mut().engine_mut().history().join("\n");
+    assert!(history.contains("Compared with other.dxf: 1 only here, 1 only there, 1 the same."), "{history}");
+    assert!(h.query_by_label("Exit Compare").is_some());
+    // Drawing the circle here too: now it's in both.
+    h.state_mut().document_mut().add(Geometry::Circle { center: Point::new(50.0, 30.0), radius: 5.0 });
+    h.run_steps(2);
+    assert!(h.query_by_label("0 only there").is_some());
+    h.get_all_by_label("Exit Compare").next().unwrap().click();
+    h.run_steps(2);
+    assert!(h.query_by_label("0 only there").is_none());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn count_selects_a_blocks_references() {
+    use oxidraft_model::{Block, Placement};
+    let mut h = app_with_line();
+    let doc = h.state_mut().document_mut();
+    doc.define_block(Block { name: "TREE".into(), base: Point::ORIGIN, entities: vec![] });
+    for x in [10.0, 20.0, 30.0] {
+        doc.add(Geometry::Insert {
+            block: "TREE".into(),
+            placement: Placement::at(Point::new(x, 30.0)),
+            attributes: vec![],
+            clip: None,
+        });
+    }
+    h.run_steps(1);
+    type_all(&mut h, &["count"]);
+    let at = screen(&h, 20.0, 30.0);
+    click(&mut h, at);
+    h.run_steps(1);
+    assert_eq!(h.state_mut().engine_mut().selection().len(), 3);
+    let history = h.state_mut().engine_mut().history().join("\n");
+    assert!(history.contains("3 reference(s) of block \"TREE\"."));
+}

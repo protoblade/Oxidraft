@@ -779,6 +779,39 @@ fn main() {
     h.run_steps(3);
     save(&mut h, &dir, "42-model-viewports");
 
+    // DWG Compare: an earlier version with a column moved and a wall missing.
+    let mut h = harness();
+    let mut earlier = sample();
+    let moved: Vec<_> = earlier
+        .entities()
+        .filter(|e| matches!(&e.geometry, Geometry::Circle { center, .. } if center.x == 80.0 && center.y == 30.0))
+        .map(|e| e.id)
+        .collect();
+    for id in moved {
+        earlier.modify(id, Geometry::Circle { center: Point::new(80.0, 15.0), radius: 3.0 });
+    }
+    let wall: Vec<_> = earlier
+        .entities()
+        .filter(|e| matches!(&e.geometry, Geometry::Line { start, end } if start.x == 60.0 && end.x == 60.0))
+        .map(|e| e.id)
+        .collect();
+    for id in wall {
+        earlier.remove(id);
+    }
+    let earlier_path = dir.join("earlier.dxf");
+    oxidraft_io_dwg::save_dxf(&earlier, &earlier_path).expect("write the earlier drawing");
+    // The current one from a file too, as drawings compared are.
+    let current_path = dir.join("current.dxf");
+    oxidraft_io_dwg::save_dxf(&sample(), &current_path).expect("write the current drawing");
+    h.state_mut().open_path(current_path.clone());
+    h.run_steps(3);
+    h.state_mut().compare_with(&earlier_path);
+    h.get_by_role_and_label(eframe::egui::accesskit::Role::Tab, "Collaborate").click();
+    h.run_steps(3);
+    save(&mut h, &dir, "43-compare");
+    std::fs::remove_file(&earlier_path).ok();
+    std::fs::remove_file(&current_path).ok();
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");

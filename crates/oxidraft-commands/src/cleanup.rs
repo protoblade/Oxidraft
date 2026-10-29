@@ -50,6 +50,19 @@ fn shape_key(g: &Geometry) -> String {
     out
 }
 
+/// What makes two objects the same, for OVERKILL and COMPARE: layer,
+/// color, linetype, lineweight and shape.
+pub fn object_key(e: &oxidraft_model::Entity) -> String {
+    format!(
+        "{}|{:?}|{}|{:?}#{}",
+        e.layer.to_lowercase(),
+        e.color,
+        e.linetype.to_lowercase(),
+        e.lineweight,
+        shape_key(&e.geometry)
+    )
+}
+
 /// OVERKILL on `ids`: copies of an object (same shape and properties)
 /// go, and lines lying along each other become one. Returns (copies
 /// deleted, overlapping lines deleted).
@@ -63,8 +76,8 @@ pub fn overkill(doc: &mut Document, ids: &[EntityId]) -> (usize, usize) {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut copies = Vec::new();
     for &id in ids {
-        let (Some(s), Some(e)) = (style(doc, id), doc.entity(id)) else { continue };
-        if !seen.insert(format!("{s}#{}", shape_key(&e.geometry))) {
+        let Some(e) = doc.entity(id) else { continue };
+        if !seen.insert(object_key(e)) {
             copies.push(id);
         }
     }
@@ -123,6 +136,59 @@ pub fn overkill(doc: &mut Document, ids: &[EntityId]) -> (usize, usize) {
         overlapping += flush(&group, doc);
     }
     (copies.len(), overlapping)
+}
+
+/// COUNT: how many references a block has here, those selected; Enter
+/// lists every block's count.
+#[derive(Default)]
+pub struct Count;
+
+impl Command for Count {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Select a block reference to count").with_default("list all")
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let block_of = |g: &Geometry| match g {
+            Geometry::Insert { block, .. } => Some(block.clone()),
+            _ => None,
+        };
+        match input {
+            Input::Pick { at, .. } => {
+                let picked = ctx.pick(at).and_then(|id| ctx.doc.entity(id)).and_then(|e| block_of(&e.geometry));
+                let name = picked.ok_or("That isn't a block reference.")?;
+                let ids: Vec<EntityId> = ctx
+                    .doc
+                    .entities()
+                    .filter(|e| block_of(&e.geometry).is_some_and(|b| b.eq_ignore_ascii_case(&name)))
+                    .map(|e| e.id)
+                    .collect();
+                ctx.messages.push(format!("{} reference(s) of block \"{name}\".", ids.len()));
+                ctx.select = Some(ids);
+                Ok(Step::Done)
+            }
+            Input::Enter => {
+                let mut counts: HashMap<String, usize> = HashMap::new();
+                for b in ctx.doc.entities().filter_map(|e| block_of(&e.geometry)) {
+                    *counts.entry(b).or_default() += 1;
+                }
+                let mut counts: Vec<(String, usize)> = counts.into_iter().collect();
+                counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                if counts.is_empty() {
+                    ctx.messages.push("No block references here.".into());
+                }
+                for (name, n) in counts {
+                    ctx.messages.push(format!("{n:>6}  {name}"));
+                }
+                Ok(Step::Done)
+            }
+            _ => Err("Pick a block reference, or press Enter for all.".into()),
+        }
+    }
+
+    fn wants_pick(&self) -> bool {
+        true
+    }
 }
 
 /// OVERKILL: the objects selected, cleaned of copies and overlaps.
