@@ -108,7 +108,12 @@ impl Command for TextToFront {
         };
         let wanted = |g: &Geometry| match g {
             Geometry::Text { .. } => matches!(which, "Text" | "All"),
-            Geometry::Dimension { .. } | Geometry::RadialDimension { .. } | Geometry::AngularDimension { .. } => {
+            Geometry::Dimension { .. }
+            | Geometry::RadialDimension { .. }
+            | Geometry::AngularDimension { .. }
+            | Geometry::OrdinateDimension { .. }
+            | Geometry::ArcLengthDimension { .. }
+            | Geometry::JoggedDimension { .. } => {
                 matches!(which, "Dimensions" | "All")
             }
             Geometry::Leader { .. } => matches!(which, "Leaders" | "All"),

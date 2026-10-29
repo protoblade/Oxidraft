@@ -133,6 +133,20 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
             out.push(at("View center:", *view_center));
             out.push(value("Scale:", format!("1:{}", n(view_height / height.max(1e-12)).trim())));
         }
+        Geometry::OrdinateDimension { feature, leader_end, x_datum, .. } => {
+            out.push(at("Feature location:", *feature));
+            out.push(at("Leader endpoint:", *leader_end));
+            out.push(value("Datum:", if *x_datum { "X" } else { "Y" }));
+        }
+        Geometry::ArcLengthDimension { center, radius, start_angle, end_angle, .. } => {
+            let sweep = (end_angle - start_angle).rem_euclid(360.0);
+            out.push(at("Arc center:", *center));
+            out.push(value("Arc length:", n(radius * sweep.to_radians()).trim()));
+        }
+        Geometry::JoggedDimension { center, point, .. } => {
+            out.push(at("Center:", *center));
+            out.push(value("Radius:", n(center.distance(*point)).trim()));
+        }
         Geometry::AttributeDefinition { tag, prompt, default, position, height, constant, .. } => {
             out.push(value("Tag:", tag));
             out.push(value("Prompt:", prompt));

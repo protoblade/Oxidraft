@@ -447,6 +447,30 @@ impl Exporter {
             // The dxf crate has no VIEWPORT: they're added with their layouts.
             Geometry::Viewport { .. } => Vec::new(),
             Geometry::Wipeout { points } => wipeout_to_dxf(points).into_iter().collect(),
+            Geometry::OrdinateDimension { feature, leader_end, x_datum, text, .. } => {
+                let (block_name, text_mid) = self.dimension_block(g, layer);
+                let mut dimension_base = dxf::entities::DimensionBase {
+                    block_name,
+                    definition_point_1: to_dxf(Point::ORIGIN),
+                    text_mid_point: to_dxf(text_mid.unwrap_or(*leader_end)),
+                    dimension_type: DimensionType::Ordinate,
+                    actual_measurement: if *x_datum { feature.x } else { feature.y },
+                    text: text.clone().unwrap_or_default(),
+                    ..Default::default()
+                };
+                dimension_base.is_ordinate_x_type = *x_datum;
+                vec![EntityType::OrdinateDimension(dxf::entities::OrdinateDimension {
+                    dimension_base,
+                    definition_point_2: to_dxf(*feature),
+                    definition_point_3: to_dxf(*leader_end),
+                })]
+            }
+            // The dxf crate has no arc length or jogged dimensions: they go
+            // out as what they draw, a block.
+            Geometry::ArcLengthDimension { .. } | Geometry::JoggedDimension { .. } => {
+                let (name, _) = self.dimension_block(g, layer);
+                vec![EntityType::Insert(dxf::entities::Insert { name, ..Default::default() })]
+            }
             Geometry::AttributeDefinition {
                 tag,
                 prompt,
@@ -933,6 +957,13 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
                 scale: 1.0,
             }
         }
+        EntityType::OrdinateDimension(d) => Geometry::OrdinateDimension {
+            feature: from_dxf(&d.definition_point_2),
+            leader_end: from_dxf(&d.definition_point_3),
+            x_datum: d.dimension_base.is_ordinate_x_type,
+            text: dimension_override(&d.dimension_base),
+            scale: 1.0,
+        },
         EntityType::RadialDimension(d) => Geometry::RadialDimension {
             center: from_dxf(&d.dimension_base.definition_point_1),
             point: from_dxf(&d.definition_point_2),
@@ -1886,6 +1917,35 @@ mod tests {
                 _ => assert_eq!(b, g),
             }
         }
+    }
+
+    #[test]
+    fn roundtrip_ordinate_dimensions_and_arc_ones_as_their_graphics() {
+        let mut doc = Document::new();
+        let ordinate = Geometry::OrdinateDimension {
+            feature: Point::new(30.0, 20.0),
+            leader_end: Point::new(32.0, 40.0),
+            x_datum: true,
+            text: None,
+            scale: 1.0,
+        };
+        doc.add(ordinate.clone());
+        doc.add(Geometry::ArcLengthDimension {
+            center: Point::ORIGIN,
+            radius: 10.0,
+            start_angle: 0.0,
+            end_angle: 90.0,
+            dim_radius: 15.0,
+            text: None,
+            scale: 1.0,
+        });
+        let mut buf = Vec::new();
+        write(&doc, &mut buf).unwrap();
+        let back = read(&mut buf.as_slice()).unwrap().document;
+        let shapes: Vec<&Geometry> = back.entities().map(|e| &e.geometry).collect();
+        assert!(shapes.contains(&&ordinate), "{shapes:?}");
+        // The arc length dimension's look, as a block of its parts.
+        assert!(shapes.iter().any(|g| matches!(g, Geometry::Insert { .. })));
     }
 
     #[test]

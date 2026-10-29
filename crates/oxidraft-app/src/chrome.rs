@@ -166,6 +166,10 @@ const ANNOTATE_DIMENSIONS: &[Tool] = &[
         "Continues a dimension from the last one's second line (DCO)",
     ),
     tool(Icon::DimBaseline, "Baseline", Some("DIMBASELINE"), "Dimensions from the last one's first line (DBA)"),
+    tool(Icon::DimAngular, "Arc Length", Some("DIMARC"), "Dimensions the length of an arc (DAR)"),
+    tool(Icon::DimRadius, "Jogged", Some("DIMJOGGED"), "Dimensions a large arc's radius with a jog (DJO)"),
+    tool(Icon::Dimension, "Ordinate", Some("DIMORDINATE"), "Dimensions a feature's X or Y (DOR)"),
+    tool(Icon::DimContinue, "Quick", Some("QDIM"), "Dimensions the points of the selected objects at once"),
 ];
 const UTILITIES_LARGE: &[Tool] = &[tool(
     Icon::Measure,
@@ -563,6 +567,23 @@ impl OxidraftApp {
                     }
                 });
             }
+        });
+        ribbon_panel(ui, "Centerlines", |ui| {
+            ui.vertical(|ui| {
+                self.small_tool(
+                    ui,
+                    &tool(Icon::Circle, "Center Mark", Some("CENTERMARK"), "Marks circles' and arcs' centers (CM)"),
+                );
+                self.small_tool(
+                    ui,
+                    &tool(
+                        Icon::Xline,
+                        "Centerline",
+                        Some("CENTERLINE"),
+                        "Draws the center line between two lines (CL)",
+                    ),
+                );
+            });
         });
         ribbon_panel(ui, "Leaders", |ui| {
             self.large_tool(

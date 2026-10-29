@@ -220,6 +220,37 @@ pub enum Geometry {
         /// rectangular one.
         clip: Vec<Point>,
     },
+    /// An ordinate dimension (DIMORDINATE): `feature`'s X (`x_datum`) or Y
+    /// by a leader ending at `leader_end`.
+    OrdinateDimension {
+        feature: Point,
+        leader_end: Point,
+        x_datum: bool,
+        text: Option<String>,
+        scale: f64,
+    },
+    /// An arc length dimension (DIMARC) of the arc of `radius` about
+    /// `center` from `start_angle` to `end_angle`, its dimension arc at
+    /// `dim_radius`.
+    ArcLengthDimension {
+        center: Point,
+        radius: f64,
+        start_angle: f64,
+        end_angle: f64,
+        dim_radius: f64,
+        text: Option<String>,
+        scale: f64,
+    },
+    /// A jogged radius dimension (DIMJOGGED): the radius from `center` to
+    /// `point`, drawn from `center_override` with a zigzag at `jog`.
+    JoggedDimension {
+        center: Point,
+        point: Point,
+        center_override: Point,
+        jog: Point,
+        text: Option<String>,
+        scale: f64,
+    },
     /// An attribute definition (ATTDEF). In a block, what its references
     /// ask for (`prompt`, offering `default`) and show as attribute `tag`;
     /// a constant one shows `default` in every reference. Outside a block,
@@ -393,6 +424,9 @@ impl Geometry {
             Geometry::Viewport { .. } => "Viewport",
             Geometry::Table { .. } => "Table",
             Geometry::Wipeout { .. } => "Wipeout",
+            Geometry::OrdinateDimension { .. } => "Ordinate Dimension",
+            Geometry::ArcLengthDimension { .. } => "Arc Dimension",
+            Geometry::JoggedDimension { .. } => "Radial Dimension Large",
             Geometry::AttributeDefinition { .. } => "Attribute Definition",
         }
     }
@@ -412,6 +446,23 @@ impl Geometry {
             }
             Geometry::Leader { points, content, scale } => Some(annotation::leader_primitives(points, content, *scale)),
             Geometry::Table { .. } => Some(crate::table::primitives(self)),
+            Geometry::OrdinateDimension { feature, leader_end, x_datum, text, scale } => {
+                Some(annotation::ordinate_primitives(*feature, *leader_end, *x_datum, text.as_deref(), *scale))
+            }
+            Geometry::ArcLengthDimension { center, radius, start_angle, end_angle, dim_radius, text, scale } => {
+                Some(annotation::arc_length_primitives(
+                    *center,
+                    *radius,
+                    *start_angle,
+                    *end_angle,
+                    *dim_radius,
+                    text.as_deref(),
+                    *scale,
+                ))
+            }
+            Geometry::JoggedDimension { center, point, center_override, jog, text, scale } => {
+                Some(annotation::jogged_primitives(*center, *point, *center_override, *jog, text.as_deref(), *scale))
+            }
             Geometry::AttributeDefinition { tag, position, height, rotation, attach, .. } => {
                 Some(vec![Geometry::Text {
                     position: *position,
@@ -505,6 +556,9 @@ impl Geometry {
             Geometry::Point { .. }
             | Geometry::Image { .. }
             | Geometry::AttributeDefinition { .. }
+            | Geometry::OrdinateDimension { .. }
+            | Geometry::ArcLengthDimension { .. }
+            | Geometry::JoggedDimension { .. }
             | Geometry::Insert { .. }
             | Geometry::Text { .. }
             | Geometry::Dimension { .. }
@@ -787,6 +841,38 @@ impl Geometry {
                 clip: clip.iter().map(|p| f(*p)).collect(),
             },
             Geometry::Wipeout { points } => Geometry::Wipeout { points: points.iter().map(|p| f(*p)).collect() },
+            Geometry::OrdinateDimension { feature, leader_end, x_datum, text, scale } => Geometry::OrdinateDimension {
+                feature: f(*feature),
+                leader_end: f(*leader_end),
+                x_datum: *x_datum,
+                text: text.clone(),
+                scale: *scale,
+            },
+            Geometry::ArcLengthDimension { center, radius, start_angle, end_angle, dim_radius, text, scale } => {
+                // The arc's ends where they're sent: its angles follow.
+                let (a, b) = (f(center.polar(*radius, *start_angle)), f(center.polar(*radius, *end_angle)));
+                let c = f(*center);
+                let (a, b) = if flips { (b, a) } else { (a, b) };
+                Geometry::ArcLengthDimension {
+                    center: c,
+                    radius: radius * length_factor,
+                    start_angle: c.angle_to(a),
+                    end_angle: c.angle_to(b),
+                    dim_radius: dim_radius * length_factor,
+                    text: text.clone(),
+                    scale: *scale,
+                }
+            }
+            Geometry::JoggedDimension { center, point, center_override, jog, text, scale } => {
+                Geometry::JoggedDimension {
+                    center: f(*center),
+                    point: f(*point),
+                    center_override: f(*center_override),
+                    jog: f(*jog),
+                    text: text.clone(),
+                    scale: *scale,
+                }
+            }
             Geometry::AttributeDefinition {
                 tag,
                 prompt,
@@ -964,6 +1050,15 @@ impl Geometry {
             Geometry::Table { position, .. } => self.translated(shift(*position) - *position),
             Geometry::Wipeout { points } => Geometry::Wipeout { points: points.iter().map(|p| shift(*p)).collect() },
             Geometry::AttributeDefinition { position, .. } => self.translated(shift(*position) - *position),
+            Geometry::OrdinateDimension { feature, leader_end, x_datum, text, scale } => Geometry::OrdinateDimension {
+                feature: shift(*feature),
+                leader_end: shift(*leader_end),
+                x_datum: *x_datum,
+                text: text.clone(),
+                scale: *scale,
+            },
+            Geometry::ArcLengthDimension { center, .. } => self.translated(shift(*center) - *center),
+            Geometry::JoggedDimension { center, .. } => self.translated(shift(*center) - *center),
             Geometry::Viewport { center, .. } => self.translated(shift(*center) - *center),
             Geometry::Insert { placement, .. } => self.translated(shift(placement.position) - placement.position),
             Geometry::Text { position, .. } => self.translated(shift(*position) - *position),
@@ -1047,6 +1142,12 @@ impl Geometry {
             Geometry::Table { position, .. } => vec![*position],
             Geometry::Wipeout { points } => points.clone(),
             Geometry::AttributeDefinition { position, .. } => vec![*position],
+            Geometry::OrdinateDimension { feature, leader_end, .. } => vec![*feature, *leader_end],
+            Geometry::ArcLengthDimension { center, dim_radius, start_angle, end_angle, .. } => {
+                let mid = start_angle + (end_angle - start_angle).rem_euclid(360.0) / 2.0;
+                vec![*center, center.polar(*dim_radius, mid)]
+            }
+            Geometry::JoggedDimension { point, center_override, jog, .. } => vec![*center_override, *jog, *point],
             Geometry::Viewport { center, clip, .. } if clip.len() >= 3 => {
                 std::iter::once(*center).chain(clip.iter().copied()).collect()
             }
@@ -1160,6 +1261,42 @@ impl Geometry {
             (Geometry::Hatch { .. }, _) => self.translated(to - self.bounds().center()),
             (Geometry::Table { position, .. }, _) => self.translated(to - *position),
             (Geometry::AttributeDefinition { position, .. }, _) => self.translated(to - *position),
+            (Geometry::OrdinateDimension { feature, .. }, 0) => self.translated(to - *feature),
+            (Geometry::OrdinateDimension { feature, x_datum, text, scale, .. }, _) => Geometry::OrdinateDimension {
+                feature: *feature,
+                leader_end: to,
+                x_datum: *x_datum,
+                text: text.clone(),
+                scale: *scale,
+            },
+            (Geometry::ArcLengthDimension { center, .. }, 0) => self.translated(to - *center),
+            (Geometry::ArcLengthDimension { center, radius, start_angle, end_angle, text, scale, .. }, _) => {
+                Geometry::ArcLengthDimension {
+                    center: *center,
+                    radius: *radius,
+                    start_angle: *start_angle,
+                    end_angle: *end_angle,
+                    dim_radius: center.distance(to),
+                    text: text.clone(),
+                    scale: *scale,
+                }
+            }
+            (Geometry::JoggedDimension { center, point, center_override, jog, text, scale }, i) => {
+                let (mut o, mut j) = (*center_override, *jog);
+                match i {
+                    0 => o = to,
+                    1 => j = to,
+                    _ => return self.clone(),
+                }
+                Geometry::JoggedDimension {
+                    center: *center,
+                    point: *point,
+                    center_override: o,
+                    jog: j,
+                    text: text.clone(),
+                    scale: *scale,
+                }
+            }
             (Geometry::Wipeout { points }, i) => {
                 let mut points = points.clone();
                 if let Some(p) = points.get_mut(i) {

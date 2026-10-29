@@ -472,6 +472,143 @@ pub fn leader_primitives(points: &[Point], content: &str, scale: f64) -> Vec<Geo
     out
 }
 
+/// An ordinate dimension (DIMORDINATE): the feature's X (with `x_datum`)
+/// or Y, by a leader from near the feature to `end` (jogging to reach it),
+/// with the value beyond the leader's end.
+pub fn ordinate_primitives(feature: Point, end: Point, x_datum: bool, text: Option<&str>, scale: f64) -> Vec<Geometry> {
+    let s = &DIM_STYLE;
+    let value = override_text(text, format_measurement(if x_datum { feature.x } else { feature.y }));
+    // Along the leader, away from the feature; across it, where the jog goes.
+    let (along, across) =
+        if x_datum { (end.y - feature.y, end.x - feature.x) } else { (end.x - feature.x, end.y - feature.y) };
+    let dir = if along >= 0.0 { 1.0 } else { -1.0 };
+    let at = |a: f64, c: f64| {
+        if x_datum { Point::new(feature.x + c, feature.y + a) } else { Point::new(feature.x + a, feature.y + c) }
+    };
+    let start = at(dir * s.ext_offset * scale, 0.0);
+    let mut points = vec![start];
+    if across.abs() > EPSILON {
+        // A jog in the middle third, as AutoCAD draws one.
+        let mid = (along - dir * s.ext_offset * scale) / 2.0 + dir * s.ext_offset * scale;
+        let half = (s.arrow_size * scale).min((along.abs() - s.ext_offset * scale).abs() / 3.0);
+        points.push(at(mid - dir * half, 0.0));
+        points.push(at(mid + dir * half, across));
+    }
+    points.push(end);
+    let mut out: Vec<Geometry> = points.windows(2).map(|w| Geometry::Line { start: w[0], end: w[1] }).collect();
+    let rotation = if x_datum { 90.0 } else { 0.0 };
+    let past = at(along + dir * s.gap * scale, across);
+    let attach = if dir > 0.0 { Attach::MiddleLeft } else { Attach::MiddleRight };
+    out.push(Geometry::Text {
+        position: past,
+        height: s.text_height * scale,
+        rotation,
+        width: 0.0,
+        attach,
+        content: value,
+    });
+    out
+}
+
+/// An arc length dimension (DIMARC): extension lines out from the arc's
+/// ends to a dimension arc at `dim_radius`, arrows at its ends, and the
+/// length with the arc symbol over it.
+pub fn arc_length_primitives(
+    center: Point,
+    radius: f64,
+    start_angle: f64,
+    end_angle: f64,
+    dim_radius: f64,
+    text: Option<&str>,
+    scale: f64,
+) -> Vec<Geometry> {
+    let s = &DIM_STYLE;
+    let sweep = (end_angle - start_angle).rem_euclid(360.0);
+    let length = radius * sweep.to_radians();
+    let content = override_text(text, format_measurement(length));
+    let out_dir = if dim_radius >= radius { 1.0 } else { -1.0 };
+    let mut out = Vec::new();
+    for a in [start_angle, end_angle] {
+        let from = center.polar(radius + out_dir * s.ext_offset * scale, a);
+        let to = center.polar(dim_radius + out_dir * s.ext_beyond * scale, a);
+        out.push(Geometry::Line { start: from, end: to });
+    }
+    out.push(Geometry::Arc { center, radius: dim_radius, start_angle, end_angle });
+    let size = s.arrow_size * scale;
+    // Arrowheads point along the arc, into each end.
+    let tangent = |a: f64| Point::ORIGIN.polar(1.0, a + 90.0);
+    out.push(arrowhead(center.polar(dim_radius, start_angle), tangent(start_angle), size));
+    out.push(arrowhead(center.polar(dim_radius, end_angle), tangent(end_angle) * -1.0, size));
+    let mid = start_angle + sweep / 2.0;
+    let rotation = readable(mid - 90.0);
+    let up = Point::ORIGIN.polar(1.0, rotation + 90.0);
+    let at = center.polar(dim_radius, mid) + up * (s.gap * scale);
+    let height = s.text_height * scale;
+    out.push(Geometry::Text {
+        position: at,
+        height,
+        rotation,
+        width: 0.0,
+        attach: Attach::BottomCenter,
+        content: content.clone(),
+    });
+    // The arc symbol over the text.
+    let over = at + up * (height * 1.6);
+    out.push(Geometry::Arc {
+        center: over,
+        radius: height * 0.45,
+        start_angle: rotation + 20.0,
+        end_angle: rotation + 160.0,
+    });
+    out
+}
+
+/// A jogged radius dimension (DIMJOGGED): from a stand-in center, a line
+/// with a zigzag at `jog` out to the point on the arc, an arrow there, and
+/// the radius by it.
+pub fn jogged_primitives(
+    center: Point,
+    point: Point,
+    center_override: Point,
+    jog: Point,
+    text: Option<&str>,
+    scale: f64,
+) -> Vec<Geometry> {
+    let s = &DIM_STYLE;
+    let r = center.distance(point);
+    let content = override_text(text, format!("R{}", format_measurement(r)));
+    let d = point - center_override;
+    let len = d.length();
+    if len <= EPSILON {
+        return Vec::new();
+    }
+    let u = d * (1.0 / len);
+    let n = Point::new(-u.y, u.x);
+    // The zigzag: across the line where `jog` is, at the jog angle (45°).
+    let t = (jog - center_override).dot(u).clamp(0.0, len);
+    let h = s.arrow_size * scale;
+    let a = center_override + u * t;
+    let (b, c) = (a + n * h + u * (h * 0.5), a + n * h - u * (h * 0.5) + u * h);
+    let mut out = vec![
+        Geometry::Line { start: center_override, end: a },
+        Geometry::Line { start: a, end: b },
+        Geometry::Line { start: b, end: c },
+        Geometry::Line { start: c, end: point + n * h },
+        Geometry::Line { start: point + n * h, end: point },
+    ];
+    out.push(arrowhead(point, u * -1.0, h));
+    let rotation = readable(Point::ORIGIN.angle_to(u));
+    out.push(Geometry::Text {
+        position: center_override.lerp(point, 0.35) + Point::ORIGIN.polar(s.gap * scale, rotation + 90.0),
+        height: s.text_height * scale,
+        rotation,
+        width: 0.0,
+        attach: Attach::BottomCenter,
+        content,
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::plain_text;

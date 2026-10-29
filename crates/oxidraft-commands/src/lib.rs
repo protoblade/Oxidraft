@@ -20,6 +20,7 @@ mod cleanup;
 mod clipboard;
 mod common;
 mod dims;
+mod dims_more;
 mod donut;
 mod draworder;
 mod edit;

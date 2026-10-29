@@ -433,6 +433,22 @@ impl OxidraftApp {
                     ("View center Y", Value::Text(fmt(view_center.y))),
                 ]
             }
+            Geometry::OrdinateDimension { feature, x_datum, text, scale, .. } => vec![
+                ("Measurement", Value::Text(fmt(if *x_datum { feature.x } else { feature.y }))),
+                ("Datum", Value::Text(if *x_datum { "X" } else { "Y" }.into())),
+                ("Text override", Value::Edit(text.clone().unwrap_or_default())),
+                ("Dim scale", Value::Number(*scale)),
+            ],
+            Geometry::ArcLengthDimension { radius, start_angle, end_angle, text, scale, .. } => vec![
+                ("Measurement", Value::Text(fmt(radius * (end_angle - start_angle).rem_euclid(360.0).to_radians()))),
+                ("Text override", Value::Edit(text.clone().unwrap_or_default())),
+                ("Dim scale", Value::Number(*scale)),
+            ],
+            Geometry::JoggedDimension { center, point, text, scale, .. } => vec![
+                ("Measurement", Value::Text(fmt(center.distance(*point)))),
+                ("Text override", Value::Edit(text.clone().unwrap_or_default())),
+                ("Dim scale", Value::Number(*scale)),
+            ],
             Geometry::AttributeDefinition {
                 tag,
                 prompt,
@@ -658,7 +674,10 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
         (
             Geometry::Dimension { scale, .. }
             | Geometry::RadialDimension { scale, .. }
-            | Geometry::AngularDimension { scale, .. },
+            | Geometry::AngularDimension { scale, .. }
+            | Geometry::OrdinateDimension { scale, .. }
+            | Geometry::ArcLengthDimension { scale, .. }
+            | Geometry::JoggedDimension { scale, .. },
             "Dim scale",
         ) if v > 0.0 => *scale = v,
         (Geometry::Dimension { rotation, .. }, "Rotation") => *rotation = v.rem_euclid(360.0),
@@ -730,7 +749,10 @@ fn with_text_property(g: &Geometry, label: &str, s: &str) -> Option<Geometry> {
         (
             Geometry::Dimension { text, .. }
             | Geometry::RadialDimension { text, .. }
-            | Geometry::AngularDimension { text, .. },
+            | Geometry::AngularDimension { text, .. }
+            | Geometry::OrdinateDimension { text, .. }
+            | Geometry::ArcLengthDimension { text, .. }
+            | Geometry::JoggedDimension { text, .. },
             "Text override",
         ) => {
             *text = Some(s.to_string()).filter(|t| !t.is_empty());
