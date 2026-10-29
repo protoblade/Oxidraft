@@ -27,6 +27,10 @@ pub(crate) struct RawViewport {
     pub frozen: Vec<u64>,
     pub on: bool,
     pub locked: bool,
+    /// A non-rectangular viewport's boundary: the object's handle, and
+    /// its outline once found.
+    pub clip_handle: u64,
+    pub clip: Vec<Point>,
 }
 
 #[derive(Default)]
@@ -38,6 +42,9 @@ pub(crate) struct RawLayouts {
     pub layout_records: HashMap<String, u64>,
     pub records: HashMap<u64, String>,
     pub viewports: Vec<RawViewport>,
+    /// The objects that are viewports' boundaries, which the viewports
+    /// draw themselves.
+    pub boundaries: Vec<u64>,
 }
 
 fn paper(plot: &[(i32, &str)]) -> Paper {
@@ -69,6 +76,8 @@ fn viewport(body: &[(i32, &str)], block: Option<String>) -> RawViewport {
         frozen: Vec::new(),
         on: true,
         locked: false,
+        clip_handle: 0,
+        clip: Vec::new(),
     };
     let hex = |s: &str| u64::from_str_radix(s, 16).unwrap_or(0);
     let num = |s: &str| s.parse::<f64>().unwrap_or(0.0);
@@ -97,6 +106,7 @@ fn viewport(body: &[(i32, &str)], block: Option<String>) -> RawViewport {
                 v.on &= flags & 0x20000 == 0;
             }
             331 => v.frozen.push(hex(value)),
+            340 => v.clip_handle = hex(value),
             _ => {}
         }
     }
@@ -113,6 +123,9 @@ pub(crate) fn read(dxf: &[u8]) -> RawLayouts {
     let pairs: Vec<(i32, &str)> =
         lines.chunks(2).filter_map(|p| Some((p[0].trim().parse().ok()?, p.get(1)?.trim()))).collect();
     let (mut section, mut block): (&str, Option<String>) = ("", None);
+    // Where each polyline and circle is, by handle: a viewport's boundary
+    // may be one of them.
+    let mut shapes: HashMap<u64, (&str, usize, usize)> = HashMap::new();
     let mut i = 0;
     while i < pairs.len() {
         let (code, value) = pairs[i];
@@ -126,6 +139,11 @@ pub(crate) fn read(dxf: &[u8]) -> RawLayouts {
             "SECTION" => section = body.iter().find(|p| p.0 == 2).map_or("", |p| p.1),
             "BLOCK" => block = body.iter().find(|p| p.0 == 2).map(|p| p.1.to_string()),
             "ENDBLK" => block = None,
+            kind @ ("LWPOLYLINE" | "CIRCLE") if section == "ENTITIES" || section == "BLOCKS" => {
+                if let Some(h) = body.iter().find(|p| p.0 == 5).and_then(|p| u64::from_str_radix(p.1, 16).ok()) {
+                    shapes.insert(h, (kind, i, end));
+                }
+            }
             "VIEWPORT" if section == "ENTITIES" => out.viewports.push(viewport(body, None)),
             "VIEWPORT" if section == "BLOCKS" => out.viewports.push(viewport(body, block.clone())),
             "BLOCK_RECORD" if section == "TABLES" => {
@@ -154,5 +172,29 @@ pub(crate) fn read(dxf: &[u8]) -> RawLayouts {
         }
         i = end;
     }
+    for v in out.viewports.iter_mut().filter(|v| v.clip_handle != 0) {
+        let Some(&(kind, from, to)) = shapes.get(&v.clip_handle) else { continue };
+        v.clip = outline(kind, &pairs[from..to]);
+        if v.clip.len() >= 3 {
+            out.boundaries.push(v.clip_handle);
+        }
+    }
     out
+}
+
+/// A boundary's outline: a polyline's vertices, or a circle as 64 sides.
+fn outline(kind: &str, body: &[(i32, &str)]) -> Vec<Point> {
+    let num = |s: &str| s.parse::<f64>().unwrap_or(0.0);
+    match kind {
+        "CIRCLE" => {
+            let get = |code: i32| body.iter().find(|p| p.0 == code).map_or(0.0, |p| num(p.1));
+            let (c, r) = (Point::new(get(10), get(20)), get(40));
+            (0..64).map(|k| c.polar(r, 360.0 * k as f64 / 64.0)).collect()
+        }
+        _ => {
+            let xs = body.iter().filter(|p| p.0 == 10).map(|p| num(p.1));
+            let ys = body.iter().filter(|p| p.0 == 20).map(|p| num(p.1));
+            xs.zip(ys).map(|(x, y)| Point::new(x, y)).collect()
+        }
+    }
 }

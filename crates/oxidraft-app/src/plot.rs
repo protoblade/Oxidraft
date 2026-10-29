@@ -159,9 +159,22 @@ fn paint_items(
                 let pos = to(*at) - egui::emath::Rot2::from_angle(angle) * vec2(0.0, baseline);
                 painter.add(egui::epaint::TextShape::new(pos, galley, rgb(*color)).with_angle(angle));
             }
-            Item::Clipped { clip, items } => {
-                let clip = Rect::from_two_pos(to(clip.min), to(clip.max)).intersect(painter.clip_rect());
-                paint_items(&painter.with_clip_rect(clip), items, to, k, textures);
+            Item::Clipped { clip: frame, shape, items } => {
+                let clip = Rect::from_two_pos(to(frame.min), to(frame.max)).intersect(painter.clip_rect());
+                let inside = painter.with_clip_rect(clip);
+                paint_items(&inside, items, to, k, textures);
+                // A non-rectangular viewport: the paper's white outside its boundary.
+                if shape.len() >= 3 {
+                    let mut mesh = egui::Mesh::default();
+                    for t in hatch::triangles(&[frame.corners().to_vec(), shape.clone()]) {
+                        let i = mesh.vertices.len() as u32;
+                        for p in t {
+                            mesh.colored_vertex(to(p), Color32::WHITE);
+                        }
+                        mesh.add_triangle(i, i + 1, i + 2);
+                    }
+                    inside.add(Shape::mesh(mesh));
+                }
             }
         }
     }

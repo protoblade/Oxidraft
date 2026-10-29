@@ -807,6 +807,7 @@ mod tests {
             frozen: Vec::new(),
             locked: false,
             on: true,
+            clip: Vec::new(),
         };
         let get = |g: Option<Geometry>| match g {
             Some(Geometry::Viewport { center, width, height, view_center, view_height, locked, on, .. }) => {

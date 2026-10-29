@@ -215,6 +215,10 @@ pub enum Geometry {
         frozen: Vec<String>,
         locked: bool,
         on: bool,
+        /// A non-rectangular viewport's boundary on the sheet (MVIEW
+        /// Polygonal or Object, VPCLIP), inside its rectangle; empty for a
+        /// rectangular one.
+        clip: Vec<Point>,
     },
     /// A table (TABLE): rows of cells hanging from its upper-left corner
     /// `position`, turned `rotation` degrees. `widths` are its columns',
@@ -478,6 +482,10 @@ impl Geometry {
             Geometry::Table { position, rotation, widths, heights, .. } => {
                 let grid = crate::table::Grid { position: *position, rotation: *rotation, widths, heights };
                 grid.lines().into_iter().map(Seg::Line).collect()
+            }
+            // Its boundary, if it isn't rectangular.
+            Geometry::Viewport { clip, .. } if clip.len() >= 3 => {
+                (0..clip.len()).map(|i| Seg::Line(Segment::new(clip[i], clip[(i + 1) % clip.len()]))).collect()
             }
             Geometry::Viewport { center, width, height, .. } => {
                 let c = viewport_corners(*center, *width, *height);
@@ -756,7 +764,7 @@ impl Geometry {
                 }
             }
             // Its frame moves and scales; the view through it stays.
-            Geometry::Viewport { center, width, height, view_center, view_height, twist, frozen, locked, on } => {
+            Geometry::Viewport { center, width, height, view_center, view_height, twist, frozen, locked, on, clip } => {
                 Geometry::Viewport {
                     center: f(*center),
                     width: width * length_factor,
@@ -767,6 +775,7 @@ impl Geometry {
                     frozen: frozen.clone(),
                     locked: *locked,
                     on: *on,
+                    clip: clip.iter().map(|p| f(*p)).collect(),
                 }
             }
             Geometry::Ray { base, direction } => {
@@ -971,6 +980,9 @@ impl Geometry {
             Geometry::Image { origin, u, v, .. } => crate::underlay::image_corners(*origin, *u, *v).to_vec(),
             Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => vec![*base, *base + *direction],
             Geometry::Table { position, .. } => vec![*position],
+            Geometry::Viewport { center, clip, .. } if clip.len() >= 3 => {
+                std::iter::once(*center).chain(clip.iter().copied()).collect()
+            }
             Geometry::Viewport { center, width, height, .. } => {
                 let mut g = vec![*center];
                 g.extend(viewport_corners(*center, *width, *height));
@@ -989,6 +1001,23 @@ impl Geometry {
             *view_center = *view_center + (center - *c) * n;
             *view_height = height * n;
             (*c, *w, *h) = (center, width, height);
+        }
+        g
+    }
+
+    /// A viewport with `clip` as its boundary (none: rectangular again),
+    /// its rectangle round it, at the same scale.
+    pub fn with_clip(&self, clip: Vec<Point>) -> Geometry {
+        let fitted = match clip.first() {
+            Some(&first) if clip.len() >= 3 => {
+                let b = clip.iter().fold(Aabb::from_points(first, first), |b, p| b.union(Aabb::from_points(*p, *p)));
+                self.reframed(b.center(), b.width(), b.height())
+            }
+            _ => self.clone(),
+        };
+        let mut g = fitted;
+        if let Geometry::Viewport { clip: c, .. } = &mut g {
+            *c = if clip.len() >= 3 { clip } else { Vec::new() };
         }
         g
     }
@@ -1064,6 +1093,14 @@ impl Geometry {
             (Geometry::Hatch { .. }, _) => self.translated(to - self.bounds().center()),
             (Geometry::Table { position, .. }, _) => self.translated(to - *position),
             (Geometry::Viewport { center, .. }, 0) => self.translated(to - *center),
+            // A boundary's vertex: the viewport fits round the new shape.
+            (Geometry::Viewport { clip, .. }, i) if clip.len() >= 3 => {
+                let mut clip = clip.clone();
+                if let Some(p) = clip.get_mut(i - 1) {
+                    *p = to;
+                }
+                self.with_clip(clip)
+            }
             // A corner: the opposite one stays, and so does the scale.
             (Geometry::Viewport { center, width, height, .. }, i) => {
                 let corners = viewport_corners(*center, *width, *height);
@@ -1205,6 +1242,7 @@ mod tests {
             frozen: Vec::new(),
             locked: false,
             on: true,
+            clip: Vec::new(),
         };
         // The upper-right corner (grip 3) out to 200, 150; the lower-left stays.
         let Geometry::Viewport { center, width, height, view_center, view_height, .. } =

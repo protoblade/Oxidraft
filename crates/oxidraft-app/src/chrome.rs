@@ -578,6 +578,25 @@ impl OxidraftApp {
                 &tool(Icon::Viewport, "Rectangular", Some("MVIEW"), "Creates a rectangular viewport (MV)"),
             );
             ui.vertical(|ui| {
+                for t in [
+                    tool(Icon::Polygon, "Polygonal", Some("MVIEW P"), "Creates a viewport bounded by points you pick"),
+                    tool(
+                        Icon::Circle,
+                        "Object",
+                        Some("MVIEW O"),
+                        "Makes a closed polyline, circle or ellipse a viewport",
+                    ),
+                    tool(
+                        Icon::ImageClip,
+                        "Clip",
+                        Some("VPCLIP"),
+                        "Clips a viewport to a shape or points, or Deletes its clipping",
+                    ),
+                ] {
+                    self.small_tool(ui, &t);
+                }
+            });
+            ui.vertical(|ui| {
                 for t in VIEWPORT_TOOLS {
                     self.small_tool(ui, t);
                 }

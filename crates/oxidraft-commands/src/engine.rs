@@ -47,7 +47,7 @@ use crate::{
     matchprop::MatchProp,
     mirror::Mirror,
     move_copy::MoveCopy,
-    mview::{Mview, VpMax},
+    mview::{Mview, VpClip, VpMax},
     offset::Offset,
     parse_input,
     pedit::Pedit,
@@ -601,6 +601,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["MV"],
         description: "Make viewports onto model space in a layout, or turn them on, off or locked",
         make: Some(|| Box::new(Mview::default())),
+    },
+    CommandInfo {
+        name: "VPCLIP",
+        aliases: &[],
+        description: "Clip a layout viewport to a closed shape or points, or make it rectangular again",
+        make: Some(|| Box::new(VpClip::default())),
     },
     CommandInfo {
         name: "VPMAX",

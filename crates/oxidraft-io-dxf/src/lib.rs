@@ -1117,7 +1117,8 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         let n = attribute_count(e);
         let style = styles.as_ref().map(|s| &s[next..next + n]);
         next += n;
-        if is_template(&e.specific) {
+        // Viewports' boundaries are drawn by their viewports.
+        if is_template(&e.specific) || raw.layouts.boundaries.contains(&e.common.handle.0) {
             continue;
         }
         // The active layout's objects are here too, marked paper space.
@@ -1156,6 +1157,9 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         let Some(space) = space_of_record(&b.name) else { continue };
         doc.set_space(space);
         for e in b.entities.iter().filter(|e| !is_template(&e.specific)) {
+            if raw.layouts.boundaries.contains(&e.common.handle.0) {
+                continue;
+            }
             let picture = match &e.specific {
                 EntityType::Image(_) | EntityType::PdfUnderlay(_) => pictures.geometry(&e.specific, &mut doc),
                 _ => None,
@@ -1202,9 +1206,29 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
             frozen: v.frozen.iter().filter_map(|h| layer_names.get(h).cloned()).collect(),
             locked: v.locked,
             on: v.on,
+            clip: v.clip.clone(),
         };
         let id = doc.add_styled(g, &v.layer, Color::ByLayer, linetype::BYLAYER, Lineweight::ByLayer);
         placed.push((v.handle, f64::from(u32::MAX), id));
+        // Its boundary is drawn by it, not as a polyline of its own.
+        if v.clip.len() >= 3 {
+            let boundary = doc
+                .entities()
+                .find(|e| match &e.geometry {
+                    Geometry::Polyline { vertices, .. } => {
+                        vertices.len() == v.clip.len()
+                            && vertices.iter().zip(&v.clip).all(|(a, b)| a.point.distance(*b) < 1e-6)
+                    }
+                    Geometry::Circle { center, radius } => {
+                        v.clip.len() == 64 && v.clip.iter().all(|p| (p.distance(*center) - radius).abs() < 1e-6)
+                    }
+                    _ => false,
+                })
+                .map(|e| e.id);
+            if let Some(b) = boundary {
+                doc.remove(b);
+            }
+        }
         doc.set_space(MODEL);
     }
     // Hatches are read last, then put in their place in the draw order.

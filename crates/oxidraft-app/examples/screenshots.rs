@@ -660,6 +660,7 @@ fn main() {
             frozen: vec!["Hatch".into()],
             locked: false,
             on: true,
+            clip: Vec::new(),
         });
         doc.set_space(oxidraft_model::MODEL);
     }
@@ -667,6 +668,28 @@ fn main() {
     h.state_mut().switch_space(space);
     h.run_steps(4);
     save(&mut h, &dir, "33-layout");
+    // A second viewport, a pentagon twisted a quarter turn, over the title block's corner.
+    {
+        let doc = h.state_mut().document_mut();
+        let pentagon: Vec<Point> =
+            (0..5).map(|k| Point::new(350.0, 175.0).polar(42.0, 90.0 + 72.0 * f64::from(k))).collect();
+        let twisted = Geometry::Viewport {
+            center: Point::new(350.0, 175.0),
+            width: 84.0,
+            height: 84.0,
+            view_center: Point::new(30.0, 30.0),
+            view_height: 60.0,
+            twist: 90.0,
+            frozen: vec!["Hatch".into()],
+            locked: false,
+            on: true,
+            clip: Vec::new(),
+        }
+        .with_clip(pentagon);
+        doc.add(twisted);
+    }
+    h.run_steps(3);
+    save(&mut h, &dir, "33b-polygonal-viewport");
     // Working in model space through the viewport (MSPACE), the sheet around it.
     h.state_mut().type_command("ms");
     h.run_steps(3);

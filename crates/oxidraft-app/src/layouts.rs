@@ -419,7 +419,7 @@ impl OxidraftApp {
                 ui.painter().rect_filled(space, 4.0, theme::input_bg());
                 let k = ((space.width() - 20.0) as f64 / sheet.width())
                     .min((space.height() - 20.0) as f64 / sheet.height());
-                let view = View { center: sheet.center(), scale: k };
+                let view = View::new(sheet.center(), k);
                 let to = |p| view.to_screen(space, p);
                 let on_screen = Rect::from_two_pos(to(sheet.min), to(sheet.max));
                 ui.painter().rect_filled(on_screen, 0.0, Color32::WHITE);

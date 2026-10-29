@@ -4,9 +4,9 @@
 //! order, page setup) and viewports before the file is written.
 
 use acadrust::CadDocument;
-use acadrust::entities::{EntityType, Viewport, ViewportStatusFlags};
+use acadrust::entities::{EntityType, LwPolyline, Viewport, ViewportStatusFlags};
 use acadrust::objects::{Layout, ObjectType, PlotFlags};
-use acadrust::types::Vector3;
+use acadrust::types::{Vector2, Vector3};
 use oxidraft_model::{Document, Geometry, Paper};
 
 /// The page setup's fields acadrust writes to DWG (DXF replays `raw`).
@@ -102,7 +102,7 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document) {
         // The viewports onto model space.
         let mut id = 2;
         for e in doc.space_in_draw_order(layout.id) {
-            let Geometry::Viewport { center, width, height, view_center, view_height, twist, frozen, locked, on } =
+            let Geometry::Viewport { center, width, height, view_center, view_height, twist, frozen, locked, on, clip } =
                 &e.geometry
             else {
                 continue;
@@ -122,6 +122,17 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document) {
                 .filter_map(|n| cad.layers.iter().find(|l| l.name.eq_ignore_ascii_case(n)).map(|l| l.handle))
                 .collect();
             vp.common.layer = e.layer.clone();
+            // A non-rectangular one: its boundary, a closed polyline on the
+            // sheet, which it's clipped to.
+            if clip.len() >= 3 {
+                let mut boundary = LwPolyline::from_points(clip.iter().map(|p| Vector2::new(p.x, p.y)).collect());
+                boundary.close();
+                boundary.common.layer = e.layer.clone();
+                if let Ok(h) = cad.add_entity_to_layout(EntityType::LwPolyline(boundary), &layout.name) {
+                    vp.clip_boundary_handle = h;
+                    vp.status.non_rectangular_clipping = true;
+                }
+            }
             let _ = cad.add_entity_to_layout(EntityType::Viewport(Box::new(vp)), &layout.name);
         }
     }

@@ -31,26 +31,30 @@ pub(crate) struct Frame {
     pub height: f64,
     pub view_center: Point,
     pub view_height: f64,
+    /// Degrees model space shows turned counterclockwise in it.
+    pub twist: f64,
     pub locked: bool,
     pub frozen: Vec<String>,
+    /// A non-rectangular viewport's boundary on the sheet.
+    pub clip: Vec<Point>,
 }
 
 impl Frame {
     pub fn of(doc: &Document, id: EntityId) -> Option<Frame> {
         match &doc.entity(id)?.geometry {
-            Geometry::Viewport { center, width, height, view_center, view_height, locked, frozen, .. }
-                if *view_height > 0.0 && *height > 0.0 =>
-            {
-                Some(Frame {
-                    center: *center,
-                    width: *width,
-                    height: *height,
-                    view_center: *view_center,
-                    view_height: *view_height,
-                    locked: *locked,
-                    frozen: frozen.clone(),
-                })
-            }
+            Geometry::Viewport {
+                center, width, height, view_center, view_height, twist, locked, frozen, clip, ..
+            } if *view_height > 0.0 && *height > 0.0 => Some(Frame {
+                center: *center,
+                width: *width,
+                height: *height,
+                view_center: *view_center,
+                view_height: *view_height,
+                twist: *twist,
+                locked: *locked,
+                frozen: frozen.clone(),
+                clip: clip.clone(),
+            }),
             _ => None,
         }
     }
@@ -64,14 +68,35 @@ impl Frame {
     /// being seen through `page`.
     pub fn model_view(&self, page: View) -> View {
         let k = self.k();
-        View { scale: page.scale * k, center: self.view_center - (self.center - page.center) * (1.0 / k) }
+        let offset = ((self.center - page.center) * (1.0 / k)).rotated_about(Point::ORIGIN, -self.twist);
+        View { scale: page.scale * k, center: self.view_center - offset, rotation: self.twist }
     }
 
     /// The view center and height the viewport has when `model` lines up
     /// with it, the sheet being seen through `page`.
     pub fn view_of(&self, page: View, model: View) -> (Point, f64) {
         let k = model.scale / page.scale;
-        (model.center + (self.center - page.center) * (1.0 / k), self.height / k)
+        let offset = ((self.center - page.center) * (1.0 / k)).rotated_about(Point::ORIGIN, -self.twist);
+        (model.center + offset, self.height / k)
+    }
+
+    /// Covers what's drawn in the frame but outside a non-rectangular
+    /// viewport's boundary with the sheet's white.
+    pub fn mask_outside(&self, painter: &eframe::egui::Painter, rect: Rect, page: View) {
+        if self.clip.len() < 3 {
+            return;
+        }
+        let half = Point::new(self.width / 2.0, self.height / 2.0);
+        let outer = oxidraft_geom::Aabb::from_points(self.center - half, self.center + half).corners().to_vec();
+        let mut mesh = eframe::egui::Mesh::default();
+        for t in oxidraft_model::hatch::triangles(&[outer, self.clip.clone()]) {
+            let i = mesh.vertices.len() as u32;
+            for p in t {
+                mesh.colored_vertex(page.to_screen(rect, p), eframe::egui::Color32::WHITE);
+            }
+            mesh.add_triangle(i, i + 1, i + 2);
+        }
+        painter.add(eframe::egui::Shape::mesh(mesh));
     }
 
     /// The frame on screen, the sheet being seen through `page`.
@@ -103,7 +128,7 @@ impl OxidraftApp {
         self.doc.set_space(MODEL);
         self.view = if maximized {
             let height = f64::from(self.canvas_rect.height()).max(1.0);
-            View { center: frame.view_center, scale: height / frame.view_height }
+            View { center: frame.view_center, scale: height / frame.view_height, rotation: frame.twist }
         } else {
             frame.model_view(page)
         };
@@ -277,10 +302,12 @@ mod tests {
             height: 60.0,
             view_center: Point::new(5000.0, 2000.0),
             view_height: 600.0,
+            twist: 0.0,
             locked: false,
             frozen: Vec::new(),
+            clip: Vec::new(),
         };
-        let page = View { center: Point::new(140.0, 100.0), scale: 3.0 };
+        let page = View::new(Point::new(140.0, 100.0), 3.0);
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 700.0));
         let model = frame.model_view(page);
         // The view center shows at the frame's center, at 1:10.
@@ -289,5 +316,15 @@ mod tests {
         assert!((model.scale - 0.3).abs() < 1e-12);
         let (center, height) = frame.view_of(page, model);
         assert!(center.distance(frame.view_center) < 1e-9 && (height - 600.0).abs() < 1e-9);
+        // Twisted a quarter turn: still the view center at the frame's
+        // center, and model up is screen left.
+        let twisted = Frame { twist: 90.0, ..frame.clone() };
+        let model = twisted.model_view(page);
+        let at = model.to_screen(rect, twisted.view_center);
+        assert!((at - page.to_screen(rect, twisted.center)).length() < 1e-3);
+        let up = model.to_screen(rect, twisted.view_center + Point::new(0.0, 100.0)) - at;
+        assert!(up.x < -20.0 && up.y.abs() < 1e-3, "{up:?}");
+        let (center, _) = twisted.view_of(page, model);
+        assert!(center.distance(twisted.view_center) < 1e-9);
     }
 }

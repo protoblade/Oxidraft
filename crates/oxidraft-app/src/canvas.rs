@@ -184,7 +184,7 @@ impl OxidraftApp {
         theme::set_paper(layout.is_some());
         match &layout {
             Some(l) => self.draw_sheet(&painter, rect, &l.paper),
-            None if self.grid => self.draw_grid(&painter, rect),
+            None if self.grid && self.view.rotation == 0.0 => self.draw_grid(&painter, rect),
             None => {}
         }
         if layout.is_some() {
@@ -209,7 +209,8 @@ impl OxidraftApp {
         }
         self.sheet_scale = None;
         // The sheet's own objects over it, and the frame worked in.
-        if let (Some((_, r)), Some(a)) = (&active, self.active_viewport) {
+        if let (Some((f, r)), Some(a)) = (&active, self.active_viewport) {
+            f.mask_outside(&model, rect, a.page);
             self.view = a.page;
             self.draw_entities(&painter, rect, None, a.layout, &[]);
             self.view = model_view;
@@ -287,35 +288,28 @@ impl OxidraftApp {
     /// Model space through the layout's viewports: each shows the part
     /// around its view center at its scale, without the layers it freezes.
     fn draw_viewports(&mut self, painter: &Painter, rect: Rect, space: Space, skip: Option<oxidraft_model::EntityId>) {
-        let viewports: Vec<(Point, f64, f64, Point, f64, Vec<String>)> = self
+        let frames: Vec<Frame> = self
             .doc
             .space_in_draw_order(space)
             .into_iter()
             .filter(|e| self.doc.is_shown(&e.layer) && Some(e.id) != skip)
-            .filter_map(|e| match &e.geometry {
-                Geometry::Viewport { center, width, height, view_center, view_height, frozen, on: true, .. } => {
-                    Some((*center, *width, *height, *view_center, *view_height, frozen.clone()))
-                }
-                _ => None,
-            })
+            .filter(|e| matches!(e.geometry, Geometry::Viewport { on: true, .. }))
+            .filter_map(|e| Frame::of(&self.doc, e.id))
             .collect();
         let page = self.view;
-        for (center, width, height, view_center, view_height, frozen) in viewports {
-            let k = height / view_height;
-            if !k.is_finite() || k <= 0.0 {
-                continue;
-            }
-            let corners = oxidraft_model::viewport_corners(center, width, height);
-            let frame = Rect::from_two_pos(page.to_screen(rect, corners[0]), page.to_screen(rect, corners[2]));
-            let clip = frame.intersect(rect);
+        for frame in frames {
+            let clip = frame.on_screen(page, rect).intersect(rect);
             if clip.width() <= 0.0 || clip.height() <= 0.0 {
                 continue;
             }
             // Model space as the viewport shows it: its view center at the
-            // viewport's center, scaled from paper to model units.
-            self.view = View { scale: page.scale * k, center: view_center - (center - page.center) * (1.0 / k) };
+            // viewport's center, scaled from paper to model units and turned
+            // by its twist.
+            self.view = frame.model_view(page);
             self.sheet_scale = Some(page.scale);
-            self.draw_entities(&painter.with_clip_rect(clip), rect, None, MODEL, &frozen);
+            let inside = painter.with_clip_rect(clip);
+            self.draw_entities(&inside, rect, None, MODEL, &frame.frozen);
+            frame.mask_outside(&inside, rect, page);
             self.sheet_scale = None;
             self.view = page;
         }
@@ -947,7 +941,7 @@ impl OxidraftApp {
         let (fx, fy) = attach.fractions();
         let offset = vec2(fx as f32 * width, top + fy as f32 * (last - top));
         // World angles run counterclockwise; egui's clockwise on a y-down screen.
-        let angle = -(*rotation as f32).to_radians();
+        let angle = -((*rotation + self.view.rotation) as f32).to_radians();
         let pos = anchor - egui::emath::Rot2::from_angle(angle) * offset;
         painter.add(egui::epaint::TextShape::new(pos, galley, stroke.color).with_angle(angle));
     }

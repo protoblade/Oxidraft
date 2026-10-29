@@ -42,8 +42,9 @@ pub enum Item {
     /// `v`, inside `clip` when that has points; in grays for monochrome
     /// and grayscale pen tables.
     Image { name: String, origin: Point, u: Point, v: Point, clip: Vec<Point>, gray: bool },
-    /// What a layout viewport shows: `items` cut to its frame.
-    Clipped { clip: Aabb, items: Vec<Item> },
+    /// What a layout viewport shows: `items` cut to its frame, and to
+    /// `shape` too when it isn't rectangular.
+    Clipped { clip: Aabb, shape: Vec<Point>, items: Vec<Item> },
 }
 
 /// An image's pixels, RGBA, rows top to bottom.
@@ -70,6 +71,8 @@ struct Through {
     view_center: Point,
     /// Paper units per model unit.
     k: f64,
+    /// Degrees model space shows turned in it.
+    twist: f64,
     /// The part of model space it shows.
     window: Aabb,
 }
@@ -102,9 +105,16 @@ fn overlaps(a: &Aabb, b: &Aabb) -> bool {
 impl<'a> Plotter<'a> {
     fn paper(&self, p: Point) -> Point {
         match self.through {
-            Some(t) => self.layout.to_paper(t.center + (p - t.view_center) * t.k),
+            Some(t) => {
+                self.layout.to_paper(t.center + ((p - t.view_center) * t.k).rotated_about(Point::ORIGIN, t.twist))
+            }
             None => self.layout.to_paper(p),
         }
+    }
+
+    /// Degrees what's plotted turns: a viewport's twist.
+    fn twist(&self) -> f64 {
+        self.through.map_or(0.0, |t| t.twist)
     }
 
     /// Millimeters on paper per drawing unit.
@@ -135,7 +145,19 @@ impl<'a> Plotter<'a> {
     /// A viewport that's on: model space at its scale, cut to its frame
     /// (which plots as its own lines).
     fn viewport(&mut self, g: &'a Geometry) {
-        let Geometry::Viewport { center, width, height, view_center, view_height, frozen, on: true, .. } = g else {
+        let Geometry::Viewport {
+            center,
+            width,
+            height,
+            view_center,
+            view_height,
+            twist,
+            frozen,
+            on: true,
+            clip: boundary,
+            ..
+        } = g
+        else {
             return;
         };
         if *view_height <= 0.0 || *height <= 0.0 {
@@ -143,15 +165,20 @@ impl<'a> Plotter<'a> {
         }
         let k = height / view_height;
         let half = Point::new(width / 2.0, height / 2.0);
-        let window = Aabb::from_points(*view_center - half * (1.0 / k), *view_center + half * (1.0 / k));
+        // What it shows of model space: its frame, turned back by its twist.
+        let frame = Aabb::from_points(*center - half, *center + half);
+        let back =
+            frame.corners().map(|c| *view_center + ((c - *center) * (1.0 / k)).rotated_about(Point::ORIGIN, -twist));
+        let window = back.iter().fold(Aabb::from_points(back[0], back[0]), |b, p| b.union(Aabb::from_points(*p, *p)));
         let clip = Aabb::from_points(self.layout.to_paper(*center - half), self.layout.to_paper(*center + half));
         let sheet = std::mem::take(&mut self.items);
-        self.through = Some(Through { center: *center, view_center: *view_center, k, window });
+        self.through = Some(Through { center: *center, view_center: *view_center, k, twist: *twist, window });
         self.objects(self.doc.space_in_draw_order(MODEL), window, frozen);
         self.through = None;
         let items = std::mem::replace(&mut self.items, sheet);
         if !items.is_empty() {
-            self.items.push(Item::Clipped { clip, items });
+            let shape = boundary.iter().map(|p| self.layout.to_paper(*p)).collect();
+            self.items.push(Item::Clipped { clip, shape, items });
         }
     }
 
@@ -271,8 +298,13 @@ impl<'a> Plotter<'a> {
             }
             let local = Point::new(-fx * widest, -0.7 + fy * span - i as f64 * row) * size;
             let at = *position + local.rotated_about(Point::ORIGIN, *rotation);
-            let item =
-                Item::Text { at: self.paper(at), rotation: *rotation, size: size * self.unit(), text: line, color };
+            let item = Item::Text {
+                at: self.paper(at),
+                rotation: rotation + self.twist(),
+                size: size * self.unit(),
+                text: line,
+                color,
+            };
             self.items.push(item);
         }
     }
@@ -447,6 +479,7 @@ mod tests {
             frozen: vec!["Trees".into()],
             locked: false,
             on: true,
+            clip: Vec::new(),
         });
         doc.set_space(MODEL);
         let settings = PlotSettings { area: PlotArea::Layout, ..PlotSettings::default() };
@@ -456,7 +489,7 @@ mod tests {
         let Item::Stroke { paths, .. } = &sheet.items[0] else { panic!("{:?}", sheet.items[0]) };
         assert_eq!(paths[0].points, vec![Point::new(10.0, 10.0), Point::new(287.0, 10.0)]);
         // Model space through the viewport, cut to its frame; Trees frozen there.
-        let Item::Clipped { clip, items } = &sheet.items[1] else { panic!("{:?}", sheet.items[1]) };
+        let Item::Clipped { clip, items, .. } = &sheet.items[1] else { panic!("{:?}", sheet.items[1]) };
         assert_eq!(*clip, Aabb::from_points(Point::new(110.0, 85.0), Point::new(210.0, 135.0)));
         assert_eq!(items.len(), 1, "the line, not the frozen circle");
         let Item::Stroke { paths, .. } = &items[0] else { panic!() };
@@ -464,6 +497,18 @@ mod tests {
         assert!(paths[0].points[1].approx_eq(Point::new(210.0, 110.0)));
         // Then the viewport's own frame.
         assert!(matches!(&sheet.items[2], Item::Stroke { paths, .. } if paths[0].closed), "{:?}", sheet.items.get(2));
+        // Twisted a quarter turn, the model's line stands up in the frame.
+        doc.update(viewport, |e| {
+            if let Geometry::Viewport { twist, .. } = &mut e.geometry {
+                *twist = 90.0;
+            }
+        });
+        let sheet = render(&doc, space, &settings).unwrap();
+        let Item::Clipped { items, .. } = &sheet.items[1] else { panic!("{:?}", sheet.items[1]) };
+        let Item::Stroke { paths, .. } = &items[0] else { panic!() };
+        let (a, b) = (paths[0].points[0], paths[0].points[1]);
+        assert!((a.x - 160.0).abs() < 1e-9 && (b.x - 160.0).abs() < 1e-9, "{a:?} {b:?}");
+        assert!(((a.y - b.y).abs() - 100.0).abs() < 1e-9);
         // A viewport turned off shows nothing through it.
         doc.update(viewport, |e| {
             if let Geometry::Viewport { on, .. } = &mut e.geometry {

@@ -5,12 +5,16 @@ use oxidraft_model::{Document, EntityId, Geometry, MODEL, Space};
 
 use crate::{Command, Ctx, Input, Prompt, Step, UiRequest};
 
-const OPTIONS: &[&str] = &["ON", "OFF", "Fit", "Lock"];
+const OPTIONS: &[&str] = &["ON", "OFF", "Fit", "Lock", "Object", "Polygonal"];
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Stage {
     Corner,
     Other(Point),
+    /// Polygonal: the boundary's points so far.
+    Polygon(Vec<Point>),
+    /// Object: picking the closed shape to make a viewport of.
+    Object,
     /// Selecting viewports to turn on (true) or off.
     Switch(bool),
     LockMode,
@@ -56,6 +60,7 @@ pub fn viewport_onto_model(doc: &Document, frame: Aabb) -> Geometry {
         frozen: Vec::new(),
         locked: false,
         on: true,
+        clip: Vec::new(),
     }
 }
 
@@ -160,17 +165,42 @@ impl Command for Mview {
     }
 
     fn prompt(&self) -> Prompt {
-        match self.stage {
+        match &self.stage {
             Stage::Corner => Prompt::new("Specify corner of viewport").with_keywords(OPTIONS).with_default("Fit"),
             Stage::Other(_) => Prompt::new("Specify opposite corner"),
+            Stage::Polygon(points) if points.is_empty() => Prompt::new("Specify start point"),
+            Stage::Polygon(_) => Prompt::new("Specify next point").with_keywords(&["Undo"]).with_default("close"),
+            Stage::Object => Prompt::new("Select object to clip viewport"),
             Stage::LockMode => Prompt::new("Viewport View Locking").with_keywords(&["ON", "OFF"]),
             Stage::Switch(_) | Stage::Lock(_) => Prompt::new("Select objects"),
         }
     }
 
     fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
-        match (self.stage, input) {
+        match (self.stage.clone(), input) {
             (Stage::Corner, Input::Point(p)) => self.stage = Stage::Other(p),
+            (Stage::Corner, Input::Keyword("Polygonal")) => self.stage = Stage::Polygon(Vec::new()),
+            (Stage::Corner, Input::Keyword("Object")) => self.stage = Stage::Object,
+            (Stage::Polygon(mut points), Input::Point(p)) => {
+                points.push(p);
+                self.stage = Stage::Polygon(points);
+            }
+            (Stage::Polygon(mut points), Input::Keyword(_)) => {
+                points.pop();
+                self.stage = Stage::Polygon(points);
+            }
+            (Stage::Polygon(points), Input::Enter) if points.len() >= 3 => {
+                return add_clipped(points, ctx);
+            }
+            (Stage::Polygon(_), Input::Enter) => return Err("A boundary needs three points or more.".into()),
+            (Stage::Object, Input::Pick { at, .. }) => {
+                let id = ctx.pick(at).ok_or("No object found.")?;
+                let shape = ctx.doc.entity(id).and_then(|e| boundary_of(&e.geometry));
+                let points = shape.ok_or("Choose a closed polyline, circle or ellipse.")?;
+                // The shape becomes the viewport's boundary.
+                ctx.doc.remove(id);
+                return add_clipped(points, ctx);
+            }
             (Stage::Corner, Input::Keyword("Fit") | Input::Enter) => {
                 let printable = self.printable.unwrap_or(Aabb::from_points(Point::ORIGIN, Point::ORIGIN));
                 return self.add(printable, ctx);
@@ -205,8 +235,12 @@ impl Command for Mview {
     }
 
     fn preview(&self, cursor: Point) -> Vec<Geometry> {
-        match self.stage {
-            Stage::Other(a) => {
+        match &self.stage {
+            Stage::Polygon(points) if !points.is_empty() => {
+                let vertices = points.iter().chain([&cursor]).map(|p| oxidraft_model::Vertex::at(*p)).collect();
+                vec![Geometry::Polyline { vertices, closed: true }]
+            }
+            &Stage::Other(a) => {
                 let corners = [a, Point::new(cursor.x, a.y), cursor, Point::new(a.x, cursor.y)];
                 vec![Geometry::Polyline {
                     vertices: corners.into_iter().map(oxidraft_model::Vertex::at).collect(),
@@ -218,14 +252,157 @@ impl Command for Mview {
     }
 
     fn base_point(&self) -> Option<Point> {
-        match self.stage {
-            Stage::Other(a) => Some(a),
+        match &self.stage {
+            Stage::Other(a) => Some(*a),
+            Stage::Polygon(points) => points.last().copied(),
             _ => None,
         }
     }
 
     fn wants_selection(&self) -> bool {
         matches!(self.stage, Stage::Switch(_) | Stage::Lock(_))
+    }
+
+    fn wants_pick(&self) -> bool {
+        self.stage == Stage::Object
+    }
+}
+
+/// A closed shape's outline, as a non-rectangular viewport's boundary:
+/// a closed polyline's (its arcs in short chords), a circle's or an
+/// ellipse's.
+pub fn boundary_of(g: &Geometry) -> Option<Vec<Point>> {
+    let closed = match g {
+        Geometry::Polyline { closed, vertices } => *closed && vertices.len() >= 3,
+        Geometry::Circle { .. } => true,
+        Geometry::Ellipse(e) => e.is_full(),
+        _ => false,
+    };
+    if !closed {
+        return None;
+    }
+    let mut points: Vec<Point> = Vec::new();
+    for run in g.outline_runs() {
+        for p in run {
+            if points.last().is_none_or(|q| q.distance(p) > 1e-9) {
+                points.push(p);
+            }
+        }
+    }
+    if points.len() > 2 && points[0].distance(points[points.len() - 1]) < 1e-9 {
+        points.pop();
+    }
+    (points.len() >= 3).then_some(points)
+}
+
+/// A viewport bounded by `points`, onto model space's extents.
+fn add_clipped(points: Vec<Point>, ctx: &mut Ctx) -> Result<Step, String> {
+    let first = points[0];
+    let frame = points.iter().fold(Aabb::from_points(first, first), |b, p| b.union(Aabb::from_points(*p, *p)));
+    if frame.width() <= EPSILON || frame.height() <= EPSILON {
+        return Err("The boundary needs some width and height.".into());
+    }
+    let viewport = viewport_onto_model(ctx.doc, frame).with_clip(points);
+    ctx.doc.add(viewport);
+    Ok(Step::Done)
+}
+
+#[derive(Clone, PartialEq)]
+enum ClipStage {
+    Viewport,
+    Clip(EntityId),
+    Polygon(EntityId, Vec<Point>),
+}
+
+/// VPCLIP: a viewport's boundary from a closed shape or points picked, or
+/// Delete to make it rectangular again.
+pub struct VpClip {
+    stage: ClipStage,
+}
+
+impl Default for VpClip {
+    fn default() -> Self {
+        Self { stage: ClipStage::Viewport }
+    }
+}
+
+impl VpClip {
+    fn clip(id: EntityId, points: Vec<Point>, ctx: &mut Ctx) -> Result<Step, String> {
+        let g = ctx.doc.entity(id).map(|e| e.geometry.with_clip(points)).ok_or("The viewport is gone.")?;
+        ctx.doc.modify(id, g);
+        Ok(Step::Done)
+    }
+}
+
+impl Command for VpClip {
+    fn prepare(&mut self, doc: &Document) -> Option<String> {
+        doc.layout(doc.space()).is_none().then(|| "** Command not allowed in Model Tab **".into())
+    }
+
+    fn is_finished(&self) -> bool {
+        false
+    }
+
+    fn prompt(&self) -> Prompt {
+        match &self.stage {
+            ClipStage::Viewport => Prompt::new("Select viewport to clip"),
+            ClipStage::Clip(_) => {
+                Prompt::new("Select clipping object").with_keywords(&["Polygonal", "Delete"]).with_default("Polygonal")
+            }
+            ClipStage::Polygon(_, points) if points.is_empty() => Prompt::new("Specify start point"),
+            ClipStage::Polygon(..) => Prompt::new("Specify next point").with_keywords(&["Undo"]).with_default("close"),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        if ctx.doc.layout(ctx.doc.space()).is_none() {
+            return Err("** Command not allowed in Model Tab **".into());
+        }
+        match (self.stage.clone(), input) {
+            (ClipStage::Viewport, Input::Pick { at, .. }) => {
+                let viewport = ctx
+                    .pick(at)
+                    .filter(|id| ctx.doc.entity(*id).is_some_and(|e| matches!(e.geometry, Geometry::Viewport { .. })))
+                    .or_else(|| viewport_at(ctx.doc, ctx.doc.space(), at));
+                self.stage = ClipStage::Clip(viewport.ok_or("That isn't a viewport.")?);
+            }
+            (ClipStage::Clip(id), Input::Pick { at, .. }) => {
+                let shape_id = ctx.pick(at).filter(|s| *s != id).ok_or("No object found.")?;
+                let shape = ctx.doc.entity(shape_id).and_then(|e| boundary_of(&e.geometry));
+                let points = shape.ok_or("Choose a closed polyline, circle or ellipse.")?;
+                ctx.doc.remove(shape_id);
+                return Self::clip(id, points, ctx);
+            }
+            (ClipStage::Clip(id), Input::Keyword("Delete")) => return Self::clip(id, Vec::new(), ctx),
+            (ClipStage::Clip(id), Input::Keyword(_) | Input::Enter) => self.stage = ClipStage::Polygon(id, Vec::new()),
+            (ClipStage::Polygon(id, mut points), Input::Point(p)) => {
+                points.push(p);
+                self.stage = ClipStage::Polygon(id, points);
+            }
+            (ClipStage::Polygon(id, mut points), Input::Keyword(_)) => {
+                points.pop();
+                self.stage = ClipStage::Polygon(id, points);
+            }
+            (ClipStage::Polygon(id, points), Input::Enter) if points.len() >= 3 => return Self::clip(id, points, ctx),
+            (ClipStage::Polygon(..), Input::Enter) => return Err("A boundary needs three points or more.".into()),
+            (ClipStage::Viewport, Input::Enter) => return Ok(Step::Done),
+            _ => return Err("Pick a viewport, then its boundary.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn preview(&self, cursor: Point) -> Vec<Geometry> {
+        match &self.stage {
+            ClipStage::Polygon(_, points) if !points.is_empty() => {
+                let vertices = points.iter().chain([&cursor]).map(|p| oxidraft_model::Vertex::at(*p)).collect();
+                vec![Geometry::Polyline { vertices, closed: true }]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn wants_pick(&self) -> bool {
+        matches!(self.stage, ClipStage::Viewport | ClipStage::Clip(_))
     }
 }
 
@@ -297,6 +474,34 @@ mod tests {
         run(&mut engine, &mut doc, &[""]);
         let [Geometry::Viewport { on, locked, .. }] = viewports(&doc)[..] else { panic!() };
         assert!(locked && !on);
+    }
+
+    #[test]
+    fn polygonal_and_object_viewports_and_vpclip() {
+        let mut doc = doc_with_layout();
+        let mut engine = Engine::new();
+        run(&mut engine, &mut doc, &["MV", "P", "10,10", "110,10", "60,90", ""]);
+        let [Geometry::Viewport { center, width, height, clip, .. }] = &viewports(&doc)[..] else { panic!() };
+        assert_eq!((*center, *width, *height, clip.len()), (Point::new(60.0, 50.0), 100.0, 80.0, 3));
+        // A circle made into a viewport goes; the viewport is round.
+        doc.add(Geometry::Circle { center: Point::new(200.0, 100.0), radius: 20.0 });
+        run(&mut engine, &mut doc, &["MV", "O"]);
+        let on_circle = Point::new(220.0, 100.0);
+        engine.click(on_circle, on_circle, false, &mut doc, 1.0);
+        assert!(doc.entities().all(|e| !matches!(e.geometry, Geometry::Circle { .. })));
+        let round =
+            viewports(&doc).into_iter().find(|g| matches!(g, Geometry::Viewport { clip, .. } if clip.len() > 3));
+        assert!(matches!(round, Some(Geometry::Viewport { width, .. }) if (width - 40.0).abs() < 1e-6));
+        // VPCLIP Delete makes the triangle rectangular again.
+        run(&mut engine, &mut doc, &["VPCLIP"]);
+        let inside = Point::new(60.0, 30.0);
+        engine.click(inside, inside, false, &mut doc, 1.0);
+        run(&mut engine, &mut doc, &["D"]);
+        let rectangular = viewports(&doc)
+            .into_iter()
+            .filter(|g| matches!(g, Geometry::Viewport { clip, .. } if clip.is_empty()))
+            .count();
+        assert_eq!(rectangular, 1);
     }
 
     #[test]

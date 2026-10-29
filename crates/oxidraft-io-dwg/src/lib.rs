@@ -377,21 +377,24 @@ mod tests {
             vertices: frame.iter().map(|&(x, y)| Vertex::at(Point::new(x, y))).collect(),
             closed: true,
         });
-        let viewport = |frozen: Vec<String>| Geometry::Viewport {
+        let viewport = |frozen: Vec<String>, clip: Vec<Point>| Geometry::Viewport {
             center: Point::new(200.0, 150.0),
             width: 300.0,
             height: 200.0,
             view_center: Point::new(50.0, 25.0),
             view_height: 100.0,
-            twist: 0.0,
+            twist: 30.0,
             frozen,
             locked: true,
             on: true,
+            clip,
         };
-        doc.add(viewport(Vec::new()));
+        doc.add(viewport(Vec::new(), Vec::new()));
         doc.set_space(plan);
         doc.add(Geometry::Line { start: Point::new(20.0, 20.0), end: Point::new(100.0, 20.0) });
-        doc.add(viewport(vec!["Notes".into()]));
+        // A triangle of a viewport, in its rectangle.
+        let triangle = vec![Point::new(50.0, 50.0), Point::new(350.0, 50.0), Point::new(200.0, 250.0)];
+        doc.add(viewport(vec!["Notes".into()], triangle.clone()));
         doc.set_space(MODEL);
         let model = doc.len();
 
@@ -418,10 +421,15 @@ mod tests {
                 .all_entities()
                 .find(|e| e.space == second && matches!(e.geometry, Geometry::Viewport { .. }))
                 .unwrap();
-            let Geometry::Viewport { center, width, view_center, view_height, frozen, locked, .. } = &vp.geometry
+            let Geometry::Viewport { center, width, view_center, view_height, frozen, locked, twist, clip, .. } =
+                &vp.geometry
             else {
                 panic!()
             };
+            // Its boundary, and twist, came back; the boundary isn't an object of its own.
+            assert_eq!(clip.len(), 3, "{how}");
+            assert!(clip.iter().zip(&triangle).all(|(a, b)| a.approx_eq(*b)), "{how}");
+            assert!((twist - 30.0).abs() < 1e-9, "{how}");
             assert!(center.approx_eq(Point::new(200.0, 150.0)) && (*width - 300.0).abs() < 1e-9, "{how}");
             assert!(view_center.approx_eq(Point::new(50.0, 25.0)) && (*view_height - 100.0).abs() < 1e-9, "{how}");
             assert_eq!((frozen.as_slice(), *locked), (["Notes".to_string()].as_slice(), true), "{how}");

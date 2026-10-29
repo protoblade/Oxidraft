@@ -143,7 +143,8 @@ fn item_ops(ops: &mut String, used: &mut Used, sheet: &Sheet, items: &[Item]) {
                 let m = [u.x, u.y, v.x, v.y, origin.x, origin.y].map(num).join(" ");
                 let _ = writeln!(ops, "{m} cm /Im{index} Do Q");
             }
-            Item::Clipped { clip, items } => {
+            // Cut to the frame, and to a non-rectangular viewport's boundary.
+            Item::Clipped { clip, shape, items } => {
                 let _ = writeln!(
                     ops,
                     "q {} {} {} {} re W n",
@@ -152,6 +153,10 @@ fn item_ops(ops: &mut String, used: &mut Used, sheet: &Sheet, items: &[Item]) {
                     num(clip.width()),
                     num(clip.height())
                 );
+                if shape.len() >= 3 {
+                    path_ops(ops, &Path { points: shape.clone(), closed: true });
+                    ops.push_str("W n\n");
+                }
                 item_ops(ops, used, sheet, items);
                 ops.push_str("Q\n");
             }
