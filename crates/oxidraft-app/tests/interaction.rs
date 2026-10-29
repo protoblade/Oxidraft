@@ -1780,3 +1780,56 @@ fn layer_walk_shows_only_the_layers_picked() {
     assert!(!doc.is_shown("Walls") && doc.is_shown("Doors"));
     assert!(doc.is_shown("0"), "the current layer stays on");
 }
+
+#[test]
+fn export_pdf_and_publish_write_a_page_per_sheet() {
+    let dir = std::env::temp_dir().join(format!("oxidraft-publish-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pages = |path: &std::path::Path| {
+        let bytes = std::fs::read(path).unwrap();
+        String::from_utf8_lossy(&bytes).matches("/Type /Page ").count()
+    };
+    let mut h = app_with_line();
+    let doc = h.state_mut().document_mut();
+    while doc.layouts().len() < 2 {
+        let name = doc.next_layout_name();
+        doc.new_layout(&name).unwrap();
+    }
+    let layouts = doc.layouts().len();
+    // From the Output tab's Export button: the dialog.
+    h.get_by_role_and_label(Role::Tab, "Output").click();
+    h.run_steps(2);
+    h.get_by_label("Export").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("All Layouts (2)").is_some());
+    h.get_by_label("Cancel").click();
+    h.run_steps(1);
+    let all = dir.join("all.pdf");
+    assert_eq!(h.state_mut().export_pdf_to(&all, true), Ok(layouts));
+    assert_eq!(pages(&all), layouts);
+    let one = dir.join("one.pdf");
+    assert_eq!(h.state_mut().export_pdf_to(&one, false), Ok(1), "model space, as PLOT would");
+
+    // PUBLISH: this drawing's layouts, and another drawing's.
+    let mut other = Document::new();
+    other.new_layout("Layout1").unwrap();
+    other.add(Geometry::Circle { center: Point::new(0.0, 0.0), radius: 5.0 });
+    let other_path = dir.join("other.dxf");
+    oxidraft_io_dwg::save_dxf(&other, &other_path).unwrap();
+    type_all(&mut h, &["publish"]);
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(Role::CheckBox, "Layout1").is_some());
+    assert!(h.query_by_role_and_label(Role::CheckBox, "Model").is_some());
+    h.state_mut().publish_add_drawing(&other_path).unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(Role::CheckBox, "other-Layout1").is_some());
+    let other_layouts = other.layouts().len();
+    let batch = dir.join("batch.pdf");
+    assert_eq!(h.state_mut().publish_to(&batch), Ok(layouts + other_layouts));
+    // Model ticked too.
+    h.get_by_role_and_label(Role::CheckBox, "Model").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().publish_to(&batch), Ok(layouts + other_layouts + 1));
+    assert_eq!(pages(&batch), layouts + other_layouts + 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

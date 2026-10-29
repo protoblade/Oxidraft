@@ -695,7 +695,23 @@ impl OxidraftApp {
             self.large_tool(ui, &tool(Icon::Plot, "Plot", Some("PLOT"), "Plots the drawing to a PDF file (Cmd+P)"));
             self.large_tool(
                 ui,
-                &tool(Icon::PlotPreview, "Preview", Some("PREVIEW"), "Shows the drawing as it will plot"),
+                &tool(Icon::Plot, "Batch\nPlot", Some("PUBLISH"), "Plots several sheets to one PDF (PUBLISH)"),
+            );
+            ui.vertical(|ui| {
+                self.small_tool(
+                    ui,
+                    &tool(Icon::PlotPreview, "Preview", Some("PREVIEW"), "Shows the drawing as it will plot"),
+                );
+                self.small_tool(
+                    ui,
+                    &tool(Icon::PageSetup, "Page Setup Manager", Some("PAGESETUP"), "Sets how a layout plots"),
+                );
+            });
+        });
+        ribbon_panel(ui, "Export to DWF/PDF", |ui| {
+            self.large_tool(
+                ui,
+                &tool(Icon::Pdf, "Export", Some("EXPORTPDF"), "Saves the current layout, or all of them, as a PDF"),
             );
         });
     }

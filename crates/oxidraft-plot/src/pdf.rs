@@ -217,57 +217,57 @@ fn literal(text: &str) -> String {
 
 /// The sheet as a PDF file. `title` goes in the document properties.
 pub fn pdf(sheet: &Sheet, title: &str) -> Vec<u8> {
-    let (ops, used) = content(sheet);
-    let glyphs = &used.glyphs;
-    let with_text = !glyphs.is_empty();
-    // 1 catalog, 2 pages, 3 page, 4 content, 5 info; 6-10 the font; then pictures.
-    let first_picture = if with_text { 11 } else { 6 };
-    let count = first_picture + used.pictures.len();
-    let mut w = Writer { out: b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec(), offsets: vec![0; count] };
-    let (width, height) = (sheet.layout.width * PT_PER_MM, sheet.layout.height * PT_PER_MM);
-    w.object(1, "<< /Type /Catalog /Pages 2 0 R >>");
-    w.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
-    let mut fonts = if with_text { "/Font << /F1 6 0 R >>".to_string() } else { String::new() };
-    if !used.pictures.is_empty() {
-        let refs: Vec<String> = (0..used.pictures.len()).map(|i| format!("/Im{i} {} 0 R", first_picture + i)).collect();
-        let _ = write!(fonts, " /XObject << {} >>", refs.join(" "));
+    pdf_pages(std::slice::from_ref(sheet), title)
+}
+
+/// Sheets as one PDF file, a page each (EXPORTPDF's All Layouts,
+/// PUBLISH). The typeface is embedded once for all of them.
+pub fn pdf_pages(sheets: &[Sheet], title: &str) -> Vec<u8> {
+    let pages: Vec<(String, Used)> = sheets.iter().map(content).collect();
+    let mut glyphs = BTreeMap::new();
+    for (_, used) in &pages {
+        glyphs.extend(used.glyphs.iter().map(|(g, c)| (*g, *c)));
     }
-    w.object(
-        3,
-        &format!(
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << {fonts} >> /Contents 4 0 R >>",
-            num(width),
-            num(height)
-        ),
-    );
-    w.stream(4, "", &compress(ops.as_bytes()));
-    w.object(5, &format!("<< /Title {} /Producer (Oxidraft {}) >>", literal(title), env!("CARGO_PKG_VERSION")));
+    let with_text = !glyphs.is_empty();
+    // 1 catalog, 2 pages, 3 info; 4-8 the font; then each page, its
+    // content and its pictures.
+    let mut ids = Vec::new();
+    let mut next = if with_text { 9 } else { 4 };
+    for (_, used) in &pages {
+        ids.push(next);
+        next += 2 + used.pictures.len();
+    }
+    let mut w = Writer { out: b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec(), offsets: vec![0; next] };
+    w.object(1, "<< /Type /Catalog /Pages 2 0 R >>");
+    let kids: Vec<String> = ids.iter().map(|id| format!("{id} 0 R")).collect();
+    w.object(2, &format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), ids.len()));
+    w.object(3, &format!("<< /Title {} /Producer (Oxidraft {}) >>", literal(title), env!("CARGO_PKG_VERSION")));
     if with_text {
         let name = FONT.name();
         let em = |v: f64| num(v * 1000.0);
         w.object(
-            6,
+            4,
             &format!(
                 "<< /Type /Font /Subtype /Type0 /BaseFont /{name} /Encoding /Identity-H \
-                 /DescendantFonts [7 0 R] /ToUnicode 10 0 R >>"
+                 /DescendantFonts [5 0 R] /ToUnicode 8 0 R >>"
             ),
         );
         let widths: String =
             glyphs.keys().map(|&g| format!("{g} [{}]", em(FONT.advance(g)))).collect::<Vec<_>>().join(" ");
         w.object(
-            7,
+            5,
             &format!(
                 "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{name} \
                  /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> \
-                 /FontDescriptor 8 0 R /DW 500 /W [{widths}] /CIDToGIDMap /Identity >>"
+                 /FontDescriptor 6 0 R /DW 500 /W [{widths}] /CIDToGIDMap /Identity >>"
             ),
         );
         let [x0, y0, x1, y1] = FONT.bbox();
         w.object(
-            8,
+            6,
             &format!(
                 "<< /Type /FontDescriptor /FontName /{name} /Flags 32 /FontBBox [{} {} {} {}] /ItalicAngle 0 \
-                 /Ascent {} /Descent {} /CapHeight {} /StemV 80 /FontFile2 9 0 R >>",
+                 /Ascent {} /Descent {} /CapHeight {} /StemV 80 /FontFile2 7 0 R >>",
                 em(x0),
                 em(y0),
                 em(x1),
@@ -277,24 +277,42 @@ pub fn pdf(sheet: &Sheet, title: &str) -> Vec<u8> {
                 em(FONT.cap_height())
             ),
         );
-        w.stream(9, &format!("/Length1 {}", FONT.data().len()), &compress(FONT.data()));
-        w.stream(10, "", &compress(to_unicode(glyphs).as_bytes()));
+        w.stream(7, &format!("/Length1 {}", FONT.data().len()), &compress(FONT.data()));
+        w.stream(8, "", &compress(to_unicode(&glyphs).as_bytes()));
     }
-    for (i, (name, gray)) in used.pictures.iter().enumerate() {
-        let Some(p) = sheet.pictures.get(name) else { continue };
-        let space = if *gray { "/DeviceGray" } else { "/DeviceRGB" };
-        let dict = format!(
-            "/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace {space} /BitsPerComponent 8 /Interpolate true",
-            p.width, p.height
+    for ((sheet, (ops, used)), &id) in sheets.iter().zip(&pages).zip(&ids) {
+        let mut resources = if used.glyphs.is_empty() { String::new() } else { "/Font << /F1 4 0 R >>".to_string() };
+        if !used.pictures.is_empty() {
+            let refs: Vec<String> = (0..used.pictures.len()).map(|i| format!("/Im{i} {} 0 R", id + 2 + i)).collect();
+            let _ = write!(resources, " /XObject << {} >>", refs.join(" "));
+        }
+        let (width, height) = (sheet.layout.width * PT_PER_MM, sheet.layout.height * PT_PER_MM);
+        w.object(
+            id,
+            &format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << {resources} >> /Contents {} 0 R >>",
+                num(width),
+                num(height),
+                id + 1
+            ),
         );
-        w.stream(first_picture + i, &dict, &compress(&picture_samples(p, *gray)));
+        w.stream(id + 1, "", &compress(ops.as_bytes()));
+        for (i, (name, gray)) in used.pictures.iter().enumerate() {
+            let Some(p) = sheet.pictures.get(name) else { continue };
+            let space = if *gray { "/DeviceGray" } else { "/DeviceRGB" };
+            let dict = format!(
+                "/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace {space} /BitsPerComponent 8 /Interpolate true",
+                p.width, p.height
+            );
+            w.stream(id + 2 + i, &dict, &compress(&picture_samples(p, *gray)));
+        }
     }
     let xref = w.out.len();
-    let mut tail = format!("xref\n0 {count}\n0000000000 65535 f \n");
+    let mut tail = format!("xref\n0 {next}\n0000000000 65535 f \n");
     for offset in &w.offsets[1..] {
         let _ = writeln!(tail, "{offset:010} 00000 n ");
     }
-    let _ = write!(tail, "trailer\n<< /Size {count} /Root 1 0 R /Info 5 0 R >>\nstartxref\n{xref}\n%%EOF\n");
+    let _ = write!(tail, "trailer\n<< /Size {next} /Root 1 0 R /Info 3 0 R >>\nstartxref\n{xref}\n%%EOF\n");
     w.out.extend_from_slice(tail.as_bytes());
     w.out
 }
@@ -365,7 +383,7 @@ mod tests {
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.starts_with("%PDF-1.4") && text.trim_end().ends_with("%%EOF"));
         assert!(text.contains("/MediaBox [0 0 841.8898 595.2756]"), "A4 landscape");
-        assert!(text.contains("/FontFile2 9 0 R") && text.contains("/Title (Plan \\(ground floor\\))"));
+        assert!(text.contains("/FontFile2 7 0 R") && text.contains("/Title (Plan \\(ground floor\\))"));
         // Every object starts where the cross-reference table says.
         let find = |needle: &[u8]| bytes.windows(needle.len()).rposition(|w| w == needle).unwrap();
         let xref = find(b"\nxref\n") + 1;
@@ -376,6 +394,21 @@ mod tests {
         }
         let start: usize = table[table.find("startxref\n").unwrap() + 10..].lines().next().unwrap().parse().unwrap();
         assert_eq!(start, xref);
+        // Several sheets: a page each, the typeface once.
+        let small = PlotSettings { paper: crate::PAPERS[0], ..settings };
+        let two = crate::render(&doc, oxidraft_model::MODEL, &small).unwrap();
+        let bytes = pdf_pages(&[sheet.clone(), two], "Both");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("/Kids [9 0 R 11 0 R] /Count 2"));
+        assert_eq!(text.matches("/Type /Page ").count(), 2);
+        assert_eq!(text.matches("/FontFile2").count(), 1);
+        let xref = bytes.windows(6).rposition(|w| w == b"\nxref\n").unwrap() + 1;
+        let table = String::from_utf8_lossy(&bytes[xref..]).to_string();
+        assert!(table.starts_with("xref\n0 13\n"));
+        for (i, line) in table.lines().skip(3).take(12).enumerate() {
+            let offset: usize = line[..10].parse().unwrap();
+            assert!(bytes[offset..].starts_with(format!("{} 0 obj", i + 1).as_bytes()), "object {}", i + 1);
+        }
         // The glyphs shown map back to their characters.
         let (_, used) = content(&sheet);
         assert!(used.glyphs.values().any(|&c| c == 'ł'));

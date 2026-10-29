@@ -16,6 +16,7 @@ mod manage;
 mod named_views;
 mod plot;
 mod properties;
+mod publish;
 mod qselect;
 mod settings;
 mod shortcut_menu;

@@ -199,7 +199,7 @@ fn section(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {
 impl OxidraftApp {
     /// The part of the drawing the drawing area shows (the sheet's part,
     /// working in a viewport).
-    fn displayed(&self) -> Aabb {
+    pub(crate) fn displayed(&self) -> Aabb {
         let r = self.canvas_rect;
         let view = self.active_viewport.filter(|a| !a.maximized).map_or(self.view, |a| a.page);
         Aabb::from_points(view.to_world(r, r.left_bottom()), view.to_world(r, r.right_top()))

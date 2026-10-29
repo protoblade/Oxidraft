@@ -111,6 +111,9 @@ pub struct OxidraftApp {
     pub(crate) alias_dialog: Option<crate::manage::AliasDialog>,
     /// LAYWALK: the layers picked to show while it's open.
     pub(crate) layer_walk: Option<crate::layer_walk::LayerWalk>,
+    /// EXPORTPDF's and PUBLISH's dialogs.
+    pub(crate) export_pdf: Option<crate::publish::ExportPdf>,
+    pub(crate) publish: Option<crate::publish::PublishDialog>,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
     pub(crate) ribbon_space: oxidraft_model::Space,
@@ -250,6 +253,8 @@ impl OxidraftApp {
             find_replace: None,
             alias_dialog: None,
             layer_walk: None,
+            export_pdf: None,
+            publish: None,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
@@ -552,6 +557,8 @@ impl OxidraftApp {
             "PURGE" | "PU" => self.open_purge(),
             "ALIASEDIT" => self.open_aliases(),
             "LAYWALK" => self.open_layer_walk(),
+            "EXPORTPDF" => self.open_export_pdf(),
+            "PUBLISH" => self.open_publish(),
             "COMPARE" => self.compare_command(),
             "DIMSTYLE" | "D" | "DST" => self.open_dim_style(),
             "FIND" => self.find_replace = Some(Default::default()),
@@ -901,6 +908,8 @@ impl eframe::App for OxidraftApp {
         self.compare_bar(&ctx);
         self.alias_dialog(&ctx);
         self.layer_walk_dialog(&ctx);
+        self.export_pdf_dialog(&ctx);
+        self.publish_dialog(&ctx);
         self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);

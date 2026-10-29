@@ -410,6 +410,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: None,
     },
     CommandInfo {
+        name: "EXPORTPDF",
+        aliases: &[],
+        description: "Save the current layout, or all of them, as a PDF",
+        make: None,
+    },
+    CommandInfo {
+        name: "PUBLISH",
+        aliases: &[],
+        description: "Plot several sheets, from this drawing and others, to one PDF (Batch Plot)",
+        make: None,
+    },
+    CommandInfo {
         name: "LAYWALK",
         aliases: &[],
         description: "Show layers one at a time, or a few, to see what's on them",
