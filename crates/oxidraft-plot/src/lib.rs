@@ -6,6 +6,7 @@ pub mod font;
 pub mod pdf;
 pub mod setup;
 pub mod sheet;
+pub mod shx;
 
 pub use pdf::{pdf, pdf_pages};
 pub use setup::{Layout, MARGIN, PAPERS, Paper, PlotArea, PlotScale, PlotSettings, PlotStyle, SCALES, scale_label};

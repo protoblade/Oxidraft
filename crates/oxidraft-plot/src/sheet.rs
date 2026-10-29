@@ -10,7 +10,7 @@ use oxidraft_model::{
 };
 
 use crate::{
-    font::{self, FONT},
+    font,
     setup::{Layout, PlotSettings},
 };
 
@@ -39,7 +39,17 @@ pub enum Item {
     /// size in millimeters.
     /// A line of text from its baseline's start: `width_factor` stretches
     /// it along the line, `oblique` slants it (degrees, leaning right).
-    Text { at: Point, rotation: f64, size: f64, text: String, color: Rgb, width_factor: f64, oblique: f64 },
+    /// `font` is the text style's (see [`crate::font::typeface`]).
+    Text {
+        at: Point,
+        rotation: f64,
+        size: f64,
+        text: String,
+        color: Rgb,
+        width_factor: f64,
+        oblique: f64,
+        font: String,
+    },
     /// Picture `name` over the parallelogram from `origin` along `u` and
     /// `v`, inside `clip` when that has points; in grays for monochrome
     /// and grayscale pen tables.
@@ -294,7 +304,7 @@ impl<'a> Plotter<'a> {
                     self.push_stroke(vec![Path { points: frame, closed: true }], width, color, false);
                 }
             }
-            Geometry::Text { .. } => self.text(g, color),
+            Geometry::Text { .. } => self.text(g, color, width),
             // White paper over what's under it, and its frame (WIPEOUTFRAME 1).
             Geometry::Wipeout { points } => {
                 let polygon: Vec<Point> = points.iter().map(|p| self.paper(*p)).collect();
@@ -334,13 +344,26 @@ impl<'a> Plotter<'a> {
     /// Text placed as the drawing area places it: lines set left, the block
     /// anchored by its attachment between the first line's capitals and
     /// the last line's baseline.
-    fn text(&mut self, g: &Geometry, color: Rgb) {
+    fn text(&mut self, g: &Geometry, color: Rgb, pen: f64) {
         let Geometry::Text { position, height, rotation, width, attach, content, look } = g else { return };
         let size = height / 0.7;
         let wf = if look.width_factor > 0.0 { look.width_factor } else { 1.0 };
-        let lines = font::lines(content, if *width > 0.0 { width / (size * wf) } else { 0.0 });
-        let widest = lines.iter().map(|l| FONT.width(l)).fold(0.0, f64::max) * wf;
-        let row = FONT.row_height();
+        let font = self.doc.text_style(&look.style).map(|s| s.font.clone()).unwrap_or_default();
+        // An SHX font's text plots as its strokes, in the object's pen.
+        if let Some(shx) = crate::shx::shx_font(&font) {
+            let paths: Vec<Path> = crate::shx::text_strokes(shx, g)
+                .into_iter()
+                .map(|s| Path { points: s.into_iter().map(|p| self.paper(p)).collect(), closed: false })
+                .collect();
+            if !paths.is_empty() {
+                self.items.push(Item::Stroke { paths, width: pen, color, wide: false });
+            }
+            return;
+        }
+        let face = font::typeface(&font);
+        let lines = font::lines_in(face, content, if *width > 0.0 { width / (size * wf) } else { 0.0 });
+        let widest = lines.iter().map(|l| face.width(l)).fold(0.0, f64::max) * wf;
+        let row = face.row_height();
         let span = 0.7 + (lines.len() as f64 - 1.0) * row;
         let (fx, fy) = attach.fractions();
         for (i, line) in lines.into_iter().enumerate() {
@@ -357,6 +380,7 @@ impl<'a> Plotter<'a> {
                 color,
                 width_factor: wf,
                 oblique: look.oblique,
+                font: font.clone(),
             };
             self.items.push(item);
         }

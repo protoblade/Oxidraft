@@ -1072,6 +1072,9 @@ impl eframe::App for OxidraftApp {
         let ctx = ui.ctx().clone();
         // Lengths and angles everywhere show in the drawing's units.
         oxidraft_model::units::set_current(self.doc.units());
+        // The text styles' fonts, for the drawing area and plot previews.
+        let fonts = self.doc.text_styles().iter().map(|s| s.font.as_str());
+        crate::fonts::load(&ctx, self.path.as_deref().and_then(std::path::Path::parent), fonts);
         self.prev_text_fields = std::mem::take(&mut self.text_fields);
         self.handle_shortcuts(&ctx);
         self.handle_clipboard_keys(&ctx);

@@ -1107,11 +1107,20 @@ impl OxidraftApp {
         if px < 1.5 {
             return;
         }
+        // An SHX font's text: its strokes, as AutoCAD draws them.
+        let font = self.doc.text_style(&look.style).map_or("", |s| s.font.as_str());
+        if let Some(shx) = oxidraft_plot::shx::shx_font(font) {
+            for s in oxidraft_plot::shx::text_strokes(shx, g) {
+                let pts: Vec<Pos2> = s.iter().map(|p| self.view.to_screen(rect, *p)).collect();
+                painter.add(Shape::line(pts, stroke));
+            }
+            return;
+        }
         // Few distinct sizes keep egui's glyph cache small while zooming.
         let size = 2f32.powf((px.min(400.0).log2() * 8.0).round() / 8.0);
         let text = oxidraft_model::annotation::plain_text(content);
         let wrap = if *width > 0.0 { (*width * self.view.scale) as f32 } else { f32::INFINITY };
-        let galley = painter.layout(text, FontId::proportional(size), stroke.color, wrap);
+        let galley = painter.layout(text, crate::fonts::font_id(painter.ctx(), font, size), stroke.color, wrap);
         // Anchor on the type itself, not egui's line box: "top" is the first
         // line's capital height, "bottom" the last line's baseline.
         let baseline = |row: &egui::epaint::text::PlacedRow| {

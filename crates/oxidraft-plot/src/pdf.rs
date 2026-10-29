@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 
 use crate::{
-    font::FONT,
+    font::{self, Typeface},
     sheet::{Item, Path, Rgb, Sheet},
 };
 use flate2::{Compression, write::ZlibEncoder};
@@ -62,12 +62,23 @@ fn path_ops(ops: &mut String, path: &Path) {
     }
 }
 
-/// What a page draws with besides lines: the glyphs its text uses (with
-/// the character each one shows), and its pictures (name, in grays).
+/// What a page draws with besides lines: the glyphs its text uses in
+/// each typeface (with the character each one shows), and its pictures
+/// (name, in grays).
 #[derive(Default)]
 struct Used {
-    glyphs: BTreeMap<u16, char>,
+    glyphs: BTreeMap<String, BTreeMap<u16, char>>,
     pictures: Vec<(String, bool)>,
+}
+
+/// The typefaces used, in the order their /F resources are numbered.
+fn typefaces(fonts: &BTreeMap<String, BTreeMap<u16, char>>) -> Vec<&'static Typeface> {
+    fonts.keys().map(|k| font::typeface(k)).collect()
+}
+
+/// A typeface's resource number: its place among the fonts used.
+fn font_number(fonts: &[String], key: &str) -> usize {
+    fonts.iter().position(|k| k == key).unwrap_or(0) + 1
 }
 
 /// The page's drawing operators, and what they use.
@@ -103,20 +114,23 @@ fn item_ops(ops: &mut String, used: &mut Used, sheet: &Sheet, items: &[Item]) {
                 }
                 ops.push_str("f*\n");
             }
-            Item::Text { at, rotation, size, text, color: c, width_factor, oblique } => {
+            Item::Text { at, rotation, size, text, color: c, width_factor, oblique, font: key } => {
                 // Rotation after stretching along the line and slanting.
                 let (sin, cos) = rotation.to_radians().sin_cos();
                 let t = oblique.to_radians().tan();
                 let (a, b, cc, d) = (cos * width_factor, sin * width_factor, cos * t - sin, sin * t + cos);
+                let face = font::typeface(key);
+                let key = face.key().to_string();
                 let mut hex = String::new();
                 for ch in text.chars() {
-                    let g = FONT.glyph(ch);
-                    used.glyphs.entry(g).or_insert(ch);
+                    let g = face.glyph(ch);
+                    used.glyphs.entry(key.clone()).or_default().entry(g).or_insert(ch);
                     let _ = write!(hex, "{g:04X}");
                 }
+                // Numbered once the page's fonts are all known.
                 let _ = writeln!(
                     ops,
-                    "BT {} rg /F1 {} Tf {} {} {} {} {} {} Tm <{hex}> Tj ET",
+                    "BT {} rg /F{{{key}}} {} Tf {} {} {} {} {} {} Tm <{hex}> Tj ET",
                     color(*c),
                     num(*size),
                     num(a),
@@ -223,68 +237,100 @@ pub fn pdf(sheet: &Sheet, title: &str) -> Vec<u8> {
     pdf_pages(std::slice::from_ref(sheet), title)
 }
 
+/// A typeface as objects `id` to `id + 4`: the font, its glyphs' widths,
+/// its descriptor, the font file, and what each glyph reads as.
+fn embed_font(w: &mut Writer, id: usize, face: &Typeface, glyphs: &BTreeMap<u16, char>) {
+    let name = face.name();
+    let em = |v: f64| num(v * 1000.0);
+    // TrueType outlines, or an OpenType font's CFF ones.
+    let (cid_type, file_key, file_dict) = if face.is_cff() {
+        ("CIDFontType0", "FontFile3", "/Subtype /OpenType".to_string())
+    } else {
+        ("CIDFontType2", "FontFile2", format!("/Length1 {}", face.data().len()))
+    };
+    w.object(
+        id,
+        &format!(
+            "<< /Type /Font /Subtype /Type0 /BaseFont /{name} /Encoding /Identity-H \
+             /DescendantFonts [{} 0 R] /ToUnicode {} 0 R >>",
+            id + 1,
+            id + 4
+        ),
+    );
+    let widths: String = glyphs.keys().map(|&g| format!("{g} [{}]", em(face.advance(g)))).collect::<Vec<_>>().join(" ");
+    let gid_map = if face.is_cff() { "" } else { " /CIDToGIDMap /Identity" };
+    w.object(
+        id + 1,
+        &format!(
+            "<< /Type /Font /Subtype /{cid_type} /BaseFont /{name} \
+             /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> \
+             /FontDescriptor {} 0 R /DW 500 /W [{widths}]{gid_map} >>",
+            id + 2
+        ),
+    );
+    let [x0, y0, x1, y1] = face.bbox();
+    w.object(
+        id + 2,
+        &format!(
+            "<< /Type /FontDescriptor /FontName /{name} /Flags 32 /FontBBox [{} {} {} {}] /ItalicAngle 0 \
+             /Ascent {} /Descent {} /CapHeight {} /StemV 80 /{file_key} {} 0 R >>",
+            em(x0),
+            em(y0),
+            em(x1),
+            em(y1),
+            em(face.ascent()),
+            em(face.descent()),
+            em(face.cap_height()),
+            id + 3
+        ),
+    );
+    w.stream(id + 3, &file_dict, &compress(face.data()));
+    w.stream(id + 4, "", &compress(to_unicode(glyphs).as_bytes()));
+}
+
 /// Sheets as one PDF file, a page each (EXPORTPDF's All Layouts,
 /// PUBLISH). The typeface is embedded once for all of them.
 pub fn pdf_pages(sheets: &[Sheet], title: &str) -> Vec<u8> {
-    let pages: Vec<(String, Used)> = sheets.iter().map(content).collect();
-    let mut glyphs = BTreeMap::new();
+    let mut pages: Vec<(String, Used)> = sheets.iter().map(content).collect();
+    let mut fonts: BTreeMap<String, BTreeMap<u16, char>> = BTreeMap::new();
     for (_, used) in &pages {
-        glyphs.extend(used.glyphs.iter().map(|(g, c)| (*g, *c)));
+        for (key, glyphs) in &used.glyphs {
+            fonts.entry(key.clone()).or_default().extend(glyphs.iter().map(|(g, c)| (*g, *c)));
+        }
     }
-    let with_text = !glyphs.is_empty();
-    // 1 catalog, 2 pages, 3 info; 4-8 the font; then each page, its
+    let keys: Vec<String> = fonts.keys().cloned().collect();
+    // Each text's font by its number among them.
+    for (ops, _) in &mut pages {
+        for key in &keys {
+            *ops = ops.replace(&format!("/F{{{key}}} "), &format!("/F{} ", font_number(&keys, key)));
+        }
+    }
+    // 1 catalog, 2 pages, 3 info; 5 for each font; then each page, its
     // content and its pictures.
+    let first_font = 4;
     let mut ids = Vec::new();
-    let mut next = if with_text { 9 } else { 4 };
+    let mut next = first_font + 5 * fonts.len();
     for (_, used) in &pages {
         ids.push(next);
         next += 2 + used.pictures.len();
     }
-    let mut w = Writer { out: b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec(), offsets: vec![0; next] };
+    // OpenType (CFF) fonts came with PDF 1.6.
+    let version = if typefaces(&fonts).iter().any(|f| f.is_cff()) { "1.6" } else { "1.4" };
+    let mut head = format!("%PDF-{version}\n").into_bytes();
+    head.extend_from_slice(b"%\xE2\xE3\xCF\xD3\n");
+    let mut w = Writer { out: head, offsets: vec![0; next] };
     w.object(1, "<< /Type /Catalog /Pages 2 0 R >>");
     let kids: Vec<String> = ids.iter().map(|id| format!("{id} 0 R")).collect();
     w.object(2, &format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), ids.len()));
     w.object(3, &format!("<< /Title {} /Producer (Oxidraft {}) >>", literal(title), env!("CARGO_PKG_VERSION")));
-    if with_text {
-        let name = FONT.name();
-        let em = |v: f64| num(v * 1000.0);
-        w.object(
-            4,
-            &format!(
-                "<< /Type /Font /Subtype /Type0 /BaseFont /{name} /Encoding /Identity-H \
-                 /DescendantFonts [5 0 R] /ToUnicode 8 0 R >>"
-            ),
-        );
-        let widths: String =
-            glyphs.keys().map(|&g| format!("{g} [{}]", em(FONT.advance(g)))).collect::<Vec<_>>().join(" ");
-        w.object(
-            5,
-            &format!(
-                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{name} \
-                 /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> \
-                 /FontDescriptor 6 0 R /DW 500 /W [{widths}] /CIDToGIDMap /Identity >>"
-            ),
-        );
-        let [x0, y0, x1, y1] = FONT.bbox();
-        w.object(
-            6,
-            &format!(
-                "<< /Type /FontDescriptor /FontName /{name} /Flags 32 /FontBBox [{} {} {} {}] /ItalicAngle 0 \
-                 /Ascent {} /Descent {} /CapHeight {} /StemV 80 /FontFile2 7 0 R >>",
-                em(x0),
-                em(y0),
-                em(x1),
-                em(y1),
-                em(FONT.ascent()),
-                em(FONT.descent()),
-                em(FONT.cap_height())
-            ),
-        );
-        w.stream(7, &format!("/Length1 {}", FONT.data().len()), &compress(FONT.data()));
-        w.stream(8, "", &compress(to_unicode(&glyphs).as_bytes()));
+    for (i, (face, glyphs)) in typefaces(&fonts).into_iter().zip(fonts.values()).enumerate() {
+        embed_font(&mut w, first_font + 5 * i, face, glyphs);
     }
+    let resources_fonts: String =
+        (0..keys.len()).map(|i| format!("/F{} {} 0 R", i + 1, first_font + 5 * i)).collect::<Vec<_>>().join(" ");
     for ((sheet, (ops, used)), &id) in sheets.iter().zip(&pages).zip(&ids) {
-        let mut resources = if used.glyphs.is_empty() { String::new() } else { "/Font << /F1 4 0 R >>".to_string() };
+        let mut resources =
+            if used.glyphs.is_empty() { String::new() } else { format!("/Font << {resources_fonts} >>") };
         if !used.pictures.is_empty() {
             let refs: Vec<String> = (0..used.pictures.len()).map(|i| format!("/Im{i} {} 0 R", id + 2 + i)).collect();
             let _ = write!(resources, " /XObject << {} >>", refs.join(" "));
@@ -436,7 +482,46 @@ mod tests {
         assert!(ops.contains(" 0.5 0 1 1 "), "{ops}");
         // The glyphs shown map back to their characters.
         let (_, used) = content(&sheet);
-        assert!(used.glyphs.values().any(|&c| c == 'ł'));
-        assert!(to_unicode(&used.glyphs).contains("<0142>"));
+        // In the Standard style's font (Arial where there is one).
+        let default = used.glyphs.values().next().unwrap();
+        assert!(default.values().any(|&c| c == 'ł'));
+        assert!(to_unicode(default).contains("<0142>"));
+    }
+
+    #[test]
+    fn a_styles_font_is_embedded_beside_the_default() {
+        // The bundled typeface as a style's font file, beside the drawing.
+        let dir = std::env::temp_dir().join(format!("oxidraft-pdf-fonts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Stencil.ttf"), epaint_default_fonts::UBUNTU_LIGHT).unwrap();
+        crate::font::add_search_dir(&dir);
+        let mut doc = Document::new();
+        let mut style = oxidraft_model::TextStyle::new("Signs");
+        style.font = "stencil.ttf".into();
+        doc.set_text_style(style).unwrap();
+        for (style, y) in [("Signs", 10.0), ("Standard", 20.0)] {
+            doc.add(Geometry::Text {
+                position: Point::new(10.0, y),
+                height: 2.5,
+                rotation: 0.0,
+                width: 0.0,
+                attach: Attach::BottomLeft,
+                content: "EXIT".into(),
+                look: oxidraft_model::TextLook { style: style.into(), ..Default::default() },
+            });
+        }
+        let settings = PlotSettings { area: PlotArea::Extents, ..PlotSettings::default() };
+        let sheet = crate::render(&doc, oxidraft_model::MODEL, &settings).unwrap();
+        let fonts: Vec<&str> = sheet
+            .items
+            .iter()
+            .filter_map(|i| if let Item::Text { font, .. } = i { Some(font.as_str()) } else { None })
+            .collect();
+        assert_eq!(fonts.len(), 2);
+        assert!(fonts.contains(&"stencil.ttf"), "{fonts:?}");
+        let pdf = String::from_utf8_lossy(&pdf_pages(&[sheet], "t")).into_owned();
+        assert!(pdf.contains("/Font << /F1 4 0 R /F2 9 0 R >>"), "two fonts");
+        assert!(pdf.contains("/F1 ") && pdf.contains("/F2 ") && !pdf.contains("/F{"));
+        std::fs::remove_dir_all(dir).ok();
     }
 }

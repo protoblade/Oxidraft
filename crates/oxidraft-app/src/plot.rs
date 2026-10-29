@@ -3,9 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use eframe::egui::{
-    self, Align, Color32, FontId, Key, Layout, Painter, Pos2, Rect, RichText, Sense, Shape, Stroke, Ui,
-};
+use eframe::egui::{self, Align, Color32, Key, Layout, Painter, Pos2, Rect, RichText, Sense, Shape, Stroke, Ui};
 use eframe::egui::{pos2, vec2};
 use oxidraft_geom::{Aabb, Point};
 use oxidraft_model::{Document, MODEL, Space, hatch};
@@ -144,14 +142,15 @@ fn paint_items(
                 }
                 painter.add(Shape::mesh(mesh));
             }
-            Item::Text { at, rotation, size, text, color, width_factor, oblique } => {
+            Item::Text { at, rotation, size, text, color, width_factor, oblique, font } => {
                 let px = *size as f32 * k;
                 if px < 2.0 {
                     continue;
                 }
                 // Few distinct sizes keep egui's glyph cache small.
                 let px = 2f32.powf((px.min(400.0).log2() * 8.0).round() / 8.0);
-                let galley = painter.layout_no_wrap(text.clone(), FontId::proportional(px), rgb(*color));
+                let font = crate::fonts::font_id(painter.ctx(), font, px);
+                let galley = painter.layout_no_wrap(text.clone(), font, rgb(*color));
                 let baseline = galley.rows.first().map_or(px * 0.8, |row| {
                     row.pos.y + row.row.glyphs.first().map_or(row.row.size.y * 0.8, |g| g.pos.y)
                 });

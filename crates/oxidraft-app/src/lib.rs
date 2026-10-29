@@ -18,6 +18,7 @@ mod drawing_units;
 mod etransmit;
 mod fields;
 mod files;
+mod fonts;
 mod icons;
 mod image_out;
 mod layer_states;

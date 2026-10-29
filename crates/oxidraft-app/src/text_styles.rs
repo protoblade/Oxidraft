@@ -126,10 +126,15 @@ impl OxidraftApp {
                             r.response
                                 .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Font Name"));
                         });
-                        ui.colored_label(
-                            theme::text_dim(),
-                            "Oxidraft draws its own typeface; the font is kept for AutoCAD.",
-                        );
+                        // Whether this computer has the font (as AutoCAD would).
+                        let found = oxidraft_plot::shx::shx_font(&d.edit.font).is_some()
+                            || !oxidraft_plot::font::typeface(&d.edit.font).is_default();
+                        let note = if found {
+                            "Text shows and plots in this font."
+                        } else {
+                            "Not found on this computer: text shows in the default typeface."
+                        };
+                        ui.colored_label(theme::text_dim(), note);
                         ui.add_space(4.0);
                         ui.label(RichText::new("Size").strong());
                         let mut number =
