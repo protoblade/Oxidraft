@@ -1739,3 +1739,44 @@ fn dimension_style_and_find_and_replace_dialogs() {
     let doc = h.state_mut().document_mut();
     assert!(doc.entities().any(|e| matches!(&e.geometry, Geometry::Text { content, .. } if content == "Gate D1")));
 }
+
+#[test]
+fn layer_walk_shows_only_the_layers_picked() {
+    let mut h = app_with_line();
+    {
+        let doc = h.state_mut().document_mut();
+        for (name, color) in [("Walls", 1), ("Doors", 2)] {
+            doc.add_layer(oxidraft_model::Layer::new(name, color));
+        }
+        doc.add_on_layer(
+            Geometry::Circle { center: Point::new(50.0, 30.0), radius: 5.0 },
+            "Doors",
+            oxidraft_model::Color::ByLayer,
+        );
+    }
+    // From the Layers panel's slide-out.
+    h.get_by_role_and_label(Role::Button, "Layers panel").click();
+    h.run_steps(2);
+    h.get_by_label("Layer Walk").click();
+    h.run_steps(2);
+    assert!(h.state().shows_layer("Walls") && h.state().shows_layer("Doors"), "starts as the drawing shows");
+    h.get_by_label("Doors").click();
+    h.run_steps(2);
+    assert!(h.state().shows_layer("Doors") && !h.state().shows_layer("Walls") && !h.state().shows_layer("0"));
+    // Closing restores the layers.
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    assert!(h.state().shows_layer("Walls") && h.state().shows_layer("0"));
+    // Unless Restore on exit is off: then what showed stays.
+    type_all(&mut h, &["laywalk"]);
+    h.run_steps(2);
+    h.get_by_label("Doors").click();
+    h.run_steps(1);
+    h.get_by_label("Restore on exit").click();
+    h.run_steps(1);
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    let doc = h.state_mut().document_mut();
+    assert!(!doc.is_shown("Walls") && doc.is_shown("Doors"));
+    assert!(doc.is_shown("0"), "the current layer stays on");
+}

@@ -332,6 +332,8 @@ pub struct Document {
     groups: Vec<Group>,
     /// The dimension style (DIMSTYLE) dimensions are drawn in.
     dim_style: crate::annotation::DimStyle,
+    /// The layer settings before each change, latest last (LAYERP).
+    previous_layers: Vec<LayerTable>,
 }
 
 /// A group (GROUP): objects picked together. Unnamed groups are called
@@ -394,6 +396,7 @@ impl Document {
             wipeout_frame: 1,
             groups: Vec::new(),
             dim_style: crate::annotation::DEFAULT_DIM_STYLE,
+            previous_layers: Vec::new(),
         }
     }
 
@@ -1077,7 +1080,91 @@ impl Document {
             return;
         }
         let before = std::mem::replace(&mut self.table, after.clone());
+        self.previous_layers.push(before.clone());
+        if self.previous_layers.len() > 50 {
+            self.previous_layers.remove(0);
+        }
         self.record(Change::Layers { before, after });
+    }
+
+    /// LAYERP: the layer settings as they were before the last change to
+    /// them (undoable). False if there's none to go back to.
+    pub fn layer_previous(&mut self) -> bool {
+        let Some(before) = self.previous_layers.pop() else { return false };
+        let after = before;
+        let now = std::mem::replace(&mut self.table, after.clone());
+        self.record(Change::Layers { before: now, after });
+        true
+    }
+
+    /// LAYMRG: everything on the `from` layers (blocks' contents and
+    /// attributes too) goes onto `into`, and the `from` layers go. Returns
+    /// how many objects moved.
+    pub fn merge_layers(&mut self, from: &[String], into: &str) -> Result<usize, String> {
+        if self.layer(into).is_none() {
+            return Err(format!("Layer \"{into}\" not found."));
+        }
+        let is_from =
+            |name: &str| from.iter().any(|f| f.eq_ignore_ascii_case(name)) && !name.eq_ignore_ascii_case(into);
+        let ids: Vec<EntityId> = self.entities.values().map(|e| e.id).collect();
+        let mut moved = 0;
+        for id in ids {
+            let into = into.to_string();
+            let mut touched = false;
+            self.update(id, |e| {
+                if is_from(&e.layer) {
+                    e.layer = into.clone();
+                    touched = true;
+                }
+                if let Geometry::Insert { attributes, .. } = &mut e.geometry {
+                    attributes.iter_mut().filter(|a| is_from(&a.layer)).for_each(|a| a.layer = into.clone());
+                }
+            });
+            moved += usize::from(touched);
+        }
+        let blocks: Vec<Block> =
+            self.blocks.values().filter(|b| b.entities.iter().any(|be| is_from(&be.layer))).cloned().collect();
+        for mut b in blocks {
+            b.entities.iter_mut().filter(|be| is_from(&be.layer)).for_each(|be| be.layer = into.to_string());
+            self.define_block(b);
+        }
+        if from.iter().any(|f| f.eq_ignore_ascii_case(&self.table.current)) {
+            self.set_current_layer(into);
+        }
+        for f in from.iter().filter(|f| !f.eq_ignore_ascii_case(into)) {
+            let _ = self.delete_layer(f);
+        }
+        Ok(moved)
+    }
+
+    /// LAYDEL: a layer and everything on it (in blocks too) go. Layer 0,
+    /// the current layer and external references' layers stay.
+    pub fn delete_layer_and_objects(&mut self, name: &str) -> Result<usize, String> {
+        let layer = self.layer(name).cloned().ok_or_else(|| format!("Layer \"{name}\" not found."))?;
+        if layer.name == "0" || layer.name.eq_ignore_ascii_case(&self.table.current) || is_dependent(&layer.name) {
+            return Err(format!("Layer \"{}\" can't be deleted.", layer.name));
+        }
+        let on = |n: &str| n.eq_ignore_ascii_case(&layer.name);
+        let ids: Vec<EntityId> = self.entities.values().filter(|e| on(&e.layer)).map(|e| e.id).collect();
+        for id in &ids {
+            self.remove(*id);
+        }
+        let blocks: Vec<Block> =
+            self.blocks.values().filter(|b| b.entities.iter().any(|be| on(&be.layer))).cloned().collect();
+        for mut b in blocks {
+            b.entities.retain(|be| !on(&be.layer));
+            self.define_block(b);
+        }
+        let others: Vec<EntityId> = self.entities.values().map(|e| e.id).collect();
+        for id in others {
+            self.update(id, |e| {
+                if let Geometry::Insert { attributes, .. } = &mut e.geometry {
+                    attributes.retain(|a| !on(&a.layer));
+                }
+            });
+        }
+        self.delete_layer(&layer.name)?;
+        Ok(ids.len())
     }
 
     /// Adds a layer, or updates the color of an existing one with the same name.

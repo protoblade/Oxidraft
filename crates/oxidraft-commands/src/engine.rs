@@ -44,6 +44,7 @@ use crate::{
     layer::LayIso,
     layer::LayMcur,
     layer::LayerPick,
+    layer_tools::{LayCur, LayDel, LayMrg, ToLayer},
     layouts::LayoutCommand,
     lengthen::Lengthen,
     line::Line,
@@ -363,6 +364,48 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         description: "Give a block's references the attributes its definitions now have",
         make: Some(|| Box::new(AttSync)),
+    },
+    CommandInfo {
+        name: "LAYCUR",
+        aliases: &[],
+        description: "Put the selected objects on the current layer",
+        make: Some(|| Box::new(LayCur)),
+    },
+    CommandInfo {
+        name: "LAYMCH",
+        aliases: &[],
+        description: "Put the selected objects on the layer of an object picked",
+        make: Some(|| Box::new(ToLayer::matching())),
+    },
+    CommandInfo {
+        name: "COPYTOLAYER",
+        aliases: &[],
+        description: "Copy the selected objects onto another layer",
+        make: Some(|| Box::new(ToLayer::copying())),
+    },
+    CommandInfo {
+        name: "LAYMRG",
+        aliases: &[],
+        description: "Merge layers into another: their objects move and they go",
+        make: Some(|| Box::new(LayMrg::default())),
+    },
+    CommandInfo {
+        name: "LAYDEL",
+        aliases: &[],
+        description: "Delete a layer and everything on it",
+        make: Some(|| Box::new(LayDel::default())),
+    },
+    CommandInfo {
+        name: "LAYERP",
+        aliases: &["LAYP"],
+        description: "Put the layer settings back as they were before the last change",
+        make: None,
+    },
+    CommandInfo {
+        name: "LAYWALK",
+        aliases: &[],
+        description: "Show layers one at a time, or a few, to see what's on them",
+        make: None,
     },
     CommandInfo {
         name: "GROUP",
@@ -1901,6 +1944,12 @@ impl Engine {
                 };
                 doc.commit();
                 msg
+            }
+            "LAYERP" => {
+                doc.begin(name);
+                let restored = doc.layer_previous();
+                doc.commit();
+                if restored { "Restored previous layer states.".into() } else { "*No previous layer states*".into() }
             }
             "HELP" => COMMANDS
                 .iter()

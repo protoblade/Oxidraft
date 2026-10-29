@@ -690,7 +690,7 @@ impl OxidraftApp {
         let px_per_unit = self.doc.ltscale() * self.sheet_scale.unwrap_or(self.view.scale);
         let refedit = self.doc.refedit();
         for e in self.doc.space_in_draw_order(space) {
-            if !self.doc.is_shown(&e.layer) || !on_screen(&self.doc.entity_bounds(e), &view) {
+            if !self.shows_layer(&e.layer) || !on_screen(&self.doc.entity_bounds(e), &view) {
                 continue;
             }
             if frozen.iter().any(|f| f.eq_ignore_ascii_case(&e.layer)) {

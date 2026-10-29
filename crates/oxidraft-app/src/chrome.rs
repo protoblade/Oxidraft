@@ -140,6 +140,18 @@ const LAYER_TOOLS: &[Tool] = &[
     tool(Icon::LayerLock, "", Some("LAYLCK"), "Lock: locks the layer of the object you pick"),
     tool(Icon::LayerUnlock, "", Some("LAYULK"), "Unlock: unlocks the layer of the object you pick"),
 ];
+/// The Layers panel's slide-out.
+const LAYERS_MORE: &[Tool] = &[
+    tool(Icon::LayerOff, "Turn All Layers On", Some("LAYON"), "Turns every layer on (LAYON)"),
+    tool(Icon::LayerFreeze, "Thaw All Layers", Some("LAYTHW"), "Thaws every layer (LAYTHW)"),
+    tool(Icon::LayerProperties, "Layer Walk", Some("LAYWALK"), "Shows the layers you pick, one or a few at a time"),
+    tool(Icon::MatchProperties, "Match Layer", Some("LAYMCH"), "Puts objects on the layer of one you pick (LAYMCH)"),
+    tool(Icon::MakeCurrent, "Change to Current Layer", Some("LAYCUR"), "Puts objects on the current layer (LAYCUR)"),
+    tool(Icon::Copy, "Copy Objects to New Layer", Some("COPYTOLAYER"), "Copies objects onto another layer"),
+    tool(Icon::Join, "Merge", Some("LAYMRG"), "Merges layers into another; their objects move (LAYMRG)"),
+    tool(Icon::Erase, "Delete", Some("LAYDEL"), "Deletes a layer and everything on it (LAYDEL)"),
+    tool(Icon::Undo, "Previous", Some("LAYERP"), "Puts back the layer settings before the last change (LAYP)"),
+];
 const ANNOTATION_LARGE: &[Tool] = &[
     tool(Icon::Text, "Text", Some("MTEXT"), "Creates multiline text (T); single-line text is DT"),
     tool(Icon::Dimension, "Dimension", Some("DIMLINEAR"), "Creates a horizontal or vertical dimension (DLI)"),
@@ -746,7 +758,7 @@ impl OxidraftApp {
                 }
             });
         });
-        ribbon_panel(ui, "Layers", |ui| {
+        let layers = ribbon_panel_more(ui, "Layers", |ui| {
             self.large_tool(
                 ui,
                 &tool(Icon::LayerProperties, "Layer\nProperties", Some("LAYER"), "Manages layers (LA)"),
@@ -769,6 +781,11 @@ impl OxidraftApp {
                     }
                 });
             });
+        });
+        egui::Popup::menu(&layers).show(|ui| {
+            for t in LAYERS_MORE {
+                self.small_tool(ui, t);
+            }
         });
         ribbon_panel(ui, "Block", |ui| {
             self.large_tool(ui, &BLOCK_INSERT);

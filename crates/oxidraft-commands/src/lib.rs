@@ -35,6 +35,7 @@ mod hatch;
 mod input;
 mod inquiry;
 mod layer;
+mod layer_tools;
 mod layouts;
 mod lengthen;
 mod line;

@@ -9,6 +9,7 @@ mod clipboard;
 mod cmdline;
 mod compare;
 mod icons;
+mod layer_walk;
 mod layers;
 mod layouts;
 mod manage;
