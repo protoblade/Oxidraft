@@ -106,6 +106,8 @@ const MODIFY_MORE: &[Tool] = &[
     tool(Icon::Join, "Join", Some("JOIN"), "Joins lines, arcs and polylines end to end (J)"),
     tool(Icon::Lengthen, "Lengthen", Some("LENGTHEN"), "Changes the length of an object (LEN)"),
     tool(Icon::EditPolyline, "Edit Polyline", Some("PEDIT"), "Closes, opens, joins or reverses polylines (PE)"),
+    tool(Icon::Spline, "Edit Spline", Some("SPLINEDIT"), "Edits a spline's fit points, vertices and order (SPE)"),
+    tool(Icon::Hatch, "Edit Hatch", Some("HATCHEDIT"), "Changes a hatch's pattern, draw order or boundaries (HE)"),
     tool(Icon::Move, "Align", Some("ALIGN"), "Moves, turns and scales objects so two points land on two others (AL)"),
     tool(Icon::Lengthen, "Reverse", Some("REVERSE"), "Reverses lines, polylines and splines"),
     tool(Icon::Array, "Path Array", Some("ARRAYPATH"), "Copies objects evenly along a path curve"),

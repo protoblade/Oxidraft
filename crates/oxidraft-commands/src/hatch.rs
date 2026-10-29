@@ -41,7 +41,7 @@ impl Hatch {
 }
 
 /// A closed object's outline as a hatch loop.
-fn closed_loop(g: &Geometry) -> Option<Vec<Vertex>> {
+pub(crate) fn closed_loop(g: &Geometry) -> Option<Vec<Vertex>> {
     match g {
         // Two half circles (bulge 1 each).
         Geometry::Circle { center, radius } => Some(vec![

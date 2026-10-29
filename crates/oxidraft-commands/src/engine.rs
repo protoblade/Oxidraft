@@ -37,6 +37,7 @@ use crate::{
     grip::GripStretch,
     groups::{GroupCommand, GroupEdit, Ungroup},
     hatch::Hatch,
+    hatchedit::HatchEdit,
     inquiry::Area,
     inquiry::Dist,
     inquiry::Id,
@@ -69,6 +70,7 @@ use crate::{
     scale::Scale,
     select::SelectSimilar,
     spline::SplineCmd,
+    splinedit::SplinEdit,
     stretch::Stretch,
     table::{TableEdit, TableInsert},
     text_edit::{JustifyText, ScaleText},
@@ -141,6 +143,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["SPL"],
         description: "Draw a smooth curve through or near points",
         make: Some(|| Box::new(SplineCmd::default())),
+    },
+    CommandInfo {
+        name: "SPLINEDIT",
+        aliases: &["SPE"],
+        description: "Edit a spline: close, join, fit points, control vertices, order, reverse",
+        make: Some(|| Box::new(SplinEdit::default())),
     },
     CommandInfo {
         name: "XLINE",
@@ -533,6 +541,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["H", "BH"],
         description: "Fill an enclosed area with a pattern",
         make: Some(|| Box::new(Hatch::default())),
+    },
+    CommandInfo {
+        name: "HATCHEDIT",
+        aliases: &["HE", "-HATCHEDIT"],
+        description: "Change a hatch's pattern, draw order or boundaries",
+        make: Some(|| Box::new(HatchEdit::default())),
     },
     CommandInfo {
         name: "DIST",
@@ -3579,8 +3593,8 @@ mod tests {
         assert_eq!(co[0], "COPY");
         assert!(co.iter().all(|n| n.starts_with("CO")));
         let s = names("s");
-        assert_eq!(s[..3], ["STRETCH", "SPLINE", "SCALE"]);
-        assert!(s.contains(&"SNAP") && s.contains(&"SELECTSIMILAR"));
+        assert_eq!(s[..2], ["STRETCH", "SPLINE"]);
+        assert!(s.contains(&"SCALE") && s.contains(&"SNAP") && s.contains(&"SELECTSIMILAR"));
     }
 
     #[test]

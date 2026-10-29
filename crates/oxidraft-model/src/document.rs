@@ -1570,6 +1570,12 @@ impl Document {
         }
     }
 
+    /// How many changes the open transaction holds: a command's own Undo
+    /// takes back to a count with [`Document::undo_last_in_transaction`].
+    pub fn changes_in_transaction(&self) -> usize {
+        self.open.as_ref().map_or(0, |t| t.changes.len())
+    }
+
     /// Reverts the last edit in the open transaction but keeps it open, so
     /// later edits still group with it.
     pub fn undo_last_in_transaction(&mut self) -> bool {

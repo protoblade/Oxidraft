@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::{
     Aabb, Point,
-    curve::{Seg, fit_arcs},
+    curve::{ArcSeg, Seg, fit_arcs},
 };
 
 /// Pieces per knot span the approximation starts from; each is split
@@ -246,23 +246,158 @@ impl Spline {
     pub fn from_control(points: &[Point], closed: bool) -> Option<Spline> {
         let points = distinct(points);
         let n = points.len();
-        if closed {
-            if n < 3 {
-                return None;
-            }
-            let p = (n - 1).min(3);
-            let control: Vec<Point> = points.iter().chain(points.iter().take(p)).copied().collect();
-            let knots = (0..control.len() + p + 1).map(|i| i as f64).collect();
-            return Spline::new(p, control, knots, Vec::new(), true);
-        }
-        if n < 2 {
+        if n < if closed { 3 } else { 2 } {
             return None;
         }
-        let p = (n - 1).min(3);
+        Spline::uniform((n - 1).min(3), &points, &[], closed)
+    }
+
+    /// A curve of `degree` (lower if there are too few points) on `control`
+    /// with evenly spaced knots: clamped to its end points, or periodic if
+    /// closed. `weights` is empty when every weight is 1.
+    pub fn uniform(degree: usize, control: &[Point], weights: &[f64], closed: bool) -> Option<Spline> {
+        let n = control.len();
+        let p = degree.min(n.checked_sub(1)?);
+        if closed {
+            let control: Vec<Point> = control.iter().chain(&control[..p]).copied().collect();
+            let weights: Vec<f64> =
+                if weights.is_empty() { Vec::new() } else { weights.iter().chain(&weights[..p]).copied().collect() };
+            let knots = (0..control.len() + p + 1).map(|i| i as f64).collect();
+            return Spline::new(p, control, knots, weights, true);
+        }
         let mut knots = vec![0.0; p + 1];
         knots.extend((1..n - p).map(|i| i as f64));
         knots.extend(std::iter::repeat_n((n - p) as f64, p + 1));
-        Spline::new(p, points, knots, Vec::new(), false)
+        Spline::new(p, control.to_vec(), knots, weights.to_vec(), false)
+    }
+
+    /// A straight line as a curve of degree 1.
+    pub fn line(a: Point, b: Point) -> Option<Spline> {
+        Spline::new(1, vec![a, b], vec![0.0, 0.0, 1.0, 1.0], Vec::new(), false)
+    }
+
+    /// A circular arc exactly: a rational quadratic piece for each quarter
+    /// turn or less.
+    pub fn arc(arc: &ArcSeg) -> Option<Spline> {
+        let pieces = (arc.sweep.abs() / 90.0 - 1e-9).ceil().max(1.0) as usize;
+        let w = (arc.sweep / pieces as f64 / 2.0).to_radians().cos();
+        let (mut control, mut weights, mut knots) = (vec![arc.point_at(0.0)], vec![1.0], vec![0.0; 3]);
+        for i in 0..pieces {
+            let mid = arc.start + arc.sweep * (i as f64 + 0.5) / pieces as f64;
+            control.extend([arc.center.polar(arc.radius / w, mid), arc.point_at((i + 1) as f64 / pieces as f64)]);
+            weights.extend([w, 1.0]);
+            knots.extend(std::iter::repeat_n((i + 1) as f64, if i + 1 < pieces { 2 } else { 3 }));
+        }
+        Spline::new(2, control, knots, weights, false)
+    }
+
+    /// The same curve one degree higher (SPLINEDIT's Elevate order): each
+    /// span made a Bézier piece and raised, so the shape doesn't change.
+    pub fn elevated(&self) -> Option<Spline> {
+        let p = self.degree;
+        let (a, b) = self.domain();
+        let clamped = self.sub(a, b)?;
+        let mut knots = clamped.def.knots.clone();
+        let mut pts = clamped.homogeneous();
+        let mut interior: Vec<f64> = knots.iter().copied().filter(|&k| k > a && k < b).collect();
+        interior.dedup();
+        for &u in &interior {
+            for _ in knots.iter().filter(|&&k| k == u).count()..p {
+                Self::insert(p, &mut knots, &mut pts, u);
+            }
+        }
+        if pts.len() != (interior.len() + 1) * p + 1 {
+            return None;
+        }
+        let mut raised = vec![pts[0]];
+        for piece in pts.windows(p + 1).step_by(p) {
+            for k in 1..=p {
+                raised.push(piece[k].lerp(piece[k - 1], k as f64 / (p + 1) as f64));
+            }
+            raised.push(piece[p]);
+        }
+        let mut knots = vec![a; p + 2];
+        for &u in &interior {
+            knots.extend(std::iter::repeat_n(u, p + 1));
+        }
+        knots.extend(std::iter::repeat_n(b, p + 2));
+        Some(Self::from_homogeneous(p + 1, &raised, knots)?.with_closed(self.closed))
+    }
+
+    /// The same curve raised to `degree` (no lower than it is).
+    pub fn with_degree(&self, degree: usize) -> Option<Spline> {
+        let mut s = self.clone();
+        while s.degree < degree {
+            s = s.elevated()?;
+        }
+        Some(s)
+    }
+
+    /// The control vertices editing works on (a periodic curve's repeats
+    /// left out), and their weights.
+    pub fn control_vertices(&self) -> (Vec<Point>, Vec<f64>) {
+        let n = self.distinct_control();
+        (self.def.control[..n].to_vec(), self.weights()[..n].to_vec())
+    }
+
+    /// The curve on changed control vertices and weights (as
+    /// [`Spline::control_vertices`] gives them), with the same knots. Fit
+    /// points go: the curve no longer passes through them.
+    pub fn with_control(&self, mut control: Vec<Point>, mut weights: Vec<f64>) -> Option<Spline> {
+        if self.is_periodic() {
+            control.extend_from_within(..self.degree);
+            weights.extend_from_within(..self.degree);
+        }
+        Spline::new(self.degree, control, self.def.knots.clone(), weights, self.closed)
+    }
+
+    /// The parameter where the curve passes closest to `p`.
+    pub fn closest_to(&self, p: Point) -> f64 {
+        let (a, b) = self.domain();
+        let samples = 64 * self.def.control.len();
+        let rough = (0..=samples)
+            .map(|i| a + (b - a) * i as f64 / samples as f64)
+            .min_by(|u, v| self.point_at(*u).distance(p).total_cmp(&self.point_at(*v).distance(p)))
+            .unwrap_or(a);
+        self.closest_param(p, rough)
+    }
+
+    /// One more control vertex where the curve passes closest to `near`,
+    /// keeping its shape (a knot inserted there).
+    pub fn with_control_added(&self, near: Point) -> Option<Spline> {
+        let (a, b) = self.domain();
+        let base = if self.is_periodic() { self.sub(a, b)?.with_closed(true) } else { self.clone() };
+        let u = base.closest_to(near);
+        if u <= a || u >= b {
+            return None;
+        }
+        let (mut knots, mut pts) = (base.def.knots.clone(), base.homogeneous());
+        if knots.iter().filter(|&&k| k == u).count() >= self.degree {
+            return None;
+        }
+        Self::insert(self.degree, &mut knots, &mut pts, u);
+        Some(Self::from_homogeneous(self.degree, &pts, knots)?.with_closed(self.closed))
+    }
+
+    /// The curve without control vertex `i`: a knot near it goes too (a
+    /// closed periodic curve gets even knots again), lowering the degree if
+    /// there are too few vertices left for it.
+    pub fn with_control_deleted(&self, i: usize) -> Option<Spline> {
+        let (mut control, mut weights) = self.control_vertices();
+        let n = control.len();
+        if i >= n || n <= 2 {
+            return None;
+        }
+        control.remove(i);
+        weights.remove(i);
+        let p = self.degree;
+        let weights = if self.is_rational() { weights } else { Vec::new() };
+        if self.is_periodic() || n - 1 <= p {
+            return Spline::uniform(p, &control, &weights, self.closed);
+        }
+        let mut knots = self.def.knots.clone();
+        knots.remove((i + p.div_ceil(2)).clamp(p + 1, n - 1));
+        Spline::new(p, control, knots, weights, self.closed)
     }
 
     /// SPLINE's Fit method: a curve through `points`. A closed one goes
@@ -430,8 +565,9 @@ impl Spline {
     /// Inserts knot `u` once (Boehm's algorithm), keeping the curve's shape.
     fn insert(degree: usize, knots: &mut Vec<f64>, pts: &mut Vec<H>, u: f64) {
         let p = degree;
-        let k = knots.partition_point(|&x| x <= u) - 1;
         let n = pts.len();
+        // At the end of the domain, the last span (a periodic curve's knots run on past it).
+        let k = (knots.partition_point(|&x| x <= u) - 1).min(n - 1);
         let mut q = Vec::with_capacity(n + 1);
         q.extend_from_slice(&pts[..=k - p]);
         for i in k - p + 1..=k {
@@ -614,6 +750,48 @@ mod tests {
         let piece = closed.sub(ca + 0.5, cb - 0.5).unwrap();
         assert!(piece.start_point().approx_eq(closed.point_at(ca + 0.5)));
         assert!(piece.end_point().approx_eq(closed.point_at(cb - 0.5)));
+    }
+
+    /// True if `b` traces `a`'s path (sampled along both).
+    fn same_path(a: &Spline, b: &Spline) -> bool {
+        let on = |s: &Spline, q: Point| s.point_at(s.closest_to(q)).distance(q) < 1e-6;
+        let along = |s: &Spline| {
+            let (u0, u1) = s.domain();
+            (0..=40).map(move |i| s.point_at(u0 + (u1 - u0) * i as f64 / 40.0)).collect::<Vec<_>>()
+        };
+        along(a).into_iter().all(|q| on(b, q)) && along(b).into_iter().all(|q| on(a, q))
+    }
+
+    #[test]
+    fn elevating_and_adding_vertices_keep_the_shape() {
+        let fit = pts(&[(0.0, 0.0), (10.0, 5.0), (20.0, 0.0), (30.0, 8.0), (35.0, 2.0)]);
+        let s = Spline::through(&fit, false).unwrap();
+        let up = s.elevated().unwrap();
+        assert_eq!(up.degree(), 4);
+        assert!(same_path(&s, &up));
+        assert!(up.start_point().approx_eq(fit[0]) && up.end_point().approx_eq(fit[4]));
+        // A closed periodic curve too, and rational ones.
+        let closed = Spline::from_control(&fit, true).unwrap();
+        let up = closed.with_degree(5).unwrap();
+        assert!(up.degree() == 5 && up.is_closed() && same_path(&closed, &up));
+        let quarter = Spline::arc(&ArcSeg { center: Point::ORIGIN, radius: 2.0, start: 30.0, sweep: 250.0 }).unwrap();
+        assert!((quarter.point_at(1.234).length() - 2.0).abs() < 1e-12, "arcs are exact");
+        assert!(quarter.start_point().approx_eq(Point::ORIGIN.polar(2.0, 30.0)));
+        assert!(quarter.end_point().approx_eq(Point::ORIGIN.polar(2.0, 280.0)));
+        let up = quarter.elevated().unwrap();
+        assert!((up.point_at(1.7).length() - 2.0).abs() < 1e-9);
+        // A control vertex added where the curve passes keeps its shape.
+        let more = s.with_control_added(s.point_at(0.4 * s.domain().1)).unwrap();
+        assert_eq!(more.control().len(), s.control().len() + 1);
+        assert!(same_path(&s, &more));
+        let more = closed.with_control_added(closed.point_at(closed.domain().0 + 1.3)).unwrap();
+        assert!(more.is_closed() && same_path(&closed, &more));
+        // Deleting one makes it pass elsewhere, with one fewer.
+        let cv = Spline::from_control(&fit, false).unwrap();
+        let fewer = cv.with_control_deleted(2).unwrap();
+        assert_eq!(fewer.control().len(), 4);
+        assert!(fewer.start_point().approx_eq(fit[0]) && fewer.end_point().approx_eq(fit[4]));
+        assert_eq!(cv.with_control_deleted(1).unwrap().with_control_deleted(1).unwrap().degree(), 2);
     }
 
     #[test]
