@@ -463,12 +463,19 @@ impl Exporter {
                 })]
             }
             // A LEADER for the arrow and lines, plus its text as MTEXT.
-            Geometry::Leader { points, .. } => {
-                let mut out = vec![EntityType::Leader(dxf::entities::Leader {
-                    vertices: points.iter().map(|p| to_dxf(*p)).collect(),
-                    use_arrowheads: true,
-                    ..Default::default()
-                })];
+            // Added arrowheads (MLEADEREDIT) as LEADERs of their own.
+            Geometry::Leader { points, more, .. } => {
+                let leader = |vertices: Vec<Point>| {
+                    EntityType::Leader(dxf::entities::Leader {
+                        vertices: vertices.iter().map(|p| to_dxf(*p)).collect(),
+                        use_arrowheads: true,
+                        ..Default::default()
+                    })
+                };
+                let mut out = vec![leader(points.clone())];
+                if let Some(end) = points.last() {
+                    out.extend(more.iter().map(|tip| leader(vec![*tip, *end])));
+                }
                 for p in g.primitives().unwrap_or_default() {
                     if matches!(p, Geometry::Text { .. }) {
                         out.extend(self.entities(&p, layer));
@@ -728,6 +735,55 @@ fn read_text_styles(doc: &mut Document, drawing: &Drawing) {
         let _ = doc.set_text_style(style);
     }
     let _ = doc.set_current_text_style(&style_from_dxf(&drawing.header.text_style));
+}
+
+/// The XRECORD Oxidraft keeps its own settings in, in the root dictionary:
+/// key (1) and value (40) pairs.
+pub const SETTINGS_RECORD: &str = "OXIDRAFT_SETTINGS";
+
+/// The settings worth keeping that DXF has no place for: the multileader
+/// and table styles, as key and value pairs.
+pub fn settings_of(doc: &Document) -> Vec<(&'static str, f64)> {
+    let (l, t) = (doc.leader_style(), doc.table_style());
+    vec![
+        ("LEADER_ARROWHEAD", l.arrowhead.code()),
+        ("LEADER_ARROW_SIZE", l.arrow_size),
+        ("LEADER_TEXT_HEIGHT", l.text_height),
+        ("LEADER_LANDING_ON", if l.landing_on { 1.0 } else { 0.0 }),
+        ("LEADER_LANDING", l.landing),
+        ("TABLE_TEXT_HEIGHT", t.text_height),
+        ("TABLE_MARGIN", t.margin),
+    ]
+}
+
+fn read_settings(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
+    let Some(handle) = raw.dictionaries.values().flatten().find(|(n, _)| n == SETTINGS_RECORD).map(|(_, h)| *h) else {
+        return;
+    };
+    let Some(pairs) = raw.xrecords.get(&handle) else { return };
+    let (mut l, mut t) = (doc.leader_style(), doc.table_style());
+    let mut key = "";
+    for (code, value) in pairs {
+        match code {
+            1 => key = value,
+            40 => {
+                let Ok(v) = value.parse::<f64>() else { continue };
+                let positive = |v: f64, d: f64| if v > 0.0 && v.is_finite() { v } else { d };
+                match key {
+                    "LEADER_ARROWHEAD" => l.arrowhead = oxidraft_model::annotation::LeaderArrow::from_code(v),
+                    "LEADER_ARROW_SIZE" => l.arrow_size = positive(v, l.arrow_size),
+                    "LEADER_TEXT_HEIGHT" => l.text_height = positive(v, l.text_height),
+                    "LEADER_LANDING_ON" => l.landing_on = v != 0.0,
+                    "LEADER_LANDING" => l.landing = v.max(0.0),
+                    "TABLE_TEXT_HEIGHT" => t.text_height = positive(v, t.text_height),
+                    "TABLE_MARGIN" => t.margin = v.max(0.0),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    doc.set_annotation_styles(l, t);
 }
 
 /// MTEXT has no width factor or slant of its own: its style's.
@@ -1237,9 +1293,12 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
             let loops = vec![corners.into_iter().map(Vertex::at).collect()];
             Geometry::Hatch { loops, pattern: HatchPattern::Solid, scale: 1.0, angle: 0.0 }
         }
-        EntityType::Leader(l) if l.vertices.len() >= 2 => {
-            Geometry::Leader { points: l.vertices.iter().map(from_dxf).collect(), content: String::new(), scale: 1.0 }
-        }
+        EntityType::Leader(l) if l.vertices.len() >= 2 => Geometry::Leader {
+            more: Vec::new(),
+            points: l.vertices.iter().map(from_dxf).collect(),
+            content: String::new(),
+            scale: 1.0,
+        },
         // Non-uniform scales are approximated by the Y scale.
         EntityType::Insert(i) => Geometry::Insert {
             block: i.name.clone(),
@@ -1659,6 +1718,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
     order.sort_by(|a, b| a.0.total_cmp(&b.0));
     doc.set_draw_order(&order.into_iter().map(|(_, id)| id).collect::<Vec<_>>());
     restyle_mtext(&mut doc);
+    read_settings(&mut doc, &raw.layouts);
     // A freshly opened file starts with an empty undo history.
     doc.forget_history();
     Imported { document: doc, skipped }
@@ -2450,6 +2510,7 @@ mod tests {
             doc.add(g.clone());
         }
         doc.add(Geometry::Leader {
+            more: Vec::new(),
             points: vec![Point::ORIGIN, Point::new(10.0, 10.0)],
             content: "NOTE".into(),
             scale: 1.0,

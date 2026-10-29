@@ -11,6 +11,7 @@ use oxidraft_model::Document;
 
 mod groups;
 mod layouts;
+mod settings;
 
 pub type Error = String;
 
@@ -103,6 +104,7 @@ fn cad(doc: &Document) -> Result<CadDocument, Error> {
     let mut cad = DxfReader::from_reader(Cursor::new(dxf)).and_then(|r| r.read()).map_err(|e| e.to_string())?;
     layouts::finish(&mut cad, doc);
     groups::finish(&mut cad, doc, &handles);
+    settings::finish(&mut cad, doc);
     // DWG keeps CELTYPE as its linetype's handle; acadrust reads only the name.
     if let Some(lt) = cad.line_types.get(&cad.header.current_linetype_name) {
         cad.header.current_linetype_handle = lt.handle;
@@ -619,6 +621,29 @@ mod tests {
         let mut ours = Vec::new();
         oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
         check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        check(&oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
+    fn leader_and_table_styles_survive() {
+        use oxidraft_model::annotation::{LeaderArrow, LeaderStyle};
+        let mut doc = Document::new();
+        doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });
+        let leader = LeaderStyle {
+            arrowhead: LeaderArrow::Dot,
+            arrow_size: 4.0,
+            text_height: 3.5,
+            landing_on: false,
+            landing: 6.0,
+        };
+        let table = oxidraft_model::table::TableStyle { text_height: 3.0, margin: 1.0 };
+        doc.set_annotation_styles(leader, table);
+        let check = |back: &Document, how: &str| {
+            assert_eq!((back.leader_style(), back.table_style()), (leader, table), "{how}");
+        };
         check(&oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document, "DXF");
         for version in [Version::R2018, Version::R2000] {
             check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));

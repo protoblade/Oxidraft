@@ -277,6 +277,11 @@ enum Change {
         before: CurrentProps,
         after: CurrentProps,
     },
+    /// The multileader and table styles.
+    AnnotationStyles {
+        before: (crate::annotation::LeaderStyle, crate::table::TableStyle),
+        after: (crate::annotation::LeaderStyle, crate::table::TableStyle),
+    },
     /// The text styles and the current one.
     TextStyles {
         before: (Vec<crate::annotation::TextStyle>, String),
@@ -350,6 +355,9 @@ pub struct Document {
     units: crate::units::Units,
     /// New objects' color, linetype and lineweight.
     current: CurrentProps,
+    /// MLEADERSTYLE and TABLESTYLE.
+    leader_style: crate::annotation::LeaderStyle,
+    table_style: crate::table::TableStyle,
     /// Text styles (STYLE), Standard first, and the one new text gets.
     text_styles: Vec<crate::annotation::TextStyle>,
     current_text_style: String,
@@ -434,6 +442,8 @@ impl Document {
             dim_style: crate::annotation::DEFAULT_DIM_STYLE,
             units: crate::units::DEFAULT_UNITS,
             current: CurrentProps::by_layer(),
+            leader_style: crate::annotation::DEFAULT_LEADER_STYLE,
+            table_style: crate::table::DEFAULT_TABLE_STYLE,
             text_styles: vec![crate::annotation::TextStyle::standard()],
             current_text_style: crate::annotation::STANDARD.into(),
             previous_layers: Vec::new(),
@@ -523,6 +533,25 @@ impl Document {
         if props != self.current {
             let before = std::mem::replace(&mut self.current, props.clone());
             self.record(Change::Current { before, after: props });
+        }
+    }
+
+    /// MLEADERSTYLE: how multileaders look.
+    pub fn leader_style(&self) -> crate::annotation::LeaderStyle {
+        self.leader_style
+    }
+
+    /// TABLESTYLE: how new tables look.
+    pub fn table_style(&self) -> crate::table::TableStyle {
+        self.table_style
+    }
+
+    pub fn set_annotation_styles(&mut self, leader: crate::annotation::LeaderStyle, table: crate::table::TableStyle) {
+        let after = (leader, table);
+        if after != (self.leader_style, self.table_style) {
+            let before = (self.leader_style, self.table_style);
+            (self.leader_style, self.table_style) = after;
+            self.record(Change::AnnotationStyles { before, after });
         }
     }
 
@@ -1196,7 +1225,8 @@ impl Document {
         depth: usize,
         out: &mut Vec<Styled>,
     ) {
-        if let Some(parts) = crate::annotation::with_dim_style(self.dim_style, || g.primitives()) {
+        let primitives = || crate::annotation::with_dim_style(self.dim_style, || g.primitives());
+        if let Some(parts) = crate::annotation::with_leader_style(self.leader_style, primitives) {
             for part in &parts {
                 self.expand_into(part, layer, style, by_block, depth + 1, out);
             }
@@ -1983,6 +2013,7 @@ impl Document {
                     Change::Units { .. } => "Units",
                     Change::Current { .. } => "Current properties",
                     Change::TextStyles { .. } => "Text style",
+                    Change::AnnotationStyles { .. } => "Style",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -2039,6 +2070,9 @@ impl Document {
             Change::DimStyle { before, after } => self.dim_style = if forward { *after } else { *before },
             Change::Units { before, after } => self.units = if forward { *after } else { *before },
             Change::Current { before, after } => self.current = if forward { after } else { before }.clone(),
+            Change::AnnotationStyles { before, after } => {
+                (self.leader_style, self.table_style) = if forward { *after } else { *before };
+            }
             Change::TextStyles { before, after } => {
                 (self.text_styles, self.current_text_style) = if forward { after } else { before }.clone();
             }

@@ -112,6 +112,22 @@ pub fn primitives(g: &Geometry) -> Vec<Geometry> {
 
 /// A new table: a title row, a header row and `rows` data rows of
 /// `columns` columns, each `column_width` wide, rows `row_height` tall.
+/// How new tables look (TABLESTYLE): their text height and the margin
+/// between a cell's text and its edges.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TableStyle {
+    pub text_height: f64,
+    pub margin: f64,
+}
+
+pub const DEFAULT_TABLE_STYLE: TableStyle = TableStyle { text_height: 4.5, margin: 1.8 };
+
+impl Default for TableStyle {
+    fn default() -> Self {
+        DEFAULT_TABLE_STYLE
+    }
+}
+
 pub fn new_table(
     position: Point,
     columns: usize,

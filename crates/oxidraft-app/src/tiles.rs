@@ -81,6 +81,7 @@ impl OxidraftApp {
         self.drawing_rect = full;
         // Previews and highlights draw dimensions in the drawing's style.
         oxidraft_model::annotation::set_dim_style(self.doc.dim_style());
+        oxidraft_model::annotation::set_leader_style(self.doc.leader_style());
         oxidraft_model::units::set_current(self.doc.units());
         let tiled = self.tiles.tiling != Tiling::Single && self.doc.space() == MODEL && self.active_viewport.is_none();
         if !tiled {

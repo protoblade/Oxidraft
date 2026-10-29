@@ -665,9 +665,37 @@ impl OxidraftApp {
                 ui,
                 &tool(Icon::Leader, "Multileader", Some("MLEADER"), "Creates a leader with text (MLD)"),
             );
+            ui.vertical(|ui| {
+                for t in [
+                    tool(
+                        Icon::Leader,
+                        "Add/Remove Leader",
+                        Some("MLEADEREDIT"),
+                        "Adds arrowheads to a multileader (MLE)",
+                    ),
+                    tool(Icon::Leader, "Align", Some("MLEADERALIGN"), "Lines up multileaders' text (MLA)"),
+                    tool(
+                        Icon::Properties,
+                        "Multileader Style",
+                        Some("MLEADERSTYLE"),
+                        "Arrowhead, text height, landing (MLS)",
+                    ),
+                ] {
+                    self.small_tool(ui, &t);
+                }
+            });
         });
         ribbon_panel(ui, "Tables", |ui| {
             self.large_tool(ui, &tool(Icon::Table, "Table", Some("TABLE"), "Inserts a table of rows and columns (TB)"));
+            ui.vertical(|ui| {
+                let style = tool(
+                    Icon::Properties,
+                    "Table Style",
+                    Some("TABLESTYLE"),
+                    "Text height and margins of new tables (TS)",
+                );
+                self.small_tool(ui, &style);
+            });
         });
         ribbon_panel(ui, "Markup", |ui| {
             self.large_tool(

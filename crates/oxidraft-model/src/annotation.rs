@@ -817,25 +817,27 @@ pub fn angular_primitives(
 /// Leader line, arrowhead, landing and text of a multileader.
 pub fn leader_primitives(points: &[Point], content: &str, scale: f64) -> Vec<Geometry> {
     let s = &dim_style();
+    let ls = leader_style();
     let [first, second, ..] = points else { return Vec::new() };
     let (last, prev) = (points[points.len() - 1], points[points.len() - 2]);
     let side = if last.x >= prev.x { 1.0 } else { -1.0 };
     let has_text = !content.trim().is_empty();
     let mut path: Vec<Vertex> = points.iter().copied().map(Vertex::at).collect();
-    let land_end = last + Point::new(side * s.arrow_size * scale, 0.0);
-    if has_text {
+    let landing = if ls.landing_on { ls.landing } else { 0.0 };
+    let land_end = last + Point::new(side * landing * scale, 0.0);
+    if has_text && landing > 0.0 {
         path.push(Vertex::at(land_end));
     }
     let mut out = vec![Geometry::Polyline { vertices: path, closed: false }];
     let d = *second - *first;
     if d.length() > EPSILON {
-        out.push(arrowhead(*first, d * (1.0 / d.length()), s.arrow_size * scale));
+        out.extend(leader_arrow(ls.arrowhead, *first, d * (1.0 / d.length()), ls.arrow_size * scale));
     }
     if has_text {
         out.push(Geometry::Text {
             look: Default::default(),
             position: land_end + Point::new(side * s.gap * scale, 0.0),
-            height: s.text_height * scale,
+            height: ls.text_height * scale,
             rotation: 0.0,
             width: 0.0,
             attach: if side > 0.0 { Attach::MiddleLeft } else { Attach::MiddleRight },
@@ -843,6 +845,121 @@ pub fn leader_primitives(points: &[Point], content: &str, scale: f64) -> Vec<Geo
         });
     }
     out
+}
+
+/// MLEADEREDIT's added leaders: from each arrowhead in `more` straight to
+/// where the leader's own lines end.
+pub fn more_leaders(points: &[Point], more: &[Point], scale: f64) -> Vec<Geometry> {
+    let Some(end) = points.last() else { return Vec::new() };
+    let ls = leader_style();
+    let mut out = Vec::new();
+    for tip in more {
+        let d = *end - *tip;
+        if d.length() <= EPSILON {
+            continue;
+        }
+        out.push(Geometry::Line { start: *tip, end: *end });
+        out.extend(leader_arrow(ls.arrowhead, *tip, d * (1.0 / d.length()), ls.arrow_size * scale));
+    }
+    out
+}
+
+/// A leader's arrowhead (MLEADERSTYLE).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LeaderArrow {
+    #[default]
+    ClosedFilled,
+    Open,
+    Dot,
+    None,
+}
+
+impl LeaderArrow {
+    pub const ALL: [LeaderArrow; 4] =
+        [LeaderArrow::ClosedFilled, LeaderArrow::Open, LeaderArrow::Dot, LeaderArrow::None];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            LeaderArrow::ClosedFilled => "Closed filled",
+            LeaderArrow::Open => "Open",
+            LeaderArrow::Dot => "Dot",
+            LeaderArrow::None => "None",
+        }
+    }
+
+    pub fn code(self) -> f64 {
+        self as u8 as f64
+    }
+
+    pub fn from_code(v: f64) -> Self {
+        Self::ALL.get(v.max(0.0) as usize).copied().unwrap_or_default()
+    }
+}
+
+/// How multileaders look (MLEADERSTYLE): the arrowhead and its size, the
+/// text height, and the landing (dogleg) to the text.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LeaderStyle {
+    pub arrowhead: LeaderArrow,
+    pub arrow_size: f64,
+    pub text_height: f64,
+    pub landing_on: bool,
+    pub landing: f64,
+}
+
+pub const DEFAULT_LEADER_STYLE: LeaderStyle = LeaderStyle {
+    arrowhead: LeaderArrow::ClosedFilled,
+    arrow_size: 2.5,
+    text_height: 2.5,
+    landing_on: true,
+    landing: 2.5,
+};
+
+impl Default for LeaderStyle {
+    fn default() -> Self {
+        DEFAULT_LEADER_STYLE
+    }
+}
+
+thread_local! {
+    /// The leader style leaders are drawn in: the drawing's, while it's drawn.
+    static LEADER: std::cell::Cell<LeaderStyle> = const { std::cell::Cell::new(DEFAULT_LEADER_STYLE) };
+}
+
+pub fn leader_style() -> LeaderStyle {
+    LEADER.get()
+}
+
+pub fn set_leader_style(style: LeaderStyle) {
+    LEADER.set(style);
+}
+
+/// Runs `f` with `style` as the leader style.
+pub fn with_leader_style<T>(style: LeaderStyle, f: impl FnOnce() -> T) -> T {
+    let before = LEADER.replace(style);
+    let out = f();
+    LEADER.set(before);
+    out
+}
+
+/// A leader's arrowhead at `tip`, pointing back along `into`.
+fn leader_arrow(kind: LeaderArrow, tip: Point, into: Point, size: f64) -> Vec<Geometry> {
+    match kind {
+        LeaderArrow::ClosedFilled => vec![arrowhead(tip, into, size)],
+        LeaderArrow::Open => {
+            let side = Point::new(-into.y, into.x) * (size / 3.0);
+            let base = tip + into * size;
+            vec![Geometry::Line { start: base + side, end: tip }, Geometry::Line { start: tip, end: base - side }]
+        }
+        // A filled disc: a closed polyline as wide as its diameter.
+        LeaderArrow::Dot => {
+            let r = size / 4.0;
+            let ring =
+                [Vertex::new(tip + Point::new(r / 2.0, 0.0), 1.0), Vertex::new(tip - Point::new(r / 2.0, 0.0), 1.0)];
+            vec![Geometry::Polyline { vertices: ring.iter().map(|v| v.with_widths(r, r)).collect(), closed: true }]
+        }
+        LeaderArrow::None => Vec::new(),
+    }
 }
 
 /// An ordinate dimension (DIMORDINATE): the feature's X (with `x_datum`)

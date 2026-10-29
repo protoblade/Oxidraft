@@ -52,6 +52,8 @@ pub(crate) struct RawLayouts {
     /// dictionary's (name, handle) entries, by its handle, to name them.
     pub groups: Vec<(u64, String, Vec<u64>)>,
     pub dictionaries: HashMap<u64, Vec<(String, u64)>>,
+    /// XRECORD objects' group codes and values, by handle.
+    pub xrecords: HashMap<u64, Vec<(i32, String)>>,
 }
 
 fn paper(plot: &[(i32, &str)]) -> Paper {
@@ -187,6 +189,12 @@ pub(crate) fn read(dxf: &[u8]) -> RawLayouts {
                     }
                 }
                 out.dictionaries.insert(handle, entries);
+            }
+            "XRECORD" if section == "OBJECTS" => {
+                let handle = body.iter().find(|p| p.0 == 5).and_then(|p| u64::from_str_radix(p.1, 16).ok());
+                if let Some(h) = handle {
+                    out.xrecords.insert(h, body.iter().map(|(c, v)| (*c, v.to_string())).collect());
+                }
             }
             "LAYOUT" if section == "OBJECTS" => {
                 let marker = |name: &str| body.iter().position(|p| p.0 == 100 && p.1 == name);

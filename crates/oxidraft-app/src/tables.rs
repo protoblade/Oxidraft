@@ -17,18 +17,20 @@ pub(crate) struct InsertTable {
     /// Rows this many lines of text tall.
     pub row_lines: usize,
     pub text_height: f64,
+    /// The table style's margin above and below a cell's text.
+    pub margin: f64,
 }
 
 impl Default for InsertTable {
     fn default() -> Self {
-        Self { columns: 5, column_width: 63.5, data_rows: 1, row_lines: 1, text_height: 4.5 }
+        Self { columns: 5, column_width: 63.5, data_rows: 1, row_lines: 1, text_height: 4.5, margin: 1.8 }
     }
 }
 
 impl InsertTable {
     /// A row's height: its lines of text and a margin above and below.
     fn row_height(&self) -> f64 {
-        self.text_height * (1.6 * self.row_lines as f64 + 0.8)
+        self.text_height * 1.6 * self.row_lines as f64 + 2.0 * self.margin
     }
 
     pub fn table(&self) -> Geometry {
@@ -49,7 +51,10 @@ impl OxidraftApp {
     /// TABLE: the Insert Table dialog.
     pub(crate) fn open_insert_table(&mut self) {
         self.engine.cancel(&mut self.doc);
-        self.insert_table = Some(self.table_settings);
+        // In the table style.
+        let style = self.doc.table_style();
+        self.insert_table =
+            Some(InsertTable { text_height: style.text_height, margin: style.margin, ..self.table_settings });
     }
 
     pub(crate) fn insert_table_dialog(&mut self, ctx: &egui::Context) {

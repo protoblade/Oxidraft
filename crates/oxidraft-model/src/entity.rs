@@ -172,6 +172,9 @@ pub enum Geometry {
         points: Vec<Point>,
         content: String,
         scale: f64,
+        /// More arrowheads (MLEADEREDIT), each with a straight leader to
+        /// where the first one's lines end.
+        more: Vec<Point>,
     },
     /// A hatch: boundary loops filled even-odd with a pattern.
     Hatch {
@@ -458,7 +461,11 @@ impl Geometry {
             Geometry::AngularDimension { vertex, p1, p2, arc, text, scale } => {
                 Some(annotation::angular_primitives(*vertex, *p1, *p2, *arc, text.as_deref(), *scale))
             }
-            Geometry::Leader { points, content, scale } => Some(annotation::leader_primitives(points, content, *scale)),
+            Geometry::Leader { points, content, scale, more } => {
+                let mut out = annotation::leader_primitives(points, content, *scale);
+                out.extend(annotation::more_leaders(points, more, *scale));
+                Some(out)
+            }
             Geometry::Table { .. } => Some(crate::table::primitives(self)),
             Geometry::Tolerance { position, height, rotation, content } => {
                 Some(annotation::tolerance_primitives(*position, *height, *rotation, content))
@@ -630,9 +637,10 @@ impl Geometry {
                 Aabb::from_points(vertices[0].point, vertices[0].point)
             }
             (None, Geometry::Insert { placement, .. }) => Aabb::from_points(placement.position, placement.position),
-            (None, Geometry::Leader { points, .. }) if !points.is_empty() => {
-                points.iter().fold(Aabb::from_points(points[0], points[0]), |b, p| b.union(Aabb::from_points(*p, *p)))
-            }
+            (None, Geometry::Leader { points, more, .. }) if !points.is_empty() => points
+                .iter()
+                .chain(more)
+                .fold(Aabb::from_points(points[0], points[0]), |b, p| b.union(Aabb::from_points(*p, *p))),
             (None, Geometry::Dimension { p1, p2, line, .. }) => {
                 Aabb::from_points(*p1, *p2).union(Aabb::from_points(*line, *line))
             }
@@ -997,7 +1005,8 @@ impl Geometry {
                     scale: scale * length_factor,
                 }
             }
-            Geometry::Leader { points, content, scale } => Geometry::Leader {
+            Geometry::Leader { points, content, scale, more } => Geometry::Leader {
+                more: more.iter().map(|p| f(*p)).collect(),
                 points: points.iter().map(|p| f(*p)).collect(),
                 content: content.clone(),
                 scale: scale * length_factor,
@@ -1118,7 +1127,8 @@ impl Geometry {
                 text: text.clone(),
                 scale: *scale,
             },
-            Geometry::Leader { points, content, scale } => Geometry::Leader {
+            Geometry::Leader { points, content, scale, more } => Geometry::Leader {
+                more: more.iter().map(|p| shift(*p)).collect(),
                 points: points.iter().map(|p| shift(*p)).collect(),
                 content: content.clone(),
                 scale: *scale,
@@ -1156,7 +1166,7 @@ impl Geometry {
             Geometry::Dimension { p1, p2, line, .. } => vec![*p1, *p2, *line],
             Geometry::RadialDimension { center, point, text_at, .. } => vec![*center, *point, *text_at],
             Geometry::AngularDimension { vertex, p1, p2, arc, .. } => vec![*vertex, *p1, *p2, *arc],
-            Geometry::Leader { points, .. } => points.clone(),
+            Geometry::Leader { points, more, .. } => points.iter().chain(more).copied().collect(),
             Geometry::Hatch { .. } => vec![self.bounds().center()],
             // Center, the ends of both axes, and an arc's ends.
             Geometry::Ellipse(e) => {
@@ -1285,12 +1295,15 @@ impl Geometry {
                     scale: *scale,
                 }
             }
-            (Geometry::Leader { points, content, scale }, i) => {
-                let mut points = points.clone();
+            // Its own points first, then the added arrowheads (as the grips list them).
+            (Geometry::Leader { points, content, scale, more }, i) => {
+                let (mut points, mut more) = (points.clone(), more.clone());
                 if let Some(p) = points.get_mut(i) {
                     *p = to;
+                } else if let Some(p) = more.get_mut(i - points.len()) {
+                    *p = to;
                 }
-                Geometry::Leader { points, content: content.clone(), scale: *scale }
+                Geometry::Leader { more, points, content: content.clone(), scale: *scale }
             }
             (Geometry::Hatch { .. }, _) => self.translated(to - self.bounds().center()),
             (Geometry::Table { position, .. }, _) => self.translated(to - *position),

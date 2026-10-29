@@ -2110,3 +2110,26 @@ fn geometric_tolerance_dialog_places_a_frame() {
     });
     assert_eq!(content.as_deref(), Some("{\\Fgdt;j}%%v0.05%%v%%vA"));
 }
+
+#[test]
+fn multileader_and_table_styles() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["mls"]);
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::ComboBox, "Symbol").click();
+    h.run_steps(2);
+    h.get_by_label("Dot").click();
+    h.run_steps(1);
+    h.get_by_label("Automatically include landing").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let style = h.state_mut().document_mut().leader_style();
+    assert_eq!((style.arrowhead, style.landing_on), (oxidraft_model::annotation::LeaderArrow::Dot, false));
+    // One undo step.
+    h.state_mut().document_mut().undo();
+    assert!(h.state_mut().document_mut().leader_style().landing_on);
+    type_all(&mut h, &["ts"]);
+    h.run_steps(2);
+    assert!(h.query_by_label("Modify Table Style: Standard").is_some());
+}

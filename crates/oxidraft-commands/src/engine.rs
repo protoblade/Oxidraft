@@ -50,6 +50,7 @@ use crate::{
     layer::LayerPick,
     layer_tools::{LayCur, LayDel, LayMrg, ToLayer},
     layouts::LayoutCommand,
+    leader_edit::{MLeaderAlign, MLeaderEdit},
     lengthen::Lengthen,
     line::Line,
     list::List,
@@ -375,6 +376,30 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         description: "Put selected dimensions back to the current dimension style",
         make: Some(|| Box::new(DimUpdate)),
+    },
+    CommandInfo {
+        name: "MLEADEREDIT",
+        aliases: &["MLE"],
+        description: "Add arrowheads to a multileader, or remove added ones",
+        make: Some(|| Box::new(MLeaderEdit::default())),
+    },
+    CommandInfo {
+        name: "MLEADERALIGN",
+        aliases: &["MLA"],
+        description: "Line up multileaders' text along a direction",
+        make: Some(|| Box::new(MLeaderAlign::default())),
+    },
+    CommandInfo {
+        name: "MLEADERSTYLE",
+        aliases: &["MLS"],
+        description: "Set how multileaders look: arrowhead, text height, landing",
+        make: None,
+    },
+    CommandInfo {
+        name: "TABLESTYLE",
+        aliases: &["TS"],
+        description: "Set how new tables look: text height and cell margins",
+        make: None,
     },
     CommandInfo {
         name: "DIMSPACE",

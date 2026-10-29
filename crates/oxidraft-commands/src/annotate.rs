@@ -510,7 +510,12 @@ impl Command for MLeader {
             }
             (LeaderStage::Content { tip, landing }, input @ (Input::Text(_) | Input::Enter)) => {
                 let content = if let Input::Text(t) = input { t } else { String::new() };
-                ctx.doc.add(Geometry::Leader { points: vec![*tip, *landing], content, scale: self.scale });
+                ctx.doc.add(Geometry::Leader {
+                    more: Vec::new(),
+                    points: vec![*tip, *landing],
+                    content,
+                    scale: self.scale,
+                });
                 return Ok(Step::Done);
             }
             (_, Input::Enter) => return Ok(Step::Done),
@@ -522,7 +527,12 @@ impl Command for MLeader {
     fn preview(&self, cursor: Point) -> Vec<Geometry> {
         match self.stage {
             LeaderStage::Landing { tip } if !tip.approx_eq(cursor) => {
-                vec![Geometry::Leader { points: vec![tip, cursor], content: String::new(), scale: self.scale }]
+                vec![Geometry::Leader {
+                    more: Vec::new(),
+                    points: vec![tip, cursor],
+                    content: String::new(),
+                    scale: self.scale,
+                }]
             }
             _ => Vec::new(),
         }

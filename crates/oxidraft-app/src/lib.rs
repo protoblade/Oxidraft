@@ -1,5 +1,6 @@
 //! The Oxidraft desktop app: an AutoCAD-style window around the command engine.
 
+mod annotation_styles;
 mod app;
 mod attedit;
 mod blocks;
