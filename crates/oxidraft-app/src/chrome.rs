@@ -748,14 +748,23 @@ impl OxidraftApp {
                     ),
                     tool(Icon::Leader, "Align", Some("MLEADERALIGN"), "Lines up multileaders' text (MLA)"),
                     tool(
-                        Icon::Properties,
-                        "Multileader Style",
-                        Some("MLEADERSTYLE"),
-                        "Arrowhead, text height, landing (MLS)",
+                        Icon::Leader,
+                        "Collect",
+                        Some("MLEADERCOLLECT"),
+                        "Gathers multileaders' blocks onto one (MLC)",
                     ),
                 ] {
                     self.small_tool(ui, &t);
                 }
+            });
+            ui.vertical(|ui| {
+                let style = tool(
+                    Icon::Properties,
+                    "Multileader Style",
+                    Some("MLEADERSTYLE"),
+                    "Arrowhead, content (text or a tag block), landing (MLS)",
+                );
+                self.small_tool(ui, &style);
             });
         });
         ribbon_panel(ui, "Tables", |ui| {

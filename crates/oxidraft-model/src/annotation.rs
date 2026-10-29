@@ -2,7 +2,7 @@
 //! dimensions and leaders break down into lines, arrowheads and text.
 
 use oxidraft_geom::{
-    EPSILON, Point, Segment,
+    Aabb, EPSILON, Point, Segment,
     curve::{ArcSeg, Seg, carrier_points},
 };
 
@@ -904,17 +904,17 @@ pub fn angular_primitives(
 }
 
 /// Leader line, arrowhead, landing and text of a multileader.
-pub fn leader_primitives(points: &[Point], content: &str, scale: f64) -> Vec<Geometry> {
+pub fn leader_primitives(points: &[Point], content: &str, scale: f64, blocks: bool) -> Vec<Geometry> {
     let s = &dim_style();
     let ls = leader_style();
     let [first, second, ..] = points else { return Vec::new() };
     let (last, prev) = (points[points.len() - 1], points[points.len() - 2]);
     let side = if last.x >= prev.x { 1.0 } else { -1.0 };
-    let has_text = !content.trim().is_empty();
+    let has_text = !content.trim().is_empty() && !blocks;
     let mut path: Vec<Vertex> = points.iter().copied().map(Vertex::at).collect();
     let landing = if ls.landing_on { ls.landing } else { 0.0 };
     let land_end = last + Point::new(side * landing * scale, 0.0);
-    if has_text && landing > 0.0 {
+    if (has_text || blocks) && landing > 0.0 {
         path.push(Vertex::at(land_end));
     }
     let mut out = vec![Geometry::Polyline { vertices: path, closed: false }];
@@ -934,6 +934,127 @@ pub fn leader_primitives(points: &[Point], content: &str, scale: f64) -> Vec<Geo
         });
     }
     out
+}
+
+/// One block at a multileader's end (its content Block, as MLEADERSTYLE
+/// sets): its name and its attribute's value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LeaderBlock {
+    pub name: String,
+    pub value: String,
+}
+
+/// A multileader's blocks: one, or several gathered by MLEADERCOLLECT,
+/// side by side from the landing, `per_row` to a row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LeaderBlocks {
+    pub items: Vec<LeaderBlock>,
+    pub per_row: usize,
+}
+
+impl LeaderBlocks {
+    pub fn one(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self { items: vec![LeaderBlock { name: name.into(), value: value.into() }], per_row: 1 }
+    }
+}
+
+/// Where each of a multileader's blocks goes: its extents' middle on the
+/// landing, the next beside it (away from the leader), rows downwards.
+/// `extents` gives a block's extents in its own coordinates.
+pub fn leader_block_places(
+    points: &[Point],
+    blocks: &LeaderBlocks,
+    scale: f64,
+    extents: impl Fn(&str) -> Option<Aabb>,
+) -> Vec<(usize, crate::Placement)> {
+    let [.., prev, last] = points else { return Vec::new() };
+    let ls = leader_style();
+    let side = if last.x >= prev.x { 1.0 } else { -1.0 };
+    let landing = if ls.landing_on { ls.landing } else { 0.0 };
+    let land_end = *last + Point::new(side * landing * scale, 0.0);
+    let unit = Aabb::from_points(Point::new(-0.5, -0.5), Point::new(0.5, 0.5));
+    let boxes: Vec<Aabb> = blocks.items.iter().map(|b| extents(&b.name).unwrap_or(unit)).collect();
+    let w = boxes.iter().map(|b| b.max.x - b.min.x).fold(0.0, f64::max) * scale;
+    let h = boxes.iter().map(|b| b.max.y - b.min.y).fold(0.0, f64::max) * scale;
+    let per_row = blocks.per_row.max(1);
+    boxes
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let (row, column) = (i / per_row, i % per_row);
+            let middle = land_end + Point::new(side * w * (column as f64 + 0.5), -h * row as f64);
+            (i, crate::Placement { position: middle - b.center() * scale, scale, rotation: 0.0, mirror: false })
+        })
+        .collect()
+}
+
+/// MLEADERSTYLE's ready-made blocks for Block content: a tag number in a
+/// shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagShape {
+    Circle,
+    Box,
+    Hexagon,
+    Triangle,
+    Slot,
+}
+
+impl TagShape {
+    pub const ALL: [TagShape; 5] =
+        [TagShape::Circle, TagShape::Box, TagShape::Hexagon, TagShape::Triangle, TagShape::Slot];
+
+    /// Its block's name, as AutoCAD's.
+    pub fn block_name(self) -> &'static str {
+        match self {
+            TagShape::Circle => "_TagCircle",
+            TagShape::Box => "_TagBox",
+            TagShape::Hexagon => "_TagHexagon",
+            TagShape::Triangle => "_TagTriangle",
+            TagShape::Slot => "_TagSlot",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TagShape::Circle => "Circle",
+            TagShape::Box => "Box",
+            TagShape::Hexagon => "Hexagon",
+            TagShape::Triangle => "Triangle",
+            TagShape::Slot => "Slot",
+        }
+    }
+
+    pub fn from_block_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.block_name().eq_ignore_ascii_case(name))
+    }
+
+    /// The shape around the origin, sized for 2.5 high text.
+    pub fn outline(self) -> Geometry {
+        let polygon = |n: usize, r: f64, turn: f64| Geometry::Polyline {
+            vertices: (0..n)
+                .map(|i| {
+                    Vertex::at(Point::new(r, 0.0).rotated_about(Point::ORIGIN, turn + 360.0 * i as f64 / n as f64))
+                })
+                .collect(),
+            closed: true,
+        };
+        match self {
+            TagShape::Circle => Geometry::Circle { center: Point::ORIGIN, radius: 3.0 },
+            TagShape::Box => polygon(4, 3.0 * 2f64.sqrt(), 45.0),
+            TagShape::Hexagon => polygon(6, 3.5, 0.0),
+            // Its middle a little low, so the number sits in its wide part.
+            TagShape::Triangle => polygon(3, 6.0, 90.0).translated(Point::new(0.0, 1.0)),
+            TagShape::Slot => Geometry::Polyline {
+                vertices: vec![
+                    Vertex::new(Point::new(-3.0, -2.5), 0.0),
+                    Vertex::new(Point::new(3.0, -2.5), 1.0),
+                    Vertex::new(Point::new(3.0, 2.5), 0.0),
+                    Vertex::new(Point::new(-3.0, 2.5), 1.0),
+                ],
+                closed: true,
+            },
+        }
+    }
 }
 
 /// MLEADEREDIT's added leaders: from each arrowhead in `more` straight to
@@ -994,6 +1115,8 @@ pub struct LeaderStyle {
     pub text_height: f64,
     pub landing_on: bool,
     pub landing: f64,
+    /// Content: a tag block, or (none) multiline text.
+    pub block: Option<TagShape>,
 }
 
 pub const DEFAULT_LEADER_STYLE: LeaderStyle = LeaderStyle {
@@ -1002,6 +1125,7 @@ pub const DEFAULT_LEADER_STYLE: LeaderStyle = LeaderStyle {
     text_height: 2.5,
     landing_on: true,
     landing: 2.5,
+    block: None,
 };
 
 impl Default for LeaderStyle {
@@ -1258,11 +1382,11 @@ mod tests {
 
     #[test]
     fn leader_lands_toward_its_text() {
-        let prims = leader_primitives(&[Point::ORIGIN, Point::new(10.0, 10.0)], "NOTE", 1.0);
+        let prims = leader_primitives(&[Point::ORIGIN, Point::new(10.0, 10.0)], "NOTE", 1.0, false);
         let Some(Geometry::Text { attach, position, .. }) = prims.last() else { panic!() };
         assert_eq!(*attach, Attach::MiddleLeft);
         assert!(position.x > 10.0);
-        let prims = leader_primitives(&[Point::ORIGIN, Point::new(-10.0, 10.0)], "NOTE", 1.0);
+        let prims = leader_primitives(&[Point::ORIGIN, Point::new(-10.0, 10.0)], "NOTE", 1.0, false);
         assert!(matches!(prims.last(), Some(Geometry::Text { attach: Attach::MiddleRight, .. })));
     }
 }

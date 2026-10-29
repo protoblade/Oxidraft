@@ -175,6 +175,8 @@ pub enum Geometry {
         /// More arrowheads (MLEADEREDIT), each with a straight leader to
         /// where the first one's lines end.
         more: Vec<Point>,
+        /// Block content in place of the text (MLEADERSTYLE Content: Block).
+        blocks: Option<Box<crate::annotation::LeaderBlocks>>,
     },
     /// A hatch: boundary loops filled even-odd with a pattern.
     Hatch {
@@ -465,8 +467,8 @@ impl Geometry {
             Geometry::AngularDimension { vertex, p1, p2, arc, text, scale } => {
                 Some(annotation::angular_primitives(*vertex, *p1, *p2, *arc, text.as_deref(), *scale))
             }
-            Geometry::Leader { points, content, scale, more } => {
-                let mut out = annotation::leader_primitives(points, content, *scale);
+            Geometry::Leader { points, content, scale, more, blocks } => {
+                let mut out = annotation::leader_primitives(points, content, *scale, blocks.is_some());
                 out.extend(annotation::more_leaders(points, more, *scale));
                 Some(out)
             }
@@ -1010,11 +1012,12 @@ impl Geometry {
                     scale: scale * length_factor,
                 }
             }
-            Geometry::Leader { points, content, scale, more } => Geometry::Leader {
+            Geometry::Leader { points, content, scale, more, blocks } => Geometry::Leader {
                 more: more.iter().map(|p| f(*p)).collect(),
                 points: points.iter().map(|p| f(*p)).collect(),
                 content: content.clone(),
                 scale: scale * length_factor,
+                blocks: blocks.clone(),
             },
             Geometry::Hatch { loops, pattern, scale, angle, origin: hatch_origin } => {
                 let origin = loops.first().and_then(|l| l.first()).map_or(Point::ORIGIN, |v| v.point);
@@ -1133,11 +1136,12 @@ impl Geometry {
                 text: text.clone(),
                 scale: *scale,
             },
-            Geometry::Leader { points, content, scale, more } => Geometry::Leader {
+            Geometry::Leader { points, content, scale, more, blocks } => Geometry::Leader {
                 more: more.iter().map(|p| shift(*p)).collect(),
                 points: points.iter().map(|p| shift(*p)).collect(),
                 content: content.clone(),
                 scale: *scale,
+                blocks: blocks.clone(),
             },
             Geometry::Hatch { loops, pattern, scale, angle, origin } => Geometry::Hatch {
                 origin: shift(*origin),
@@ -1303,14 +1307,14 @@ impl Geometry {
                 }
             }
             // Its own points first, then the added arrowheads (as the grips list them).
-            (Geometry::Leader { points, content, scale, more }, i) => {
+            (Geometry::Leader { points, content, scale, more, blocks }, i) => {
                 let (mut points, mut more) = (points.clone(), more.clone());
                 if let Some(p) = points.get_mut(i) {
                     *p = to;
                 } else if let Some(p) = more.get_mut(i - points.len()) {
                     *p = to;
                 }
-                Geometry::Leader { more, points, content: content.clone(), scale: *scale }
+                Geometry::Leader { more, points, content: content.clone(), scale: *scale, blocks: blocks.clone() }
             }
             (Geometry::Hatch { .. }, _) => self.translated(to - self.bounds().center()),
             (Geometry::Table { position, .. }, _) => self.translated(to - *position),

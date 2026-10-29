@@ -3,7 +3,7 @@
 use oxidraft_geom::{EPSILON, Point};
 use oxidraft_model::{
     Attach, Document, Geometry, TextLook, TextStyle, Vertex,
-    annotation::{LINE_SPACING, dimension_text, format_measurement, measurement},
+    annotation::{LINE_SPACING, LeaderBlocks, dimension_text, format_measurement, measurement},
 };
 
 use crate::{Command, Ctx, Input, Prompt, Step, Vars};
@@ -469,19 +469,42 @@ impl Command for Dimension {
 
 enum LeaderStage {
     Arrow,
+    ContentType,
+    BlockName,
     Landing { tip: Point },
     Content { tip: Point, landing: Point },
 }
 
-/// MLEADER: arrowhead location, landing location, then the text.
+/// What a multileader holds at its end.
+#[derive(Clone, PartialEq)]
+enum LeaderContent {
+    Text,
+    Block(String),
+    Nothing,
+}
+
+/// MLEADER: arrowhead location, landing location, then the text, or the
+/// tag block's value when the multileader style's content is a block
+/// (Options, Content type, changes it for this one).
 pub struct MLeader {
     stage: LeaderStage,
     scale: f64,
+    /// Chosen in Options; else the multileader style's.
+    content: Option<LeaderContent>,
 }
 
 impl Default for MLeader {
     fn default() -> Self {
-        Self { stage: LeaderStage::Arrow, scale: 1.0 }
+        Self { stage: LeaderStage::Arrow, scale: 1.0, content: None }
+    }
+}
+
+impl MLeader {
+    fn content(&self, ctx: &Ctx) -> LeaderContent {
+        self.content.clone().unwrap_or_else(|| match ctx.doc.leader_style().block {
+            Some(shape) => LeaderContent::Block(shape.block_name().into()),
+            None => LeaderContent::Text,
+        })
     }
 }
 
@@ -493,28 +516,91 @@ impl Command for MLeader {
 
     fn prompt(&self) -> Prompt {
         match self.stage {
-            LeaderStage::Arrow => Prompt::new("Specify leader arrowhead location"),
+            LeaderStage::Arrow => {
+                Prompt::new("Specify leader arrowhead location").with_keywords(&["Options"]).with_default("Options")
+            }
+            LeaderStage::ContentType => Prompt::new("Select a content type")
+                .with_keywords(&["Block", "Mtext", "None"])
+                .with_default(match &self.content {
+                    Some(LeaderContent::Block(_)) => "Block",
+                    Some(LeaderContent::Nothing) => "None",
+                    _ => "Mtext",
+                }),
+            LeaderStage::BlockName => Prompt::new("Enter block name").with_default("_TagCircle"),
             LeaderStage::Landing { .. } => Prompt::new("Specify leader landing location"),
-            LeaderStage::Content { .. } => Prompt::new("Enter text"),
+            LeaderStage::Content { .. } => match &self.content {
+                Some(LeaderContent::Block(_)) => Prompt::new("Enter tag number"),
+                _ => Prompt::new("Enter text"),
+            },
         }
     }
 
     fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
         match (&self.stage, input) {
             (LeaderStage::Arrow, Input::Point(p)) => self.stage = LeaderStage::Landing { tip: p },
+            (LeaderStage::Arrow, Input::Keyword(_) | Input::Enter) => self.stage = LeaderStage::ContentType,
+            (LeaderStage::ContentType, Input::Keyword("Block")) => self.stage = LeaderStage::BlockName,
+            (LeaderStage::ContentType, input @ (Input::Keyword(_) | Input::Enter)) => {
+                if let Input::Keyword(k) = input {
+                    self.content = Some(if k == "None" { LeaderContent::Nothing } else { LeaderContent::Text });
+                }
+                self.stage = LeaderStage::Arrow;
+            }
+            (LeaderStage::BlockName, input @ (Input::Text(_) | Input::Enter)) => {
+                let name = match input {
+                    Input::Text(t) if !t.trim().is_empty() => t.trim().to_string(),
+                    _ => "_TagCircle".into(),
+                };
+                let name = match oxidraft_model::annotation::TagShape::from_block_name(&name) {
+                    Some(shape) if ctx.doc.block(&name).is_none() => shape.block_name().to_string(),
+                    _ => ctx.doc.block(&name).map(|b| b.name.clone()).ok_or(format!("Block \"{name}\" not found."))?,
+                };
+                self.content = Some(LeaderContent::Block(name));
+                self.stage = LeaderStage::Arrow;
+            }
             (LeaderStage::Landing { tip }, Input::Point(p)) => {
                 if tip.approx_eq(p) {
                     return Err("The landing must be away from the arrowhead.".into());
                 }
-                self.stage = LeaderStage::Content { tip: *tip, landing: p };
+                let (tip, content) = (*tip, self.content(ctx));
+                if content == LeaderContent::Nothing {
+                    ctx.doc.add(Geometry::Leader {
+                        more: Vec::new(),
+                        points: vec![tip, p],
+                        content: String::new(),
+                        scale: self.scale,
+                        blocks: None,
+                    });
+                    return Ok(Step::Done);
+                }
+                self.content = Some(content);
+                self.stage = LeaderStage::Content { tip, landing: p };
             }
             (LeaderStage::Content { tip, landing }, input @ (Input::Text(_) | Input::Enter)) => {
-                let content = if let Input::Text(t) = input { t } else { String::new() };
+                let text = if let Input::Text(t) = input { t } else { String::new() };
+                let blocks = match self.content.clone() {
+                    Some(LeaderContent::Block(name)) => {
+                        let name = match oxidraft_model::annotation::TagShape::from_block_name(&name) {
+                            Some(shape) => ctx.doc.tag_block(shape),
+                            None => name,
+                        };
+                        // Nothing typed: the attribute's default.
+                        let value = if text.is_empty() {
+                            ctx.doc.block(&name).and_then(|b| b.attribute_prompts().first().map(|a| a.2.clone()))
+                        } else {
+                            Some(text.clone())
+                        };
+                        Some(Box::new(LeaderBlocks::one(name, value.unwrap_or_default())))
+                    }
+                    _ => None,
+                };
+                let content = if blocks.is_some() { String::new() } else { text };
                 ctx.doc.add(Geometry::Leader {
                     more: Vec::new(),
                     points: vec![*tip, *landing],
                     content,
                     scale: self.scale,
+                    blocks,
                 });
                 return Ok(Step::Done);
             }
@@ -532,6 +618,7 @@ impl Command for MLeader {
                     points: vec![tip, cursor],
                     content: String::new(),
                     scale: self.scale,
+                    blocks: None,
                 }]
             }
             _ => Vec::new(),
@@ -546,10 +633,10 @@ impl Command for MLeader {
     }
 
     fn wants_text(&self) -> bool {
-        matches!(self.stage, LeaderStage::Content { .. })
+        matches!(self.stage, LeaderStage::Content { .. } | LeaderStage::BlockName)
     }
 
     fn text_with_spaces(&self) -> bool {
-        true
+        !matches!(self.stage, LeaderStage::BlockName)
     }
 }

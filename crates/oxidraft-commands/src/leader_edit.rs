@@ -1,7 +1,9 @@
 //! MLEADEREDIT and MLEADERALIGN: arrowheads added to a multileader or
-//! taken off, and multileaders' text lined up.
+//! taken off, and multileaders' text lined up; MLEADERCOLLECT: the blocks
+//! of several multileaders gathered on one.
 
 use oxidraft_geom::{Point, Segment};
+use oxidraft_model::annotation::LeaderBlocks;
 use oxidraft_model::{EntityId, Geometry};
 
 use crate::{Command, Ctx, Input, Prompt, Step};
@@ -185,6 +187,127 @@ impl Command for MLeaderAlign {
     }
 }
 
+#[derive(Clone, PartialEq)]
+enum CollectStage {
+    Select,
+    Location,
+    Wrap,
+    Number,
+}
+
+/// MLEADERCOLLECT: multileaders with block content made one, its blocks
+/// in a row (Horizontal), a column (Vertical) or rows of a width (Wrap)
+/// where the location says; the first one's leader stays.
+pub struct MLeaderCollect {
+    stage: CollectStage,
+    ids: Vec<EntityId>,
+    /// Blocks to a row; none: all in one.
+    per_row: Option<usize>,
+}
+
+impl Default for MLeaderCollect {
+    fn default() -> Self {
+        Self { stage: CollectStage::Select, ids: Vec::new(), per_row: None }
+    }
+}
+
+impl MLeaderCollect {
+    fn collect(&self, ctx: &mut Ctx, at: Point) -> Step {
+        let mut items = Vec::new();
+        for id in &self.ids {
+            if let Some(Geometry::Leader { blocks: Some(b), .. }) = ctx.doc.entity(*id).map(|e| &e.geometry) {
+                items.extend(b.items.iter().cloned());
+            }
+        }
+        let per_row = self.per_row.unwrap_or(items.len()).clamp(1, items.len().max(1));
+        let (first, rest) = self.ids.split_first().expect("leaders were selected");
+        ctx.doc.update(*first, |e| {
+            if let Geometry::Leader { points, blocks, .. } = &mut e.geometry {
+                if let Some(last) = points.last_mut() {
+                    *last = at;
+                }
+                *blocks = Some(Box::new(LeaderBlocks { items, per_row }));
+            }
+        });
+        for id in rest {
+            ctx.doc.remove(*id);
+        }
+        Step::Done
+    }
+}
+
+impl Command for MLeaderCollect {
+    fn prompt(&self) -> Prompt {
+        match self.stage {
+            CollectStage::Select => Prompt::new("Select multileaders"),
+            CollectStage::Location => Prompt::new("Specify collected multileader location")
+                .with_keywords(&["Vertical", "Horizontal", "Wrap"])
+                .with_default("Horizontal"),
+            CollectStage::Wrap => Prompt::new("Specify wrap width").with_keywords(&["Number"]),
+            CollectStage::Number => Prompt::new("Enter the maximum number of blocks per row"),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (&self.stage, input) {
+            (CollectStage::Select, Input::Selection(s)) => {
+                self.ids = s
+                    .ids
+                    .into_iter()
+                    .filter(|id| {
+                        matches!(
+                            ctx.doc.entity(*id).map(|e| &e.geometry),
+                            Some(Geometry::Leader { blocks: Some(_), .. })
+                        )
+                    })
+                    .collect();
+                if self.ids.is_empty() {
+                    ctx.messages.push("No multileaders with block content selected.".into());
+                    return Ok(Step::Done);
+                }
+                self.stage = CollectStage::Location;
+            }
+            (CollectStage::Select, _) => return Err("Select multileaders, then press Enter.".into()),
+            (CollectStage::Location, Input::Point(p)) => return Ok(self.collect(ctx, p)),
+            (CollectStage::Location, Input::Keyword("Vertical")) => self.per_row = Some(1),
+            (CollectStage::Location, Input::Keyword("Wrap")) => self.stage = CollectStage::Wrap,
+            (CollectStage::Location, Input::Keyword(_)) => self.per_row = None,
+            (CollectStage::Wrap, Input::Keyword(_)) => self.stage = CollectStage::Number,
+            (CollectStage::Wrap, Input::Value(w)) if w > 0.0 => {
+                // As many blocks as fit across.
+                let first = self.ids[0];
+                let width = match ctx.doc.entity(first).map(|e| &e.geometry) {
+                    Some(Geometry::Leader { blocks: Some(b), scale, .. }) => b
+                        .items
+                        .iter()
+                        .filter_map(|i| ctx.doc.block_extents(&i.name))
+                        .map(|x| (x.max.x - x.min.x) * scale)
+                        .fold(0.0, f64::max),
+                    _ => 0.0,
+                };
+                self.per_row = Some(if width > 0.0 { ((w / width).floor() as usize).max(1) } else { 1 });
+                self.stage = CollectStage::Location;
+            }
+            (CollectStage::Number, Input::Value(n)) if n >= 1.0 && n.fract() == 0.0 => {
+                self.per_row = Some(n as usize);
+                self.stage = CollectStage::Location;
+            }
+            (_, Input::Enter) => return Ok(Step::Done),
+            (CollectStage::Number, _) => return Err("Requires a whole number of 1 or more.".into()),
+            _ => return Err("Point or option keyword required.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn highlighted(&self) -> Vec<EntityId> {
+        self.ids.clone()
+    }
+
+    fn wants_selection(&self) -> bool {
+        self.stage == CollectStage::Select
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Engine;
@@ -209,6 +332,7 @@ mod tests {
             content: "NOTE".into(),
             scale: 1.0,
             more: Vec::new(),
+            blocks: None,
         }
     }
 
@@ -240,5 +364,42 @@ mod tests {
             _ => Point::ORIGIN,
         };
         assert_eq!(end, Point::new(10.0, -5.0));
+    }
+
+    #[test]
+    fn tag_leaders_and_collect() {
+        use oxidraft_model::annotation::TagShape;
+        let (mut e, mut d) = (Engine::new(), Document::new());
+        // The style's content a circled tag; three of them, numbered.
+        let mut style = d.leader_style();
+        style.block = Some(TagShape::Circle);
+        d.set_annotation_styles(style, d.table_style());
+        for (i, x) in [0.0, 30.0, 60.0].iter().enumerate() {
+            run(&mut e, &mut d, &["mleader", &format!("{x},0"), &format!("{},10", x + 5.0), &(i + 1).to_string()]);
+        }
+        assert_eq!(d.len(), 3);
+        assert!(d.block("_TagCircle").is_some(), "the tag block was defined");
+        let values = |d: &Document| -> Vec<String> {
+            d.entities()
+                .flat_map(|x| match &x.geometry {
+                    Geometry::Leader { blocks: Some(b), .. } => b.items.iter().map(|i| i.value.clone()).collect(),
+                    _ => Vec::new(),
+                })
+                .collect()
+        };
+        assert_eq!(values(&d), ["1", "2", "3"]);
+        // Collected two to a row, at (20,30).
+        run(&mut e, &mut d, &["mleadercollect", "all", "", "w", "n", "2", "20,30"]);
+        assert!(!e.is_active());
+        assert_eq!(d.len(), 1);
+        assert_eq!(values(&d), ["1", "2", "3"]);
+        let drawn = d.expanded(d.entities().next().unwrap());
+        assert_eq!(drawn.iter().filter(|g| matches!(g, Geometry::Circle { .. })).count(), 3);
+        // Options, Content type Mtext: a text one even so.
+        run(&mut e, &mut d, &["mleader", "o", "m", "0,-40", "10,-30", "NOTE"]);
+        assert!(
+            d.entities()
+                .any(|x| matches!(&x.geometry, Geometry::Leader { content, blocks: None, .. } if content == "NOTE"))
+        );
     }
 }

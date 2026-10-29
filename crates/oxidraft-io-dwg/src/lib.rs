@@ -99,7 +99,8 @@ pub fn read(bytes: &[u8]) -> Result<Opened, Error> {
             .records()
             .iter()
             .filter(|r| {
-                ["PE_URL", "OXIDRAFT_ANNO", "OXIDRAFT_ARRAY"].contains(&r.application_name.as_str())
+                ["PE_URL", "OXIDRAFT_ANNO", "OXIDRAFT_ARRAY", "OXIDRAFT_MLEADER", "OXIDRAFT_PART"]
+                    .contains(&r.application_name.as_str())
                     || dimension && ["ACAD", "OXIDRAFT_DIM"].contains(&r.application_name.as_str())
             })
             .cloned()
@@ -685,6 +686,7 @@ mod tests {
             text_height: 3.5,
             landing_on: false,
             landing: 6.0,
+            block: Some(oxidraft_model::annotation::TagShape::Hexagon),
         };
         let table = oxidraft_model::table::TableStyle { text_height: 3.0, margin: 1.0 };
         doc.set_annotation_styles(leader, table);
@@ -1058,6 +1060,45 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), count, "{names:?}");
+        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
+    fn multileaders_survive_whole() {
+        use oxidraft_model::annotation::{LeaderBlock, LeaderBlocks, TagShape};
+        let mut doc = Document::new();
+        let tag = doc.tag_block(TagShape::Hexagon);
+        let items = ["7", "8", "9"].map(|v| LeaderBlock { name: tag.clone(), value: v.into() }).to_vec();
+        let tags = Geometry::Leader {
+            points: vec![Point::new(0.0, 0.0), Point::new(10.0, 10.0)],
+            content: String::new(),
+            scale: 2.0,
+            more: vec![Point::new(20.0, 0.0)],
+            blocks: Some(Box::new(LeaderBlocks { items, per_row: 2 })),
+        };
+        let note = Geometry::Leader {
+            points: vec![Point::new(0.0, 50.0), Point::new(-10.0, 60.0)],
+            content: "NOTE".into(),
+            scale: 1.0,
+            more: Vec::new(),
+            blocks: None,
+        };
+        doc.add(tags.clone());
+        doc.add(note.clone());
+        let check = |back: &Document, how: &str| {
+            let got: Vec<&Geometry> = back.entities().map(|e| &e.geometry).collect();
+            assert_eq!(got.len(), 2, "{how}: {got:?}");
+            assert!(got.contains(&&tags) && got.contains(&&note), "{how}: {got:?}");
+            let e = back.entities().find(|e| e.geometry == tags).unwrap();
+            let drawn = back.expanded(e);
+            assert!(drawn.iter().any(|g| matches!(g, Geometry::Text { content, .. } if content == "9")), "{how}");
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
         check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
         for version in [Version::R2018, Version::R2000] {
             check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));

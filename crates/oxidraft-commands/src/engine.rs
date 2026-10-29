@@ -53,7 +53,7 @@ use crate::{
     layer::LayerPick,
     layer_tools::{LayCur, LayDel, LayMrg, LayVpi, ToLayer},
     layouts::LayoutCommand,
-    leader_edit::{MLeaderAlign, MLeaderEdit},
+    leader_edit::{MLeaderAlign, MLeaderCollect, MLeaderEdit},
     lengthen::Lengthen,
     line::Line,
     list::List,
@@ -403,6 +403,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["MLA"],
         description: "Line up multileaders' text along a direction",
         make: Some(|| Box::new(MLeaderAlign::default())),
+    },
+    CommandInfo {
+        name: "MLEADERCOLLECT",
+        aliases: &["MLC"],
+        description: "Gather multileaders' blocks onto one multileader",
+        make: Some(|| Box::new(MLeaderCollect::default())),
     },
     CommandInfo {
         name: "MLEADERSTYLE",

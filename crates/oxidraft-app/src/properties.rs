@@ -651,6 +651,17 @@ impl OxidraftApp {
                 ("Text override", Value::Edit(text.clone().unwrap_or_default())),
                 ("Dim scale", Value::Number(*scale)),
             ],
+            Geometry::Leader { blocks: Some(b), scale, .. } => {
+                let mut rows = vec![
+                    ("Source block", Value::Text(b.items.first().map(|i| i.name.clone()).unwrap_or_default())),
+                    ("Scale", Value::Number(*scale)),
+                ];
+                match b.items.as_slice() {
+                    [one] => rows.push(("Tag value", Value::Edit(one.value.clone()))),
+                    items => rows.push(("Blocks", Value::Text(items.len().to_string()))),
+                }
+                rows
+            }
             Geometry::Leader { content, scale, .. } => {
                 vec![("Contents", Value::Edit(content.clone())), ("Scale", Value::Number(*scale))]
             }
@@ -935,6 +946,9 @@ fn with_text_property(g: &Geometry, label: &str, s: &str) -> Option<Geometry> {
     }
     match (&mut g, label) {
         (Geometry::Text { content, .. } | Geometry::Leader { content, .. }, "Contents") => *content = s.to_string(),
+        (Geometry::Leader { blocks: Some(b), .. }, "Tag value") if b.items.len() == 1 => {
+            b.items[0].value = s.to_string();
+        }
         (Geometry::Tolerance { content, .. }, "Text") => *content = s.to_string(),
         (
             Geometry::Dimension { text, .. }

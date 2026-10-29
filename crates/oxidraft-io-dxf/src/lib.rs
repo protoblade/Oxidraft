@@ -11,6 +11,7 @@ use dxf::enums::{AttachmentPoint, DimensionType, HorizontalTextJustification, Ve
 use dxf::tables::Layer as DxfLayer;
 use dxf::{Color as DxfColor, Drawing, Point as DxfPoint};
 use oxidraft_geom::Point;
+use oxidraft_model::annotation::TagShape;
 use oxidraft_model::{
     Attach, Attribute, AttributeDisplay, Block, BlockEntity, Color, Document, Ellipse, EntityId, Geometry,
     HatchPattern, Layer, Linetype, Lineweight, MODEL, Placement, Space, Spline, Vertex, Xref, XrefStatus,
@@ -23,6 +24,7 @@ mod clip_dxf;
 mod dim_xdata;
 mod hatch_dxf;
 mod layout_dxf;
+mod leader_xdata;
 mod underlay_dxf;
 
 pub type Error = dxf::DxfError;
@@ -892,6 +894,11 @@ pub fn settings_of(doc: &Document) -> Vec<(&'static str, f64)> {
         ("LEADER_TEXT_HEIGHT", l.text_height),
         ("LEADER_LANDING_ON", if l.landing_on { 1.0 } else { 0.0 }),
         ("LEADER_LANDING", l.landing),
+        // 0: text; else the tag block's number from 1.
+        (
+            "LEADER_BLOCK",
+            l.block.and_then(|b| TagShape::ALL.iter().position(|t| *t == b)).map_or(0.0, |i| i as f64 + 1.0),
+        ),
         ("TABLE_TEXT_HEIGHT", t.text_height),
         ("TABLE_MARGIN", t.margin),
         ("IMAGEFRAME", f64::from(doc.picture_frame(false))),
@@ -980,6 +987,9 @@ fn read_settings(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
                     "LEADER_TEXT_HEIGHT" => l.text_height = positive(v, l.text_height),
                     "LEADER_LANDING_ON" => l.landing_on = v != 0.0,
                     "LEADER_LANDING" => l.landing = v.max(0.0),
+                    "LEADER_BLOCK" => {
+                        l.block = (v >= 1.0).then(|| TagShape::ALL.get(v as usize - 1).copied()).flatten()
+                    }
                     "TABLE_TEXT_HEIGHT" => t.text_height = positive(v, t.text_height),
                     "TABLE_MARGIN" => t.margin = v.max(0.0),
                     "IMAGEFRAME" => doc.set_picture_frame(false, v as u8),
@@ -1066,6 +1076,9 @@ fn build(doc: &Document) -> Built {
     }
     if doc.all_entities().any(|e| e.array.is_some()) {
         apps.push(array_xdata::APP);
+    }
+    if doc.all_entities().any(|e| matches!(e.geometry, Geometry::Leader { .. })) {
+        apps.extend([leader_xdata::APP, leader_xdata::PART_APP]);
     }
     let dims: Vec<_> = doc.all_entities().flat_map(|e| dim_xdata::xdata(&e.geometry)).collect();
     for x in &dims {
@@ -1197,13 +1210,13 @@ fn build(doc: &Document) -> Built {
     // Where objects in *Paper_SpaceN blocks went: (block, index, object).
     let mut in_blocks: Vec<(String, usize, EntityId)> = Vec::new();
     for e in doc.space_in_draw_order(MODEL) {
-        for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
+        for (mut de, own) in written(&mut ex, doc, e) {
             de.common.transparency = e.transparency.to_dxf();
             de.common.x_data.extend(hyperlink_xdata(e));
             de.common.x_data.extend(dim_xdata::xdata(&e.geometry));
             de.common.x_data.extend(anno_xdata(e));
             de.common.x_data.extend(array_xdata::xdata(e));
-            add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
+            add_attributes(&mut drawing, &mut de, own.as_ref().unwrap_or(&e.geometry), &mut styles);
             entities.push((de, &e.geometry, e.id));
         }
     }
@@ -1214,7 +1227,8 @@ fn build(doc: &Document) -> Built {
         let name = format!("*Paper_Space{}", i.saturating_sub(1));
         let mut in_block = Vec::new();
         for e in doc.space_in_draw_order(layout.id) {
-            for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
+            for (mut de, own) in written(&mut ex, doc, e) {
+                let attributes = own.as_ref().unwrap_or(&e.geometry);
                 de.common.transparency = e.transparency.to_dxf();
                 de.common.x_data.extend(hyperlink_xdata(e));
                 de.common.x_data.extend(dim_xdata::xdata(&e.geometry));
@@ -1222,10 +1236,10 @@ fn build(doc: &Document) -> Built {
                 de.common.x_data.extend(array_xdata::xdata(e));
                 if i == 0 {
                     de.common.is_in_paper_space = true;
-                    add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
+                    add_attributes(&mut drawing, &mut de, attributes, &mut styles);
                     entities.push((de, &e.geometry, e.id));
                 } else {
-                    add_attributes(&mut drawing, &mut de, &e.geometry, &mut block_styles);
+                    add_attributes(&mut drawing, &mut de, attributes, &mut block_styles);
                     if is_clipped(&de, &e.geometry) {
                         block_clips.push((name.clone(), in_block.len(), &e.geometry));
                     }
@@ -1272,6 +1286,24 @@ fn build(doc: &Document) -> Built {
     // The ATTRIBs in the BLOCKS section come before those in ENTITIES.
     block_styles.extend(styles);
     (drawing, ex.hatches, block_styles, handles)
+}
+
+/// What an object is written as, each part with the reference whose
+/// attributes it carries when that isn't the object itself (a
+/// multileader's blocks).
+fn written(ex: &mut Exporter, doc: &Document, e: &oxidraft_model::Entity) -> Vec<(DxfEntity, Option<Geometry>)> {
+    let mut out: Vec<(DxfEntity, Option<Geometry>)> =
+        ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight).into_iter().map(|de| (de, None)).collect();
+    let Some(leader) = leader_xdata::xdata(&e.geometry) else { return out };
+    for g in doc.leader_inserts(&e.geometry) {
+        for de in ex.entity(&g, &e.layer, e.color, &e.linetype, e.lineweight) {
+            out.push((de, Some(g.clone())));
+        }
+    }
+    for (i, (de, _)) in out.iter_mut().enumerate() {
+        de.common.x_data.push(if i == 0 { leader.clone() } else { leader_xdata::part() });
+    }
+    out
 }
 
 fn is_clipped(de: &DxfEntity, g: &Geometry) -> bool {
@@ -1564,6 +1596,7 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
         }
         EntityType::Leader(l) if l.vertices.len() >= 2 => Geometry::Leader {
             more: Vec::new(),
+            blocks: None,
             points: l.vertices.iter().map(from_dxf).collect(),
             content: String::new(),
             scale: 1.0,
@@ -1849,8 +1882,12 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         let n = attribute_count(e);
         let style = styles.as_ref().map(|s| &s[next..next + n]);
         next += n;
-        // Viewports' boundaries are drawn by their viewports.
-        if is_template(&e.specific) || raw.layouts.boundaries.contains(&e.common.handle.0) {
+        // Viewports' boundaries are drawn by their viewports; a
+        // multileader's parts by it.
+        if is_template(&e.specific)
+            || raw.layouts.boundaries.contains(&e.common.handle.0)
+            || leader_xdata::is_part(&e.common.x_data)
+        {
             continue;
         }
         // The active layout's objects are here too, marked paper space.
@@ -1874,6 +1911,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                 if let Geometry::Dimension { extra, .. } = &mut g {
                     dim_xdata::read(&e.common.x_data, doc.dim_style(), extra);
                 }
+                leader_xdata::read(&e.common.x_data, &mut g);
                 let (color, linetype) = (from_dxf_color(&e.common.color), linetype_from_dxf(&e.common.line_type_name));
                 let id = doc.add_with(
                     g,
@@ -1903,7 +1941,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         let Some(space) = space_of_record(&b.name) else { continue };
         doc.set_space(space);
         for e in b.entities.iter().filter(|e| !is_template(&e.specific)) {
-            if raw.layouts.boundaries.contains(&e.common.handle.0) {
+            if raw.layouts.boundaries.contains(&e.common.handle.0) || leader_xdata::is_part(&e.common.x_data) {
                 continue;
             }
             let picture = match &e.specific {
@@ -1918,6 +1956,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                     if let Geometry::Dimension { extra, .. } = &mut g {
                         dim_xdata::read(&e.common.x_data, doc.dim_style(), extra);
                     }
+                    leader_xdata::read(&e.common.x_data, &mut g);
                     let id = doc.add_with(
                         g,
                         &e.common.layer,
@@ -2126,9 +2165,73 @@ pub fn write_with_handles<W: Write>(doc: &Document, writer: &mut W) -> Result<Ha
     let fixed = set_header_value(&fixed, "$CELWEIGHT", &celweight);
     let fixed = underlay_dxf::rename_type(&fixed, "UNDERLAYDEFINITION", "PDFDEFINITION");
     let fixed = clip_dxf::drop_unused_planes(&fixed);
-    let fixed = fix_handles(&fixed);
+    let fixed = fix_handles(&xdata_before_attributes(&drop_handleless_mtext(&fixed)));
     writer.write_all(&hatch_dxf::insert_hatches(&fixed, &hatches)).map_err(Error::IoError)?;
     Ok(handles)
+}
+
+/// The dxf crate follows each attribute definition with an empty MTEXT
+/// of handle 0 (its multiline text, which it can't embed), which readers
+/// refuse: they go.
+fn drop_handleless_mtext(dxf: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(dxf);
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let pairs: Vec<&[&str]> = lines.chunks(2).collect();
+    let mut out = String::with_capacity(text.len());
+    let (mut skipping, mut dropped) = (false, false);
+    for (i, p) in pairs.iter().enumerate() {
+        if p[0].trim() == "0" {
+            let next = pairs.get(i + 1);
+            skipping = p.get(1).is_some_and(|v| v.trim() == "MTEXT")
+                && next.is_some_and(|n| n[0].trim() == "5" && n.get(1).is_some_and(|v| v.trim() == "0"));
+            dropped |= skipping;
+        }
+        if !skipping {
+            out.extend(p.iter().copied());
+        }
+    }
+    if dropped { out.into_bytes() } else { dxf.to_vec() }
+}
+
+/// The dxf crate writes the XDATA of an INSERT with attributes (or of a
+/// POLYLINE) after its SEQEND, where readers take it for the SEQEND's:
+/// it goes back to its object, before the ATTRIBs (or VERTEXes).
+fn xdata_before_attributes(dxf: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(dxf);
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut pairs: Vec<[&str; 2]> = lines.as_chunks::<2>().0.to_vec();
+    let is = |p: &[&str; 2], code: &str, value: &str| p[0].trim() == code && p[1].trim() == value;
+    let mut moved = false;
+    let mut i = 0;
+    while i < pairs.len() {
+        if !is(&pairs[i], "0", "SEQEND") {
+            i += 1;
+            continue;
+        }
+        let end = (i + 1..pairs.len()).find(|&k| pairs[k][0].trim() == "0").unwrap_or(pairs.len());
+        let Some(x) = (i + 1..end).find(|&k| pairs[k][0].trim() == "1001") else {
+            i += 1;
+            continue;
+        };
+        let owner = (0..i).rev().find(|&k| is(&pairs[k], "0", "INSERT") || is(&pairs[k], "0", "POLYLINE"));
+        let Some(at) = owner.and_then(|o| (o + 1..i).find(|&k| pairs[k][0].trim() == "0")) else {
+            i += 1;
+            continue;
+        };
+        let xdata: Vec<[&str; 2]> = pairs.drain(x..end).collect();
+        let n = xdata.len();
+        pairs.splice(at..at, xdata);
+        moved = true;
+        i += n + 1;
+    }
+    if !moved {
+        return dxf.to_vec();
+    }
+    let mut out = pairs.concat().concat();
+    if lines.len() % 2 == 1 {
+        out.push_str(lines[lines.len() - 1]);
+    }
+    out.into_bytes()
 }
 
 /// Handles the dxf crate leaves out or repeats, which AutoCAD may refuse:
@@ -2888,6 +2991,7 @@ mod tests {
         }
         doc.add(Geometry::Leader {
             more: Vec::new(),
+            blocks: None,
             points: vec![Point::ORIGIN, Point::new(10.0, 10.0)],
             content: "NOTE".into(),
             scale: 1.0,
@@ -2933,9 +3037,15 @@ mod tests {
             panic!("MTEXT lost")
         };
         assert!((rotation - 30.0).abs() < 1e-9 && *width == 40.0 && content == "Line one\\PLine two");
-        // The leader keeps its arrow and lines; its text comes back as MTEXT beside it.
-        assert!(got.iter().any(|g| matches!(g, Geometry::Leader { points, .. } if points.len() == 2)));
-        assert!(got.iter().any(|g| matches!(g, Geometry::Text { content, .. } if content == "NOTE")));
+        // The leader comes back whole, its text with it (other programs see
+        // a LEADER and an MTEXT).
+        assert!(
+            got.iter().any(
+                |g| matches!(g, Geometry::Leader { points, content, .. } if points.len() == 2 && content == "NOTE")
+            )
+        );
+        assert!(!got.iter().any(|g| matches!(g, Geometry::Text { content, .. } if content == "NOTE")));
+        assert!(String::from_utf8_lossy(&buf).contains("\nMTEXT"));
         // Hatches come back as the same hatches, and no POINT placeholder is left.
         assert!(got.contains(&hatched), "hatch lost");
         assert!(!String::from_utf8_lossy(&buf).contains("\nPOINT"));

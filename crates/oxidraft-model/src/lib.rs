@@ -13,6 +13,7 @@ mod entity;
 pub mod field;
 pub mod hatch;
 pub mod layout;
+mod leader_blocks;
 mod library;
 pub mod linetype;
 mod palette;

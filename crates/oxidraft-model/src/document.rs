@@ -1578,7 +1578,8 @@ impl Document {
         out: &mut Vec<Styled>,
     ) {
         let primitives = || crate::annotation::with_dim_style(self.dim_style, || g.primitives());
-        if let Some(parts) = crate::annotation::with_leader_style(self.leader_style, primitives) {
+        if let Some(mut parts) = crate::annotation::with_leader_style(self.leader_style, primitives) {
+            parts.extend(self.leader_inserts(g));
             for part in &parts {
                 self.expand_into(part, layer, style, by_block, depth + 1, out);
             }

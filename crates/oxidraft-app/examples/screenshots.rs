@@ -95,6 +95,7 @@ fn sample() -> Document {
     }
     doc.add(Geometry::Leader {
         more: Vec::new(),
+        blocks: None,
         points: vec![Point::new(82.2, 32.2), Point::new(92.0, 42.0)],
         content: "CONCRETE COLUMN".into(),
         scale: 1.0,

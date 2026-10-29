@@ -4,7 +4,7 @@
 
 use eframe::egui::{self, Align, ComboBox, Layout, RichText, Ui, vec2};
 use oxidraft_model::{
-    annotation::{LeaderArrow, LeaderStyle},
+    annotation::{LeaderArrow, LeaderStyle, TagShape},
     table::TableStyle,
 };
 
@@ -68,7 +68,42 @@ impl OxidraftApp {
                         });
                         number(ui, "Size:", &mut s.arrow_size, &mut fields);
                         ui.label(RichText::new("Content").strong());
-                        number(ui, "Text height:", &mut s.text_height, &mut fields);
+                        ui.horizontal(|ui| {
+                            ui.label("Multileader type:");
+                            let shown = s.block.map_or("Mtext", |_| "Block");
+                            let r = ComboBox::from_id_salt("leader_content").width(120.0).selected_text(shown).show_ui(
+                                ui,
+                                |ui| {
+                                    if ui.selectable_label(s.block.is_none(), "Mtext").clicked() {
+                                        s.block = None;
+                                    }
+                                    if ui.selectable_label(s.block.is_some(), "Block").clicked() && s.block.is_none() {
+                                        s.block = Some(TagShape::Circle);
+                                    }
+                                },
+                            );
+                            r.response.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Multileader type")
+                            });
+                        });
+                        if let Some(shape) = &mut s.block {
+                            ui.horizontal(|ui| {
+                                ui.label("Source block:");
+                                let r = ComboBox::from_id_salt("leader_block")
+                                    .width(120.0)
+                                    .selected_text(shape.label())
+                                    .show_ui(ui, |ui| {
+                                        for t in TagShape::ALL {
+                                            ui.selectable_value(shape, t, t.label());
+                                        }
+                                    });
+                                r.response.widget_info(|| {
+                                    egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Source block")
+                                });
+                            });
+                        } else {
+                            number(ui, "Text height:", &mut s.text_height, &mut fields);
+                        }
                         ui.label(RichText::new("Landing").strong());
                         ui.checkbox(&mut s.landing_on, "Automatically include landing");
                         ui.add_enabled_ui(s.landing_on, |ui| {
