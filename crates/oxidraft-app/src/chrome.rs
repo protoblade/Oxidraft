@@ -570,6 +570,13 @@ impl OxidraftApp {
                 ),
                 tool(Icon::InsertBlock, "Blocks", Some("BLOCKSPALETTE"), "Opens the Blocks palette"),
                 tool(Icon::Calculator, "QuickCalc", Some("QUICKCALC"), "Opens the QuickCalc calculator (QC, Cmd+8)"),
+                tool(Icon::InsertBlock, "Tool\nPalettes", Some("TOOLPALETTES"), "Opens the tool palettes (TP, Cmd+3)"),
+                tool(
+                    Icon::ExternalReferences,
+                    "Design\nCenter",
+                    Some("ADCENTER"),
+                    "Opens DesignCenter: other drawings' blocks, layers and styles (ADC, Cmd+2)",
+                ),
             ] {
                 self.large_tool(ui, &t);
             }

@@ -2515,3 +2515,79 @@ fn etransmit_gathers_the_drawing_and_its_files() {
     assert!(report.contains("Not found, left out:") && report.contains("gone.png"), "{report}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn design_center_brings_layers_and_blocks_in() {
+    use oxidraft_model::{Block, BlockEntity, Color, Layer};
+    let dir = std::env::temp_dir().join(format!("oxidraft-adc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut lib = Document::new();
+    lib.add_layer(Layer::new("Trees", 3));
+    lib.define_block(Block {
+        name: "LEAF".into(),
+        base: Point::ORIGIN,
+        entities: vec![BlockEntity::new(
+            "Trees",
+            Color::ByLayer,
+            Geometry::Circle { center: Point::ORIGIN, radius: 1.0 },
+        )],
+    });
+    lib.add(Geometry::Insert {
+        block: "LEAF".into(),
+        placement: oxidraft_model::Placement::at(Point::ORIGIN),
+        attributes: Vec::new(),
+        clip: None,
+    });
+    oxidraft_io_dxf::save_file(&lib, dir.join("lib.dxf")).unwrap();
+
+    // 60 frames a second, so two clicks fall within egui's double-click time.
+    let mut h = app_with_line_at(1.0 / 60.0);
+    h.state_mut().design_center_in(dir.clone());
+    h.run_steps(2);
+    h.get_by_label("lib.dxf").click();
+    h.run_steps(2);
+    h.get_by_label_contains("Layers (").click();
+    h.run_steps(2);
+    h.get_by_label("Trees").click();
+    h.run_steps(1);
+    h.get_by_label("Add to Drawing").click();
+    h.run_steps(2);
+    assert!(h.state_mut().document_mut().layer("Trees").is_some_and(|l| l.color == 3));
+    h.get_by_label_contains("Blocks (").click();
+    h.run_steps(2);
+    h.get_by_label("LEAF").click();
+    h.run_steps(1);
+    // DesignCenter's Insert, over the ribbon's.
+    h.get_all_by_label("Insert").last().unwrap().click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("INSERT"));
+    assert!(h.state_mut().document_mut().block("LEAF").is_some());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn tool_palettes_run_tools_and_take_new_ones() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["toolpalettes"]);
+    h.run_steps(2);
+    // "Circle" is also on the ribbon: the palette's comes last.
+    h.get_all_by_label("Circle").last().unwrap().click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("CIRCLE"));
+    h.key_press(Key::Escape);
+    h.run_steps(1);
+    // A tool from the selected line: LINE on its layer.
+    let first = h.state_mut().document_mut().entities().next().unwrap().id;
+    h.state_mut().engine_mut().set_selection(vec![first]);
+    h.run_steps(1);
+    h.get_by_label("Add Selected Objects").click();
+    h.run_steps(2);
+    let tools = h.state_mut().palettes()[0].tools.len();
+    assert_eq!(tools, 10, "the nine draw tools and the new one");
+    h.get_by_label("Hatches").click();
+    h.run_steps(2);
+    h.get_by_label("ANSI37").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("HATCH"));
+    assert_eq!(h.state_mut().engine_mut().vars.hatch_pattern, oxidraft_model::HatchPattern::Ansi37);
+}

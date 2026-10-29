@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::OxidraftApp;
 use crate::theme::{self, Background, ColorTheme};
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub color_theme: ColorTheme,
@@ -24,6 +24,8 @@ pub struct Settings {
     pub aliases: Vec<(String, String)>,
     /// Words added to the dictionary (SPELL).
     pub words: Vec<String>,
+    /// The tool palettes, once changed from the defaults (TOOLPALETTES).
+    pub tool_palettes: Vec<crate::tool_palettes::ToolPalette>,
 }
 
 /// Where a palette sits: docked at the left or right of the drawing
@@ -169,6 +171,7 @@ mod tests {
             block_library: Some("/blocks".into()),
             aliases: vec![("QQ".into(), "CIRCLE".into())],
             words: vec!["Oxidraft".into()],
+            tool_palettes: crate::tool_palettes::default_palettes(),
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);

@@ -41,7 +41,7 @@ impl OxidraftApp {
                 ui.horizontal_top(|ui| {
                     egui::Frame::group(ui.style()).show(ui, |ui| {
                         ui.set_min_size(vec2(220.0, 160.0));
-                        let mark = |u: &Ucs| if *u == current { "▶ " } else { "    " };
+                        let mark = |u: &Ucs| if *u == current { "* " } else { "   " };
                         if ui.selectable_label(d.picked.is_none(), format!("{}World", mark(&WORLD))).clicked() {
                             d.picked = None;
                         }

@@ -39,6 +39,43 @@ impl Document {
         name.to_string()
     }
 
+    /// Brings layer `name` from `from` (with its linetype), unless this
+    /// drawing has one by that name. True if it came.
+    pub fn import_layer(&mut self, from: &Document, name: &str) -> bool {
+        let Some(layer) = from.layer(name).cloned() else { return false };
+        if self.layer(&layer.name).is_some() {
+            return false;
+        }
+        self.import_linetype(from, &layer.linetype);
+        self.add_layer(layer.clone());
+        self.update_layer(layer);
+        true
+    }
+
+    /// Brings linetype `name`'s definition from `from`, unless this
+    /// drawing has it. True if it came.
+    pub fn import_linetype(&mut self, from: &Document, name: &str) -> bool {
+        match from.linetype(name).filter(|lt| !lt.pattern.is_empty() && self.linetype(&lt.name).is_none()) {
+            Some(lt) => {
+                self.define_linetype(lt);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Brings text style `name` from `from`, unless this drawing has one
+    /// by that name. True if it came.
+    pub fn import_text_style(&mut self, from: &Document, name: &str) -> bool {
+        let Some(style) = from.text_styles().iter().find(|s| s.name.eq_ignore_ascii_case(name)).cloned() else {
+            return false;
+        };
+        if self.text_styles().iter().any(|s| s.name.eq_ignore_ascii_case(name)) {
+            return false;
+        }
+        self.set_text_style(style).is_ok()
+    }
+
     /// The blocks, layers and linetypes `entities` use, from `from`.
     fn import_names(&mut self, from: &Document, entities: &[BlockEntity]) {
         for be in entities {

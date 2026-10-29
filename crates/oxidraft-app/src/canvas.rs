@@ -1324,7 +1324,7 @@ impl OxidraftApp {
         {
             let name = if link.description.is_empty() { &link.url } else { &link.description };
             let follow = if cfg!(target_os = "macos") { "Cmd-click to follow" } else { "Ctrl-click to follow" };
-            tooltip(painter, c.screen + vec2(18.0, 18.0), &[format!("🔗 {name}"), follow.to_string()], None);
+            tooltip(painter, c.screen + vec2(18.0, 18.0), &[format!("Link: {name}"), follow.to_string()], None);
         }
         if let Some(s) = c.snap {
             let at = self.view.to_screen(rect, s.point) + vec2(14.0, 14.0);

@@ -129,6 +129,10 @@ pub struct OxidraftApp {
     pub(crate) point_style: Option<crate::drafting::PointStyle>,
     pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
     pub(crate) field_dialog: Option<crate::fields::FieldDialog>,
+    /// TOOLPALETTES, while open.
+    pub(crate) tool_palettes: Option<crate::tool_palettes::ToolPalettesWindow>,
+    /// ADCENTER: DesignCenter, while it's open.
+    pub(crate) design_center: Option<crate::design_center::DesignCenter>,
     /// STYLESMANAGER, the Plot Style Table Editor, and where plot style
     /// tables are kept (else beside the settings).
     pub(crate) styles_manager: Option<crate::plot_styles::StylesManager>,
@@ -309,6 +313,8 @@ impl OxidraftApp {
             point_style: None,
             tolerance_dialog: None,
             field_dialog: None,
+            tool_palettes: None,
+            design_center: None,
             styles_manager: None,
             pen_table_editor: None,
             plot_styles_dir: None,
@@ -662,6 +668,10 @@ impl OxidraftApp {
             "TOLERANCE" | "TOL" => self.open_tolerance(),
             "FIELD" => self.open_field_dialog(false),
             "STATUS" => self.status(),
+            "ADCENTER" | "ADC" | "DC" => self.toggle_design_center(),
+            "TOOLPALETTES" | "TP" => self.toggle_tool_palettes(),
+            "TOOLPALETTESCLOSE" => self.tool_palettes = None,
+            "ADCCLOSE" => self.design_center = None,
             "ETRANSMIT" => self.etransmit(),
             "STYLESMANAGER" => self.open_styles_manager(),
             "UCSMAN" | "UC" => self.open_ucs_dialog(),
@@ -877,6 +887,12 @@ impl OxidraftApp {
         if ctx.input_mut(|i| i.consume_key(cmd, Key::K)) {
             self.run("HYPERLINK");
         }
+        if ctx.input_mut(|i| i.consume_key(cmd, Key::Num2)) {
+            self.toggle_design_center();
+        }
+        if ctx.input_mut(|i| i.consume_key(cmd, Key::Num3)) {
+            self.toggle_tool_palettes();
+        }
         if ctx.input_mut(|i| i.consume_key(cmd, Key::Num0)) {
             self.clean_screen = !self.clean_screen;
         }
@@ -1082,6 +1098,8 @@ impl eframe::App for OxidraftApp {
         self.tolerance_dialog(&ctx);
         self.text_editor(&ctx);
         self.field_dialog(&ctx);
+        self.tool_palettes_window(&ctx);
+        self.design_center(&ctx);
         self.styles_manager(&ctx);
         self.pen_table_editor(&ctx);
         self.ucs_dialog(&ctx);

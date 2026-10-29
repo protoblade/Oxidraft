@@ -630,6 +630,20 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo { name: "RSCRIPT", aliases: &[], description: "Run the last script again", make: None },
     CommandInfo {
+        name: "ADCENTER",
+        aliases: &["ADC", "DC"],
+        description: "DesignCenter: blocks, layers, linetypes and text styles from other drawings (Ctrl+2)",
+        make: None,
+    },
+    CommandInfo { name: "ADCCLOSE", aliases: &[], description: "Close DesignCenter", make: None },
+    CommandInfo {
+        name: "TOOLPALETTES",
+        aliases: &["TP"],
+        description: "Tool palettes: commands, hatches and blocks a click away (Ctrl+3)",
+        make: None,
+    },
+    CommandInfo { name: "TOOLPALETTESCLOSE", aliases: &[], description: "Close the tool palettes", make: None },
+    CommandInfo {
         name: "ETRANSMIT",
         aliases: &[],
         description: "Copy the drawing and the files it attaches into one folder, to send",

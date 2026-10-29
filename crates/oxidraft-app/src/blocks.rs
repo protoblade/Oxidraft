@@ -284,7 +284,7 @@ impl OxidraftApp {
 
     /// Brings a library drawing's block (or the whole drawing, `name` being
     /// `None`) into this drawing, and inserts it.
-    fn insert_from_library(&mut self, file: &Path, name: Option<&str>) {
+    pub(crate) fn insert_from_library(&mut self, file: &Path, name: Option<&str>) {
         let Some(Ok(lib)) = self.library_drawings.get(file) else { return };
         let lib = lib.clone();
         self.engine.cancel(&mut self.doc);
@@ -303,7 +303,7 @@ impl OxidraftApp {
     }
 
     /// Reads a library drawing once, keeping it for later.
-    fn library_drawing(&mut self, file: &Path) {
+    pub(crate) fn library_drawing(&mut self, file: &Path) {
         if !self.library_drawings.contains_key(file) {
             let read = if oxidraft_io_dwg::is_dwg(file) {
                 oxidraft_io_dwg::load_file(file).map(|o| o.imported.document)
