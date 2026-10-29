@@ -156,6 +156,9 @@ impl OxidraftApp {
         let pointer = pointer.filter(|p| dragging || frame.is_none_or(|r| r.contains(*p)));
         let cursor = pointer.map(|screen| self.resolve_cursor(rect, screen));
         self.cursor = cursor.as_ref().map(|c| c.point);
+        // PNGOUT and the like: the drawing alone, no cursor, grid or grips.
+        let capturing = self.capturing_image();
+        let cursor = cursor.filter(|_| !capturing);
         // Real-time pan and zoom own the mouse; right-click ends them.
         if self.realtime.is_some() {
             if response.secondary_clicked() {
@@ -184,7 +187,7 @@ impl OxidraftApp {
         theme::set_paper(layout.is_some());
         match &layout {
             Some(l) => self.draw_sheet(&painter, rect, &l.paper),
-            None if self.grid && self.view.rotation == 0.0 => self.draw_grid(&painter, rect),
+            None if self.grid && self.view.rotation == 0.0 && !capturing => self.draw_grid(&painter, rect),
             None => {}
         }
         if layout.is_some() {
@@ -196,7 +199,7 @@ impl OxidraftApp {
             Some((f, r)) => (painter.with_clip_rect(r.intersect(rect)), *r, f.frozen.clone()),
             None => (painter.clone(), rect, Vec::new()),
         };
-        if self.engine.vars.ucs_icon {
+        if self.engine.vars.ucs_icon && !capturing {
             self.draw_ucs_icon(&model, rect, area);
         }
         self.sheet_scale = self.active_viewport.filter(|_| active.is_some()).map(|a| a.page.scale);
@@ -230,7 +233,9 @@ impl OxidraftApp {
                 self.draw_geometry(&model, rect, &g, Stroke::new(1.0, theme::preview()));
             }
         }
-        self.draw_grips(&model, rect, cursor.as_ref());
+        if !capturing {
+            self.draw_grips(&model, rect, cursor.as_ref());
+        }
         if let Some(c) = &cursor {
             let dragging = response.dragged_by(PointerButton::Primary);
             let icon = match self.realtime {
@@ -255,14 +260,16 @@ impl OxidraftApp {
             Some(r) => format!("[-][Top][2D Wireframe]   Block Editor - {}", r.block),
             None => "[-][Top][2D Wireframe]".into(),
         };
-        painter.text(
-            rect.left_top() + vec2(8.0, 6.0),
-            Align2::LEFT_TOP,
-            label,
-            FontId::proportional(12.0),
-            theme::label(),
-        );
-        if self.engine.vars.nav_bar {
+        if !capturing {
+            painter.text(
+                rect.left_top() + vec2(8.0, 6.0),
+                Align2::LEFT_TOP,
+                label,
+                FontId::proportional(12.0),
+                theme::label(),
+            );
+        }
+        if self.engine.vars.nav_bar && !capturing {
             self.navigation_bar(ui, rect);
         }
         self.selection_list(ui.ctx());
@@ -721,7 +728,7 @@ impl OxidraftApp {
         space: Space,
         frozen: &[String],
     ) {
-        let selected = self.engine.highlighted();
+        let selected = if self.capturing_image() { Vec::new() } else { self.engine.highlighted() };
         // Rollover highlighting: the object under the pickbox gets thicker, and
         // so does everything a selection window in progress would select
         // (AutoCAD's selection preview).

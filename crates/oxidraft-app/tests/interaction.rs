@@ -2411,3 +2411,23 @@ fn system_variables_typed_and_set() {
     h.run_steps(2);
     assert!(h.query_by_role_and_label(Role::Tab, "Annotate").is_some());
 }
+
+#[test]
+fn pngout_saves_the_drawing_area() {
+    let mut h = app_with_line();
+    let dir = std::env::temp_dir().join(format!("oxidraft-pngout-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("view.png");
+    h.state_mut().start_image_out(path.clone());
+    for _ in 0..20 {
+        h.run_steps(1);
+        if path.exists() && !h.state().capturing() {
+            break;
+        }
+    }
+    let history = h.state_mut().engine_mut().history().to_vec();
+    assert!(history.iter().any(|l| l.starts_with("Saved ")), "{history:?}");
+    let image = image::open(&path).unwrap();
+    assert!(image.width() > 100 && image.height() > 100);
+    std::fs::remove_dir_all(&dir).ok();
+}

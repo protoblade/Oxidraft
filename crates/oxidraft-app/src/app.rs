@@ -129,6 +129,10 @@ pub struct OxidraftApp {
     pub(crate) point_style: Option<crate::drafting::PointStyle>,
     pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
     pub(crate) field_dialog: Option<crate::fields::FieldDialog>,
+    /// The last script run, for RSCRIPT.
+    pub(crate) last_script: Option<String>,
+    /// PNGOUT and the like: the image being saved.
+    pub(crate) image_out: Option<crate::image_out::ImageOut>,
     /// CLEANSCREENON (Ctrl+0): the ribbon and palettes hidden.
     pub(crate) clean_screen: bool,
     /// When the drawing was opened or started, for TIME.
@@ -299,6 +303,8 @@ impl OxidraftApp {
             point_style: None,
             tolerance_dialog: None,
             field_dialog: None,
+            last_script: None,
+            image_out: None,
             clean_screen: false,
             opened_at: std::time::Instant::now(),
             spell: None,
@@ -645,6 +651,10 @@ impl OxidraftApp {
             "TOLERANCE" | "TOL" => self.open_tolerance(),
             "FIELD" => self.open_field_dialog(false),
             "STATUS" => self.status(),
+            "RSCRIPT" => self.rerun_script(),
+            "PNGOUT" => self.image_out_command("PNG", &["png"]),
+            "JPGOUT" => self.image_out_command("JPEG", &["jpg", "jpeg"]),
+            "BMPOUT" => self.image_out_command("BMP", &["bmp"]),
             "TIME" => self.time(),
             "ATTACH" => self.attach(),
             "EXPORT" | "EXP" => self.export(false),
@@ -1004,6 +1014,7 @@ impl eframe::App for OxidraftApp {
         self.handle_clipboard_keys(&ctx);
         self.receive_pictures(&ctx);
         self.load_images_turned_on();
+        self.image_out_frame(&ctx);
         self.update_title(&ctx);
 
         self.top_bar(ui);
@@ -1070,7 +1081,10 @@ impl eframe::App for OxidraftApp {
         self.block_close_dialog(&ctx);
         self.blocks_palette(&ctx);
         self.update_window(&ctx);
-        self.command_line(&ctx);
+        // Not in an image of the drawing (PNGOUT).
+        if !self.capturing_image() {
+            self.command_line(&ctx);
+        }
         self.publish_copied(&ctx);
         // Requests from what was typed this frame show on the next.
         if self.handle_ui_requests(&ctx) {

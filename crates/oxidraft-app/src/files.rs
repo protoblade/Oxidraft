@@ -119,20 +119,33 @@ impl OxidraftApp {
     }
 
     pub fn run_script(&mut self, script: &str) {
+        self.last_script = Some(script.to_string());
         let mut word = String::new();
         let mut quoted = false;
         for c in script.chars().filter(|c| *c != '\r') {
             match c {
                 '"' => quoted = !quoted,
                 ' ' | '\n' if !quoted => {
+                    // RSCRIPT in a script would run it forever: it ends it here.
+                    if word.eq_ignore_ascii_case("RSCRIPT") {
+                        return;
+                    }
                     self.type_command(&word);
                     word.clear();
                 }
                 c => word.push(c),
             }
         }
-        if !word.is_empty() {
+        if !word.is_empty() && !word.eq_ignore_ascii_case("RSCRIPT") {
             self.type_command(&word);
+        }
+    }
+
+    /// RSCRIPT: the last script, once more.
+    pub(crate) fn rerun_script(&mut self) {
+        match self.last_script.clone() {
+            Some(script) => self.run_script(&script),
+            None => self.engine.log("No script has been run yet.".to_string()),
         }
     }
 

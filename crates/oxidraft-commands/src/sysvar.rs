@@ -228,6 +228,24 @@ impl Command for Grid {
     }
 }
 
+/// DELAY: a pause in a script, in milliseconds; scripts here run
+/// straight through, so it takes its value and goes on.
+pub struct Delay;
+
+impl Command for Delay {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Enter delay time (in milliseconds)")
+    }
+
+    fn input(&mut self, input: Input, _ctx: &mut Ctx) -> Result<Step, String> {
+        match input {
+            Input::Value(v) if v >= 0.0 => Ok(Step::Done),
+            Input::Enter => Ok(Step::Done),
+            _ => Err("Requires a whole number of milliseconds.".into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -68,6 +68,7 @@ mod revcloud;
 mod rotate;
 mod scale;
 mod select;
+mod sketch;
 mod smartdim;
 mod spline;
 mod splinedit;

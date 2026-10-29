@@ -16,6 +16,7 @@ mod drawing_units;
 mod fields;
 mod files;
 mod icons;
+mod image_out;
 mod layer_states;
 mod layer_walk;
 mod layers;

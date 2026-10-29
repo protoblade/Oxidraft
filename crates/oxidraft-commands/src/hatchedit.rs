@@ -280,6 +280,96 @@ impl Command for HatchEdit {
     }
 }
 
+/// HATCHGENERATEBOUNDARY: closed polylines along the selected hatches'
+/// boundaries, on their layers.
+#[derive(Default)]
+pub struct HatchGenerateBoundary;
+
+impl Command for HatchGenerateBoundary {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Select hatch objects")
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let Input::Selection(s) = input else { return Ok(Step::Done) };
+        let mut made = 0;
+        for id in &s.ids {
+            let Some(e) = ctx.doc.entity(*id).cloned() else { continue };
+            let Geometry::Hatch { loops, .. } = &e.geometry else { continue };
+            for l in loops {
+                ctx.doc.add_like(outline(l), &e);
+                made += 1;
+            }
+        }
+        ctx.messages.push(format!("{made} boundary object(s) created."));
+        Ok(Step::Done)
+    }
+
+    fn wants_selection(&self) -> bool {
+        true
+    }
+}
+
+/// HATCHSETBOUNDARY: a hatch filling new boundaries, picked as closed
+/// objects.
+#[derive(Default)]
+pub struct HatchSetBoundary {
+    hatch: Option<EntityId>,
+}
+
+impl Command for HatchSetBoundary {
+    fn prompt(&self) -> Prompt {
+        match self.hatch {
+            None => Prompt::new("Select hatch"),
+            Some(_) => Prompt::new("Select new boundary objects"),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (self.hatch, input) {
+            (None, Input::Pick { at, .. }) => {
+                let id = ctx
+                    .pick(at)
+                    .filter(|id| matches!(ctx.doc.entity(*id).map(|e| &e.geometry), Some(Geometry::Hatch { .. })))
+                    .ok_or("That isn't a hatch.")?;
+                self.hatch = Some(id);
+                Ok(Step::Continue)
+            }
+            (Some(hatch), Input::Selection(s)) => {
+                let loops: Vec<Vec<Vertex>> = s
+                    .ids
+                    .iter()
+                    .filter(|id| **id != hatch)
+                    .filter_map(|id| ctx.doc.entity(*id).and_then(|e| closed_loop(&e.geometry)))
+                    .collect();
+                if loops.is_empty() {
+                    return Err("Select closed objects: polylines, circles, ellipses or splines.".into());
+                }
+                ctx.doc.update(hatch, |e| {
+                    if let Geometry::Hatch { loops: l, .. } = &mut e.geometry {
+                        *l = loops;
+                    }
+                });
+                Ok(Step::Done)
+            }
+            (_, Input::Enter) => Ok(Step::Done),
+            _ => Err("Invalid input.".into()),
+        }
+    }
+
+    fn wants_pick(&self) -> bool {
+        self.hatch.is_none()
+    }
+
+    fn wants_selection(&self) -> bool {
+        self.hatch.is_some()
+    }
+
+    fn highlighted(&self) -> Vec<EntityId> {
+        self.hatch.into_iter().collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Engine;
@@ -359,6 +449,23 @@ mod tests {
         pick(&mut e, &mut d, 30.0, 5.0);
         run(&mut e, &mut d, &["b"]);
         assert_eq!(d.len(), before + 1);
+    }
+
+    #[test]
+    fn generate_and_set_boundaries() {
+        let (mut e, mut d) = (Engine::new(), doc());
+        run(&mut e, &mut d, &["hatchgenerateboundary", "all", ""]);
+        let outlines = d.entities().filter(|x| matches!(x.geometry, Geometry::Polyline { closed: true, .. })).count();
+        assert_eq!(outlines, 3);
+        d.add(Geometry::Circle { center: Point::new(60.0, 0.0), radius: 5.0 });
+        run(&mut e, &mut d, &["hatchsetboundary"]);
+        // Inside the hatch, away from the outlines just drawn on its edges.
+        pick(&mut e, &mut d, 2.0, 2.0);
+        pick(&mut e, &mut d, 65.0, 0.0);
+        run(&mut e, &mut d, &[""]);
+        let loops = &hatches(&d)[0].0;
+        assert_eq!(loops.len(), 1, "{:?}", e.history());
+        assert!(loops[0].iter().all(|v| (v.point.distance(Point::new(60.0, 0.0)) - 5.0).abs() < 1e-9));
     }
 
     #[test]

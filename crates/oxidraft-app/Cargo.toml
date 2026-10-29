@@ -34,6 +34,7 @@ self-replace = "1"
 sha2 = "0.11"
 semver = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
 
 [lints]
 workspace = true
@@ -43,4 +44,3 @@ winresource = "0.1"
 
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["eframe", "wgpu"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
