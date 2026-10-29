@@ -16,6 +16,8 @@ pub(crate) enum TabAction {
     Delete(Space),
     Rename(Space),
     Copy(Space),
+    MoveOrCopy(Space),
+    FromTemplate,
     PageSetup(Space),
     Plot(Space),
     Model,
@@ -27,6 +29,21 @@ pub(crate) struct Renaming {
     pub text: String,
     /// The field has had the keyboard (it's given it on its first frame).
     focused: bool,
+}
+
+/// The Move or Copy dialog: where a layout's tab goes (before another,
+/// or `None` for the end), and whether a copy goes there instead.
+pub(crate) struct MoveOrCopy {
+    space: Space,
+    before: Option<Space>,
+    copy: bool,
+}
+
+/// Insert Layout(s) from a template drawing: its layouts, the ones picked.
+pub(crate) struct FromTemplate {
+    source: oxidraft_model::Document,
+    file: String,
+    picked: Vec<bool>,
 }
 
 /// The Page Setup dialog's choices for a layout.
@@ -117,6 +134,10 @@ impl OxidraftApp {
                     self.engine.log(e);
                 }
             }
+            TabAction::MoveOrCopy(space) => {
+                self.move_or_copy = Some(MoveOrCopy { space, before: None, copy: false });
+            }
+            TabAction::FromTemplate => self.layout_from_template(),
             TabAction::PageSetup(MODEL) => {
                 self.switch_space(MODEL);
                 self.open_model_page_setup();
@@ -161,6 +182,140 @@ impl OxidraftApp {
         if let Err(e) = renamed {
             self.engine.log(e);
         }
+    }
+
+    /// Move or Copy: the layout's tab before another, or at the end, or a
+    /// copy of it there.
+    pub(crate) fn move_or_copy_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut d) = self.move_or_copy.take() else { return };
+        let Some(name) = self.doc.layout(d.space).map(|l| l.name.clone()) else { return };
+        let others: Vec<(Space, String)> =
+            self.doc.layouts().iter().filter(|l| l.id != d.space).map(|l| (l.id, l.name.clone())).collect();
+        let (mut open, mut ok, mut cancel) = (true, false, false);
+        egui::Window::new(format!("Move or Copy - {name}"))
+            .id(egui::Id::unique("move_or_copy"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_pos([480.0, 240.0])
+            .constrain_to(self.dialog_area(ctx))
+            .show(ctx, |ui| {
+                ui.label("Before layout:");
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(240.0);
+                    for (id, other) in &others {
+                        ui.selectable_value(&mut d.before, Some(*id), other);
+                    }
+                    ui.selectable_value(&mut d.before, None, "(move to end)");
+                });
+                ui.checkbox(&mut d.copy, "Create a copy");
+                let row = vec2(ui.available_width(), 24.0);
+                ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+                    cancel = ui.button("Cancel").clicked();
+                    ok = ui.button("OK").clicked();
+                });
+            });
+        if ok {
+            self.doc.begin("LAYOUT");
+            let moved = if d.copy {
+                let copy = (2..)
+                    .map(|n| format!("{name} ({n})"))
+                    .find(|n| self.doc.layout_named(n).is_none())
+                    .unwrap_or_default();
+                self.doc.copy_layout(d.space, &copy)
+            } else {
+                Ok(d.space)
+            };
+            match moved {
+                Ok(space) => self.doc.move_layout(space, d.before),
+                Err(e) => self.engine.log(e),
+            }
+            self.doc.commit();
+        }
+        if open && !ok && !cancel {
+            self.move_or_copy = Some(d);
+        }
+    }
+
+    /// From Template: layouts from another drawing (a DWG, DXF or DWT),
+    /// picked in Insert Layout(s).
+    fn layout_from_template(&mut self) {
+        let dialog = rfd::FileDialog::new().add_filter("Drawing template or drawing", &["dwt", "dwg", "dxf"]);
+        let Some(path) = dialog.pick_file() else { return };
+        self.open_template(&path);
+    }
+
+    /// Insert Layout(s) for the drawing at `path`.
+    pub fn open_template(&mut self, path: &std::path::Path) {
+        match crate::xref::read_drawing(path) {
+            Ok(source) if source.layouts().is_empty() => {
+                self.engine.log(format!("{} has no layouts.", path.display()));
+            }
+            Ok(source) => {
+                let picked = vec![true; source.layouts().len()];
+                let file = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                self.from_template = Some(FromTemplate { source, file, picked });
+            }
+            Err(e) => self.engine.log(format!("Could not read {}: {e}", path.display())),
+        }
+    }
+
+    pub(crate) fn from_template_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut d) = self.from_template.take() else { return };
+        let names: Vec<String> = d.source.layouts().iter().map(|l| l.name.clone()).collect();
+        let (mut open, mut ok, mut cancel) = (true, false, false);
+        egui::Window::new("Insert Layout(s)")
+            .id(egui::Id::unique("from_template"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_pos([480.0, 240.0])
+            .constrain_to(self.dialog_area(ctx))
+            .show(ctx, |ui| {
+                ui.label(format!("Layout name(s) in {}:", d.file));
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(240.0);
+                    for (name, picked) in names.iter().zip(&mut d.picked) {
+                        ui.checkbox(picked, name);
+                    }
+                });
+                let row = vec2(ui.available_width(), 24.0);
+                ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+                    cancel = ui.button("Cancel").clicked();
+                    ok = ui.add_enabled(d.picked.contains(&true), egui::Button::new("OK")).clicked();
+                });
+            });
+        if ok {
+            self.insert_layouts(&d);
+        }
+        if open && !ok && !cancel {
+            self.from_template = Some(d);
+        }
+    }
+
+    /// The picked layouts after this drawing's: each with its page setup,
+    /// what's on its sheet, and the layers, linetypes and blocks those use.
+    fn insert_layouts(&mut self, d: &FromTemplate) {
+        self.doc.begin("LAYOUT");
+        let current = self.doc.space();
+        for (layout, _) in d.source.layouts().into_iter().zip(&d.picked).filter(|(_, p)| **p) {
+            let name = match self.doc.layout_named(&layout.name) {
+                None => layout.name.clone(),
+                Some(_) => (2..)
+                    .map(|n| format!("{} ({n})", layout.name))
+                    .find(|n| self.doc.layout_named(n).is_none())
+                    .unwrap_or_default(),
+            };
+            let tab_order = self.doc.layouts().iter().map(|l| l.tab_order).max().unwrap_or(0) + 1;
+            let copy = oxidraft_model::layout::Layout { id: MODEL, name, tab_order, paper: layout.paper.clone() };
+            let space = self.doc.add_layout(copy);
+            let ids: Vec<_> = d.source.space_in_draw_order(layout.id).iter().map(|e| e.id).collect();
+            let clip = oxidraft_commands::clip_of(&d.source, &ids, oxidraft_geom::Point::ORIGIN);
+            self.doc.set_space(space);
+            oxidraft_commands::paste(&mut self.doc, &clip, oxidraft_geom::Point::ORIGIN);
+        }
+        self.doc.set_space(current);
+        self.doc.commit();
     }
 
     /// Deleting a layout asks first, as AutoCAD does.

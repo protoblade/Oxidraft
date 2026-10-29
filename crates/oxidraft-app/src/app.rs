@@ -89,6 +89,8 @@ pub struct OxidraftApp {
     pub(crate) renaming_layout: Option<crate::layouts::Renaming>,
     pub(crate) delete_layout_prompt: Option<oxidraft_model::Space>,
     pub(crate) page_setup: Option<crate::layouts::PageSetup>,
+    pub(crate) move_or_copy: Option<crate::layouts::MoveOrCopy>,
+    pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
     pub(crate) ribbon_space: oxidraft_model::Space,
     pub(crate) loader: crate::underlay::Loader,
@@ -210,6 +212,8 @@ impl OxidraftApp {
             renaming_layout: None,
             delete_layout_prompt: None,
             page_setup: None,
+            move_or_copy: None,
+            from_template: None,
             ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
             raster_revision: 0,
@@ -583,6 +587,8 @@ impl OxidraftApp {
             || self.attach_dialog.is_some()
             || self.image_attach_dialog.is_some()
             || self.delete_layout_prompt.is_some()
+            || self.move_or_copy.is_some()
+            || self.from_template.is_some()
             || self.cycling.is_some();
         if !open || !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             return false;
@@ -596,6 +602,8 @@ impl OxidraftApp {
             && self.quick_select.take().is_none()
             && self.attach_dialog.take().is_none()
             && self.delete_layout_prompt.take().is_none()
+            && self.move_or_copy.take().is_none()
+            && self.from_template.take().is_none()
             && self.cycling.take().is_none()
         {
             self.image_attach_dialog = None;
@@ -793,6 +801,8 @@ impl eframe::App for OxidraftApp {
         self.xref_edit_save_dialog(&ctx);
         self.options_dialog(&ctx);
         self.page_setup_dialog(&ctx);
+        self.move_or_copy_dialog(&ctx);
+        self.from_template_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);
         self.block_close_dialog(&ctx);

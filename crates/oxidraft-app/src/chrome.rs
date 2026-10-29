@@ -694,9 +694,11 @@ impl OxidraftApp {
                             }
                         };
                         item("New Layout", TabAction::New);
+                        item("From Template...", TabAction::FromTemplate);
                         if let Some(s) = space.filter(|_| !model) {
                             item("Delete", TabAction::Delete(s));
                             item("Rename", TabAction::Rename(s));
+                            item("Move or Copy...", TabAction::MoveOrCopy(s));
                             item("Copy", TabAction::Copy(s));
                             item("Activate Model Tab", TabAction::Model);
                             item("Page Setup...", TabAction::PageSetup(s));

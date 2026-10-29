@@ -1419,3 +1419,61 @@ fn space_turns_a_lasso_into_a_fence() {
     assert_eq!(h.state_mut().engine_mut().selection().len(), 1);
     assert!(!h.state_mut().engine_mut().is_active());
 }
+
+#[test]
+fn move_or_copy_reorders_layout_tabs() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["layout", "n", "First", "layout", "n", "Second"]);
+    h.run_steps(2);
+    tab_menu(&mut h, "Second", "Move or Copy...");
+    // The dialog's First, not the tab.
+    h.get_all_by_label("First").find(|n| n.accesskit_node().role() != Role::Tab).unwrap().click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(layout_names(&mut h), ["Second", "First"]);
+    // A copy, to the end.
+    tab_menu(&mut h, "Second", "Move or Copy...");
+    h.get_by_label("(move to end)").click();
+    h.get_by_label("Create a copy").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(layout_names(&mut h), ["Second", "First", "Second (2)"]);
+}
+
+#[test]
+fn layouts_come_in_from_a_template_with_what_is_on_them() {
+    let dir = std::env::temp_dir().join(format!("oxidraft-template-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut template = Document::new();
+    template.add_layer(oxidraft_model::Layer::new("Border", 5));
+    let paper = oxidraft_model::Paper::a4_landscape();
+    let sheet =
+        template.add_layout(oxidraft_model::layout::Layout { id: 0, name: "A4 Title".into(), tab_order: 1, paper });
+    template.set_space(sheet);
+    template.add_on_layer(
+        Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(280.0, 0.0) },
+        "Border",
+        oxidraft_model::Color::ByLayer,
+    );
+    template.set_space(oxidraft_model::MODEL);
+    let path = dir.join("title.dxf");
+    oxidraft_io_dwg::save_dxf(&template, &path).unwrap();
+
+    let mut h = app_with_line();
+    h.state_mut().open_template(&path);
+    h.run_steps(2);
+    assert!(h.query_by_label("Insert Layout(s)").is_some());
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(layout_names(&mut h), ["A4 Title"]);
+    let doc = h.state_mut().document_mut();
+    let space = doc.layouts()[0].id;
+    let on_it: Vec<_> = doc.all_entities().filter(|e| e.space == space).collect();
+    assert_eq!(on_it.len(), 1);
+    assert_eq!(on_it[0].layer, "Border");
+    assert_eq!(doc.layer("Border").map(|l| l.color), Some(5), "its layer came too");
+    assert_eq!(doc.space(), oxidraft_model::MODEL, "still in model space");
+    std::fs::remove_dir_all(&dir).ok();
+}

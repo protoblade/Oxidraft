@@ -66,7 +66,7 @@ pub(crate) fn relative(from: &Path, to: &Path) -> Option<String> {
 }
 
 /// Reads a DWG or DXF drawing.
-fn read_drawing(path: &Path) -> Result<Document, String> {
+pub(crate) fn read_drawing(path: &Path) -> Result<Document, String> {
     if oxidraft_io_dwg::is_dwg(path) {
         oxidraft_io_dwg::load_file(path).map(|o| o.imported.document)
     } else {

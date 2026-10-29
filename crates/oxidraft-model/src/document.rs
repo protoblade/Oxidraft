@@ -393,6 +393,19 @@ impl Document {
         true
     }
 
+    /// Moves a layout's tab before `before`'s, or to the end.
+    pub fn move_layout(&mut self, space: crate::layout::Space, before: Option<crate::layout::Space>) {
+        let mut order: Vec<crate::layout::Space> =
+            self.layouts().iter().map(|l| l.id).filter(|id| *id != space).collect();
+        let at = before.and_then(|b| order.iter().position(|id| *id == b)).unwrap_or(order.len());
+        order.insert(at, space);
+        let mut after = self.layouts.clone();
+        for l in &mut after {
+            l.tab_order = order.iter().position(|id| *id == l.id).map_or(l.tab_order, |i| i as i32 + 1);
+        }
+        self.set_layouts(after);
+    }
+
     /// A copy of a layout, with its page setup and everything on its
     /// sheet, called `name` and placed just after it. Returns its space.
     pub fn copy_layout(&mut self, space: crate::layout::Space, name: &str) -> Result<crate::layout::Space, String> {
@@ -1393,6 +1406,12 @@ mod tests {
         assert_eq!(tabs, ["Layout1", "Layout1 (2)", "Plan"]);
         assert_eq!(d.space(), one, "copying doesn't switch");
         assert_eq!(d.all_entities().filter(|e| e.space == copy).count(), 2);
+
+        // Moved before the first tab, then to the end.
+        d.move_layout(two, Some(one));
+        let tabs: Vec<&str> = d.layouts().iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(tabs, ["Plan", "Layout1", "Layout1 (2)"]);
+        d.move_layout(two, None);
 
         assert!(d.rename_layout(two, "Layout1").is_err());
         d.rename_layout(two, "Site").unwrap();
