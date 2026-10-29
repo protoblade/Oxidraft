@@ -446,6 +446,10 @@ impl Exporter {
             Geometry::Image { .. } => underlay_dxf::entity(g, &self.images).into_iter().collect(),
             // The dxf crate has no VIEWPORT: they're added with their layouts.
             Geometry::Viewport { .. } => Vec::new(),
+            // A table goes out as its lines and text.
+            Geometry::Table { .. } => {
+                g.primitives().unwrap_or_default().iter().flat_map(|p| self.entities(p, layer)).collect()
+            }
             // A placeholder the crate can write; `write` turns it into a HATCH.
             Geometry::Hatch { .. } => {
                 self.hatches.push(hatch_dxf::hatch_data(g));

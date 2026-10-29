@@ -15,6 +15,7 @@ mod properties;
 mod qselect;
 mod settings;
 mod shortcut_menu;
+mod tables;
 pub mod theme;
 mod underlay;
 pub mod update;

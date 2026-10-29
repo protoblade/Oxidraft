@@ -90,6 +90,11 @@ pub struct OxidraftApp {
     pub(crate) delete_layout_prompt: Option<oxidraft_model::Space>,
     pub(crate) page_setup: Option<crate::layouts::PageSetup>,
     pub(crate) move_or_copy: Option<crate::layouts::MoveOrCopy>,
+    /// TABLE's Insert Table dialog (with the settings it last had), and
+    /// the table editor.
+    pub(crate) insert_table: Option<crate::tables::InsertTable>,
+    pub(crate) table_settings: crate::tables::InsertTable,
+    pub(crate) table_editor: Option<crate::tables::TableEditor>,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
     pub(crate) ribbon_space: oxidraft_model::Space,
@@ -213,6 +218,9 @@ impl OxidraftApp {
             delete_layout_prompt: None,
             page_setup: None,
             move_or_copy: None,
+            insert_table: None,
+            table_settings: Default::default(),
+            table_editor: None,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
@@ -506,6 +514,7 @@ impl OxidraftApp {
             "VPMIN" => self.paper_space_command(true),
             "VPMAX" => return self.maximize_command(),
             "PAGESETUP" => self.page_setup_command(),
+            "TABLE" | "TB" => self.open_insert_table(),
             // Viewports and layouts are made on the sheets: out of the
             // viewport worked in first.
             "MVIEW" | "MV" | "LAYOUT" | "LO" => {
@@ -548,6 +557,7 @@ impl OxidraftApp {
                 }
                 UiRequest::TextWindow => self.history_expanded = true,
                 UiRequest::MaximizeViewport(id) => self.enter_viewport(id, true),
+                UiRequest::EditTable(id) => self.open_table_editor(id),
                 UiRequest::SaveXrefEdit => self.prepare_xref_edit_save(),
                 UiRequest::ColorTheme(n) => {
                     let color_theme = if n == 1 { ColorTheme::Light } else { ColorTheme::Dark };
@@ -588,6 +598,8 @@ impl OxidraftApp {
             || self.image_attach_dialog.is_some()
             || self.delete_layout_prompt.is_some()
             || self.move_or_copy.is_some()
+            || self.insert_table.is_some()
+            || self.table_editor.is_some()
             || self.from_template.is_some()
             || self.cycling.is_some();
         if !open || !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -603,6 +615,8 @@ impl OxidraftApp {
             && self.attach_dialog.take().is_none()
             && self.delete_layout_prompt.take().is_none()
             && self.move_or_copy.take().is_none()
+            && self.insert_table.take().is_none()
+            && self.table_editor.take().is_none()
             && self.from_template.take().is_none()
             && self.cycling.take().is_none()
         {
@@ -615,9 +629,15 @@ impl OxidraftApp {
     /// egui takes the keyboard from a field as soon as Esc is pressed, so
     /// the field that had it last frame still counts: that Esc is its.
     pub(crate) fn editing_field(&self, ctx: &egui::Context) -> bool {
-        ctx.memory(|m| m.focused())
-            .or(self.last_focus)
-            .is_some_and(|f| self.prev_text_fields.contains(&f) || self.text_fields.contains(&f))
+        // Any text field but the command line's, a number being typed in
+        // a dialog among them.
+        let command_line = egui::Id::unique("command_line_input");
+        let typing = ctx.memory(|m| m.focused()).is_some_and(|f| f != command_line) && ctx.text_edit_focused();
+        typing
+            || ctx
+                .memory(|m| m.focused())
+                .or(self.last_focus)
+                .is_some_and(|f| self.prev_text_fields.contains(&f) || self.text_fields.contains(&f))
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
@@ -802,6 +822,8 @@ impl eframe::App for OxidraftApp {
         self.options_dialog(&ctx);
         self.page_setup_dialog(&ctx);
         self.move_or_copy_dialog(&ctx);
+        self.insert_table_dialog(&ctx);
+        self.table_editor_dialog(&ctx);
         self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);

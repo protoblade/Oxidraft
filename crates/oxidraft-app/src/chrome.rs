@@ -132,7 +132,25 @@ const ANNOTATION_LARGE: &[Tool] = &[
 const ANNOTATION_SMALL: &[Tool] = &[
     tool(Icon::Dimension, "Aligned", Some("DIMALIGNED"), "Creates a dimension aligned to two points (DAL)"),
     tool(Icon::Leader, "Leader", Some("MLEADER"), "Creates a leader with text (MLD)"),
-    tool(Icon::Table, "Table", None, "Table"),
+    tool(Icon::Table, "Table", Some("TABLE"), "Inserts a table of rows and columns (TB)"),
+];
+/// The Annotate tab's panels.
+const ANNOTATE_TEXT: &[Tool] = &[
+    tool(Icon::Text, "Multiline\nText", Some("MTEXT"), "Creates multiline text (T, MT)"),
+    tool(Icon::SingleLineText, "Single\nLine", Some("TEXT"), "Creates single-line text (DT)"),
+];
+const ANNOTATE_DIMENSIONS: &[Tool] = &[
+    tool(Icon::Dimension, "Aligned", Some("DIMALIGNED"), "Creates a dimension aligned to two points (DAL)"),
+    tool(Icon::DimAngular, "Angular", Some("DIMANGULAR"), "Dimensions the angle between two lines, or of an arc (DAN)"),
+    tool(Icon::DimRadius, "Radius", Some("DIMRADIUS"), "Dimensions a circle's or arc's radius (DRA)"),
+    tool(Icon::DimDiameter, "Diameter", Some("DIMDIAMETER"), "Dimensions a circle's or arc's diameter (DDI)"),
+    tool(
+        Icon::DimContinue,
+        "Continue",
+        Some("DIMCONTINUE"),
+        "Continues a dimension from the last one's second line (DCO)",
+    ),
+    tool(Icon::DimBaseline, "Baseline", Some("DIMBASELINE"), "Dimensions from the last one's first line (DBA)"),
 ];
 const UTILITIES_LARGE: &[Tool] = &[tool(
     Icon::Measure,
@@ -253,6 +271,8 @@ impl OxidraftApp {
                     self.home_tab(ui);
                 } else if self.ribbon_tab == LAYOUT_TAB {
                     self.layout_ribbon(ui);
+                } else if RIBBON_TABS[self.ribbon_tab] == "Annotate" {
+                    self.annotate_tab(ui);
                 } else if RIBBON_TABS[self.ribbon_tab] == "Insert" {
                     self.insert_tab(ui);
                 } else if RIBBON_TABS[self.ribbon_tab] == "Output" {
@@ -329,6 +349,48 @@ impl OxidraftApp {
                     ),
                 );
             });
+        });
+    }
+
+    /// The Annotate tab: text, dimensions, leaders, tables and markup.
+    fn annotate_tab(&mut self, ui: &mut Ui) {
+        ribbon_panel(ui, "Text", |ui| {
+            for t in ANNOTATE_TEXT {
+                self.large_tool(ui, t);
+            }
+        });
+        ribbon_panel(ui, "Dimensions", |ui| {
+            self.large_tool(
+                ui,
+                &tool(Icon::Dimension, "Linear", Some("DIMLINEAR"), "Creates a horizontal or vertical dimension (DLI)"),
+            );
+            for column in ANNOTATE_DIMENSIONS.chunks(3) {
+                ui.vertical(|ui| {
+                    for t in column {
+                        self.small_tool(ui, t);
+                    }
+                });
+            }
+        });
+        ribbon_panel(ui, "Leaders", |ui| {
+            self.large_tool(
+                ui,
+                &tool(Icon::Leader, "Multileader", Some("MLEADER"), "Creates a leader with text (MLD)"),
+            );
+        });
+        ribbon_panel(ui, "Tables", |ui| {
+            self.large_tool(ui, &tool(Icon::Table, "Table", Some("TABLE"), "Inserts a table of rows and columns (TB)"));
+        });
+        ribbon_panel(ui, "Markup", |ui| {
+            self.large_tool(
+                ui,
+                &tool(
+                    Icon::RevCloud,
+                    "Revision\nCloud",
+                    Some("REVCLOUD"),
+                    "Draws a cloud of arcs around an area or object",
+                ),
+            );
         });
     }
 
@@ -957,6 +1019,7 @@ fn ribbon_tab(ui: &mut Ui, name: &str, selected: bool) -> Response {
     }
     let color = if selected { theme::text() } else { theme::text_dim() };
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, name, font, color);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, name));
     response
 }
 

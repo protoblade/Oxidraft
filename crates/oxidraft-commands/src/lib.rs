@@ -52,6 +52,7 @@ mod scale;
 mod select;
 mod spline;
 mod stretch;
+mod table;
 mod trim_extend;
 mod underlay;
 mod xclip;
@@ -156,6 +157,8 @@ pub enum UiRequest {
     ColorTheme(u8),
     /// VPMAX: model space through this viewport, filling the drawing area.
     MaximizeViewport(EntityId),
+    /// A table to fill in or edit (after TABLE places it, or TABLEDIT).
+    EditTable(EntityId),
 }
 
 /// Result of feeding one input to a command.

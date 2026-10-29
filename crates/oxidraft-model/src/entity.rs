@@ -216,6 +216,18 @@ pub enum Geometry {
         locked: bool,
         on: bool,
     },
+    /// A table (TABLE): rows of cells hanging from its upper-left corner
+    /// `position`, turned `rotation` degrees. `widths` are its columns',
+    /// `heights` its rows', `cells` each row's texts (one per column) at
+    /// `text_height`. The first row is its title, across every column.
+    Table {
+        position: Point,
+        rotation: f64,
+        widths: Vec<f64>,
+        heights: Vec<f64>,
+        cells: Vec<Vec<String>>,
+        text_height: f64,
+    },
 }
 
 /// An attribute of a block reference: a tagged text value (parcel number,
@@ -355,6 +367,7 @@ impl Geometry {
             Geometry::Ray { .. } => "Ray",
             Geometry::Image { .. } => "Raster Image",
             Geometry::Viewport { .. } => "Viewport",
+            Geometry::Table { .. } => "Table",
         }
     }
 
@@ -372,6 +385,7 @@ impl Geometry {
                 Some(annotation::angular_primitives(*vertex, *p1, *p2, *arc, text.as_deref(), *scale))
             }
             Geometry::Leader { points, content, scale } => Some(annotation::leader_primitives(points, content, *scale)),
+            Geometry::Table { .. } => Some(crate::table::primitives(self)),
             _ => None,
         }
     }
@@ -461,6 +475,10 @@ impl Geometry {
             | Geometry::Leader { .. }
             | Geometry::Hatch { .. } => Vec::new(),
             // Its border, which snaps and picks like a rectangle.
+            Geometry::Table { position, rotation, widths, heights, .. } => {
+                let grid = crate::table::Grid { position: *position, rotation: *rotation, widths, heights };
+                grid.lines().into_iter().map(Seg::Line).collect()
+            }
             Geometry::Viewport { center, width, height, .. } => {
                 let c = viewport_corners(*center, *width, *height);
                 (0..4).map(|i| Seg::Line(Segment::new(c[i], c[(i + 1) % 4]))).collect()
@@ -722,6 +740,21 @@ impl Geometry {
                 v: f(*origin + *v) - f(*origin),
                 clip: clip.iter().map(|p| f(*p)).collect(),
             },
+            // It turns and scales, but stays upright text in rows: mirrored,
+            // what was its upper-right corner becomes its upper-left.
+            Geometry::Table { position, rotation, widths, heights, cells, text_height } => {
+                let grid = crate::table::Grid { position: *position, rotation: *rotation, widths, heights };
+                let [upper_left, upper_right, ..] = grid.corners();
+                let (from, to) = if flips { (f(upper_right), f(upper_left)) } else { (f(upper_left), f(upper_right)) };
+                Geometry::Table {
+                    position: from,
+                    rotation: from.angle_to(to),
+                    widths: widths.iter().map(|w| w * length_factor).collect(),
+                    heights: heights.iter().map(|h| h * length_factor).collect(),
+                    cells: cells.clone(),
+                    text_height: text_height * length_factor,
+                }
+            }
             // Its frame moves and scales; the view through it stays.
             Geometry::Viewport { center, width, height, view_center, view_height, twist, frozen, locked, on } => {
                 Geometry::Viewport {
@@ -856,6 +889,7 @@ impl Geometry {
             }
             Geometry::Xline { base, .. } | Geometry::Ray { base, .. } => self.translated(shift(*base) - *base),
             Geometry::Image { origin, .. } => self.translated(shift(*origin) - *origin),
+            Geometry::Table { position, .. } => self.translated(shift(*position) - *position),
             Geometry::Viewport { center, .. } => self.translated(shift(*center) - *center),
             Geometry::Insert { placement, .. } => self.translated(shift(placement.position) - placement.position),
             Geometry::Text { position, .. } => self.translated(shift(*position) - *position),
@@ -936,6 +970,7 @@ impl Geometry {
             Geometry::Spline(s) => s.grip_points(),
             Geometry::Image { origin, u, v, .. } => crate::underlay::image_corners(*origin, *u, *v).to_vec(),
             Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => vec![*base, *base + *direction],
+            Geometry::Table { position, .. } => vec![*position],
             Geometry::Viewport { center, width, height, .. } => {
                 let mut g = vec![*center];
                 g.extend(viewport_corners(*center, *width, *height));
@@ -1027,6 +1062,7 @@ impl Geometry {
                 Geometry::Leader { points, content: content.clone(), scale: *scale }
             }
             (Geometry::Hatch { .. }, _) => self.translated(to - self.bounds().center()),
+            (Geometry::Table { position, .. }, _) => self.translated(to - *position),
             (Geometry::Viewport { center, .. }, 0) => self.translated(to - *center),
             // A corner: the opposite one stays, and so does the scale.
             (Geometry::Viewport { center, width, height, .. }, i) => {

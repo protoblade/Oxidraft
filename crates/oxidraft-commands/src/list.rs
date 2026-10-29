@@ -133,6 +133,16 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
             out.push(at("View center:", *view_center));
             out.push(value("Scale:", format!("1:{}", n(view_height / height.max(1e-12)).trim())));
         }
+        Geometry::Table { position, widths, heights, cells, .. } => {
+            out.push(at("Insertion point:", *position));
+            out.push(value("Columns:", widths.len().to_string()));
+            out.push(value("Rows:", heights.len().to_string()));
+            out.push(value("Width:", n(widths.iter().sum()).trim()));
+            out.push(value("Height:", n(heights.iter().sum()).trim()));
+            if let Some(title) = cells.first().and_then(|r| r.first()).filter(|t| !t.is_empty()) {
+                out.push(value("Title:", title));
+            }
+        }
         Geometry::Image { image, origin, u, v, clip } => {
             out.push(value("Image name:", format!("\"{image}\"")));
             out.push(at("Insertion point:", *origin));

@@ -1477,3 +1477,51 @@ fn layouts_come_in_from_a_template_with_what_is_on_them() {
     assert_eq!(doc.space(), oxidraft_model::MODEL, "still in model space");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn table_is_inserted_then_filled_in_and_edited_again() {
+    let mut h = app_with_line_at(1.0 / 60.0);
+    type_all(&mut h, &["table"]);
+    h.run_steps(2);
+    assert!(h.query_by_label("Insert Table").is_some());
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let at = screen(&h, 20.0, 50.0);
+    click(&mut h, at);
+    h.run_steps(3);
+    // It opens to be filled in.
+    assert!(h.query_by_label("Edit Table").is_some());
+    let title = h.get_by_role_and_label(Role::TextInput, "Title");
+    title.focus();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_role_and_label(Role::TextInput, "Title").type_text("Doors");
+    h.get_by_role_and_label(Role::TextInput, "A2").focus();
+    h.get_by_role_and_label(Role::TextInput, "A2").type_text("Mark");
+    h.run_steps(1);
+    let add_row = h.get_by_label("Add Row").rect().center();
+    click(&mut h, add_row);
+    h.run_steps(1);
+    assert!(h.query_by_label("Row 2").is_some());
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let table = {
+        let doc = h.state_mut().document_mut();
+        let e = doc.entities().find(|e| matches!(e.geometry, Geometry::Table { .. })).expect("a table");
+        let Geometry::Table { position, cells, widths, heights, .. } = &e.geometry else { unreachable!() };
+        assert_eq!((widths.len(), heights.len()), (5, 4), "five columns; title, header, two data rows");
+        assert_eq!((cells[0][0].as_str(), cells[1][0].as_str()), ("Doors", "Mark"));
+        assert!(position.distance(Point::new(20.0, 50.0)) < 1.0);
+        e.id
+    };
+    // Double-clicking it opens it again.
+    h.run_steps(30);
+    let inside = screen(&h, 21.0, 45.0);
+    click(&mut h, inside);
+    click(&mut h, inside);
+    h.run_steps(2);
+    assert!(h.query_by_label("Edit Table").is_some());
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.query_by_label("Edit Table").is_none());
+    assert!(h.state_mut().document_mut().entity(table).is_some());
+}

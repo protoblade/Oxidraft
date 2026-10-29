@@ -14,6 +14,7 @@ pub mod linetype;
 mod palette;
 mod refedit;
 pub mod snap;
+pub mod table;
 mod underlay;
 mod xref;
 

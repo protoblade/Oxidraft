@@ -743,6 +743,30 @@ fn main() {
     hover(&mut h, Point::new(64.0, 27.0));
     save(&mut h, &dir, "40-selection-cycling");
 
+    // The Annotate tab, and a table filled in.
+    let mut h = harness();
+    let mut table = oxidraft_model::table::new_table(Point::new(110.0, 60.0), 3, 3, 18.0, 6.0, 2.5);
+    if let Geometry::Table { cells, .. } = &mut table {
+        let rows = [
+            ["Door schedule", "", ""],
+            ["Mark", "Width", "Height"],
+            ["D1", "900", "2100"],
+            ["D2", "800", "2100"],
+            ["D3", "1200", "2400"],
+        ];
+        for (r, row) in rows.iter().enumerate() {
+            for (c, text) in row.iter().enumerate() {
+                cells[r][c] = text.to_string();
+            }
+        }
+    }
+    h.state_mut().document_mut().add(table);
+    h.state_mut().type_command("ze");
+    h.run_steps(3);
+    h.get_by_role_and_label(eframe::egui::accesskit::Role::Tab, "Annotate").click();
+    h.run_steps(3);
+    save(&mut h, &dir, "41-annotate-table");
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");

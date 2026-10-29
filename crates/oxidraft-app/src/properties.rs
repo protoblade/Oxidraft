@@ -433,6 +433,18 @@ impl OxidraftApp {
                     ("View center Y", Value::Text(fmt(view_center.y))),
                 ]
             }
+            Geometry::Table { position, rotation, widths, heights, text_height, .. } => vec![
+                ("Position X", Value::Number(position.x)),
+                ("Position Y", Value::Number(position.y)),
+                ("Rotation", Value::Angle(*rotation)),
+                ("Columns", Value::Text(widths.len().to_string())),
+                ("Rows", Value::Text(heights.len().to_string())),
+                ("Column width", Value::Number(widths.first().copied().unwrap_or(0.0))),
+                ("Row height", Value::Number(heights.get(1).or(heights.first()).copied().unwrap_or(0.0))),
+                ("Text height", Value::Number(*text_height)),
+                ("Table width", Value::Text(fmt(widths.iter().sum()))),
+                ("Table height", Value::Text(fmt(heights.iter().sum()))),
+            ],
             Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => vec![
                 ("Basepoint X", Value::Number(base.x)),
                 ("Basepoint Y", Value::Number(base.y)),
@@ -659,6 +671,13 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
         (Geometry::Viewport { height, view_height, locked: false, .. }, "Custom scale") if v > 0.0 => {
             *view_height = *height / v;
         }
+        (Geometry::Table { position, .. }, "Position X") => position.x = v,
+        (Geometry::Table { position, .. }, "Position Y") => position.y = v,
+        (Geometry::Table { rotation, .. }, "Rotation") => *rotation = v.rem_euclid(360.0),
+        // Every column and row, as the table style's sizes would.
+        (Geometry::Table { widths, .. }, "Column width") if v > 0.0 => widths.iter_mut().for_each(|w| *w = v),
+        (Geometry::Table { heights, .. }, "Row height") if v > 0.0 => heights.iter_mut().for_each(|h| *h = v),
+        (Geometry::Table { text_height, .. }, "Text height") if v > 0.0 => *text_height = v,
         (Geometry::Xline { base, .. } | Geometry::Ray { base, .. }, "Basepoint X") => base.x = v,
         (Geometry::Xline { base, .. } | Geometry::Ray { base, .. }, "Basepoint Y") => base.y = v,
         (Geometry::Xline { direction, .. } | Geometry::Ray { direction, .. }, "Angle") => {

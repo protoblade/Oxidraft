@@ -64,6 +64,7 @@ use crate::{
     select::SelectSimilar,
     spline::SplineCmd,
     stretch::Stretch,
+    table::{TableEdit, TableInsert},
     trim_extend::TrimExtend,
     underlay::AttachImage,
     underlay::ImageClip,
@@ -342,6 +343,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["DBA"],
         description: "Add linear dimensions from the same baseline",
         make: Some(|| Box::new(DimChain::baseline())),
+    },
+    CommandInfo {
+        name: "TABLE",
+        aliases: &["TB"],
+        description: "Insert a table of rows and columns, then fill it in",
+        make: None,
+    },
+    CommandInfo {
+        name: "TABLEDIT",
+        aliases: &[],
+        description: "Edit the cells of a table",
+        make: Some(|| Box::new(TableEdit)),
     },
     CommandInfo {
         name: "MLEADER",
@@ -856,6 +869,18 @@ impl Engine {
             }
             None => self.launch(info, Box::new(cmd), doc, Point::ORIGIN, 0.0),
         }
+    }
+
+    /// TABLE once the Insert Table dialog has set the table up: it's
+    /// placed at the point picked.
+    pub fn insert_table(&mut self, table: Geometry, doc: &mut Document) {
+        if self.active.is_some() {
+            self.cancel(doc);
+        }
+        let info = find("TABLE").expect("TABLE is a command");
+        self.log(format!("Command: {}", info.name));
+        self.started.push(info.name);
+        self.launch(info, Box::new(TableInsert::new(table)), doc, Point::ORIGIN, 0.0);
     }
 
     /// DRAWORDER with its option chosen already (the ribbon's and the

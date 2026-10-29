@@ -576,6 +576,8 @@ impl OxidraftApp {
                     let block = block.clone();
                     self.open_block_edit_dialog(Some(block));
                 }
+                // A table opens to have its cells edited.
+                Some(Geometry::Table { .. }) => self.open_table_editor(id),
                 _ => self.properties_open = true,
             }
         }

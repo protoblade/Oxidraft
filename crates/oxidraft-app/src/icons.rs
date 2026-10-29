@@ -85,6 +85,12 @@ pub enum Icon {
     ViewportLock,
     ViewportUnlock,
     Maximize,
+    SingleLineText,
+    DimAngular,
+    DimRadius,
+    DimDiameter,
+    DimContinue,
+    DimBaseline,
 }
 
 /// Accent colors used inside icons, as in AutoCAD's icon set.
@@ -336,6 +342,42 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
             pen.arrow((0.5, 0.6), (0.14, 0.6), blue);
             pen.arrow((0.5, 0.6), (0.86, 0.6), blue);
             pen.line(&[(0.38, 0.38), (0.62, 0.38)], yellow);
+        }
+        // A smaller A on its baseline, its start marked.
+        Icon::SingleLineText => {
+            pen.line(&[(0.25, 0.8), (0.5, 0.25), (0.75, 0.8)], c);
+            pen.line(&[(0.35, 0.6), (0.65, 0.6)], c);
+            pen.line(&[(0.1, 0.8), (0.9, 0.8)], blue);
+            pen.grip((0.1, 0.8), yellow);
+        }
+        // Two lines from a vertex, the angle's arc between them.
+        Icon::DimAngular => {
+            pen.line(&[(0.12, 0.88), (0.9, 0.88)], c);
+            pen.line(&[(0.12, 0.88), (0.7, 0.2)], c);
+            pen.arc((0.12, 0.88), 0.55, -0.86, 0.0, blue, true);
+        }
+        Icon::DimRadius | Icon::DimDiameter => {
+            pen.circle((0.5, 0.5), 0.36, c);
+            if icon == Icon::DimRadius {
+                pen.arrow((0.5, 0.5), (0.75, 0.25), blue);
+                pen.dot((0.5, 0.5), 0.04, yellow);
+            } else {
+                pen.arrow((0.5, 0.5), (0.75, 0.25), blue);
+                pen.arrow((0.5, 0.5), (0.25, 0.75), blue);
+            }
+        }
+        // Dimensions end to end, or all from one baseline.
+        Icon::DimContinue | Icon::DimBaseline => {
+            for x in [0.1, 0.5, 0.9] {
+                pen.line(&[(x, 0.9), (x, 0.3)], c);
+            }
+            if icon == Icon::DimContinue {
+                pen.line(&[(0.1, 0.45), (0.5, 0.45)], blue);
+                pen.line(&[(0.5, 0.45), (0.9, 0.45)], yellow);
+            } else {
+                pen.line(&[(0.1, 0.55), (0.5, 0.55)], blue);
+                pen.line(&[(0.1, 0.35), (0.9, 0.35)], yellow);
+            }
         }
         Icon::Leader => {
             pen.arrow((0.55, 0.45), (0.12, 0.88), c);
