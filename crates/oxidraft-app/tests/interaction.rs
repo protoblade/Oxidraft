@@ -28,6 +28,14 @@ fn app_with_line_at(step_dt: f32) -> Harness<'static, OxidraftApp> {
     h
 }
 
+/// Turns a layer on, as the Layer Properties Manager does.
+fn turn_on(h: &mut Harness<'_, OxidraftApp>, layer: &str) {
+    let doc = h.state_mut().document_mut();
+    let l = doc.layer(layer).cloned().expect("the layer");
+    doc.update_layer(oxidraft_model::Layer { on: true, ..l });
+    h.run_steps(2);
+}
+
 fn screen(h: &Harness<'_, OxidraftApp>, x: f64, y: f64) -> Pos2 {
     h.state().screen_pos(Point::new(x, y))
 }
@@ -549,6 +557,7 @@ fn many_georeferenced_tiles_attach_unloaded_and_load_in_view() {
         let doc = h.state_mut().document_mut();
         assert_eq!(doc.image_defs().count(), 2, "the scan has no georeferencing");
         assert!(doc.image_defs().all(|d| d.status == XrefStatus::Unloaded));
+        assert!(doc.layer("tile_1").is_some_and(|l| !l.on) && doc.layer("tile_2").is_some_and(|l| !l.on));
         // Each on a layer of its own name, where its world file puts it.
         let tile =
             doc.entities().find(|e| matches!(&e.geometry, Geometry::Image { image, .. } if image == "tile_2")).unwrap();
@@ -561,8 +570,14 @@ fn many_georeferenced_tiles_attach_unloaded_and_load_in_view() {
         );
     }
     assert!(!h.state().pictures_loading(), "nothing read yet");
-    // The view went to the tiles; load what it shows.
-    h.state_mut().load_images_in_view();
+    // Turning a layer on loads its image; the other stays as it was.
+    turn_on(&mut h, "tile_1");
+    {
+        let doc = h.state_mut().document_mut();
+        assert_eq!(doc.image_def("tile_1").map(|d| d.status), Some(XrefStatus::Loaded));
+        assert_eq!(doc.image_def("tile_2").map(|d| d.status), Some(XrefStatus::Unloaded));
+    }
+    turn_on(&mut h, "tile_2");
     for _ in 0..100 {
         h.run_steps(1);
         if !h.state().pictures_loading() {
@@ -686,7 +701,7 @@ fn zooming_into_a_large_image_reads_the_part_on_screen_sharper() {
     let mut h = app_with_line();
     h.state_mut().attach_images_unloaded(&[tif]);
     h.run_steps(2);
-    h.state_mut().load_image("ortho");
+    turn_on(&mut h, "ortho");
     let settle = |h: &mut Harness<'_, OxidraftApp>| {
         for _ in 0..300 {
             h.run_steps(1);
@@ -747,4 +762,38 @@ fn light_theme_and_white_drawing_area() {
     assert!(h.query_by_label("Color theme:").is_some() && h.query_by_label("Drawing background:").is_some());
     h.state_mut().apply_settings(&ctx, Settings::default());
     assert_eq!(theme::color_theme(), ColorTheme::Dark);
+}
+
+#[test]
+fn turning_on_a_missing_images_layer_lets_you_find_its_file() {
+    use oxidraft_model::XrefStatus;
+    let dir = std::env::temp_dir().join(format!("oxidraft-moved-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("moved")).unwrap();
+    for (name, x) in [("a", 0.0), ("b", 20.0), ("c", 40.0)] {
+        let png = dir.join(format!("{name}.png"));
+        image::RgbaImage::from_pixel(40, 20, image::Rgba([90, 160, 60, 255])).save(&png).unwrap();
+        std::fs::write(png.with_extension("pgw"), format!("0.5\n0\n0\n-0.5\n{}\n9.75\n", x + 0.25)).unwrap();
+    }
+    let files: Vec<_> = ["a.png", "b.png", "c.png"].iter().map(|f| dir.join(f)).collect();
+    let mut h = app_with_line();
+    h.state_mut().attach_images_unloaded(&files);
+    h.run_steps(2);
+    // The tiles move to another folder.
+    for f in ["a", "b", "c"] {
+        std::fs::rename(dir.join(format!("{f}.png")), dir.join("moved").join(format!("{f}.png"))).unwrap();
+    }
+    turn_on(&mut h, "b");
+    assert_eq!(h.state_mut().document_mut().image_def("b").map(|d| d.status), Some(XrefStatus::NotFound));
+    // The palette opens on it, with Browse... to pick where it is now.
+    assert!(h.query_by_label("Browse...").is_some(), "the palette offers Browse...");
+    h.state_mut().set_image_file("b", &dir.join("moved").join("b.png"));
+    h.run_steps(2);
+    let doc = h.state_mut().document_mut();
+    // B loads; A and C, also missing, are found in the same folder.
+    assert_eq!(doc.image_def("b").map(|d| d.status), Some(XrefStatus::Loaded));
+    for n in ["a", "c"] {
+        assert!(doc.image_def(n).is_some_and(|d| d.path.contains("moved")), "{n}");
+    }
+    assert!(h.state_mut().engine_mut().history().iter().any(|l| l.starts_with("Found 2 more missing image(s)")));
+    std::fs::remove_dir_all(&dir).ok();
 }

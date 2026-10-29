@@ -291,6 +291,30 @@ impl OxidraftApp {
         }
     }
 
+    /// The palette's Browse: picks where an attached drawing's file is now,
+    /// saves that path and reads it from there.
+    pub(crate) fn browse_xref(&mut self, name: &str) {
+        let Some(x) = self.doc.xref(name).cloned() else { return };
+        let picked = rfd::FileDialog::new()
+            .set_title(format!("Find \"{}\"", x.name))
+            .add_filter("Drawings", &["dwg", "dxf"])
+            .pick_file();
+        if let Some(file) = picked {
+            self.set_xref_file(name, &file);
+        }
+    }
+
+    /// Points xref `name` at `file` and reads it from there.
+    pub fn set_xref_file(&mut self, name: &str, file: &Path) {
+        let Some(x) = self.doc.xref(name).cloned() else { return };
+        let kind = if self.path.is_some() { PathType::Relative } else { PathType::Full };
+        self.engine.cancel(&mut self.doc);
+        self.doc.begin("XREF");
+        self.doc.set_xref(Xref { path: self.saved_path(file, kind), ..x });
+        self.read_into(name);
+        self.doc.commit();
+    }
+
     /// The palette's Reload: reads the file again.
     pub fn reload_xref(&mut self, name: &str) {
         self.engine.cancel(&mut self.doc);
@@ -521,6 +545,9 @@ impl OxidraftApp {
             Some(("attach pdf", _)) => self.pdf_attach(),
             Some(("load in view", _)) => self.load_images_in_view(),
             Some(("open", n)) => self.open_xref(&n),
+            Some(("browse image", n)) => self.browse_image(&n),
+            Some(("find images", _)) => self.browse_images_folder(&self.image_selected.clone()),
+            Some(("browse xref", n)) => self.browse_xref(&n),
             Some(("load images", _)) => {
                 for n in self.image_selected.clone() {
                     self.load_image(&n);
@@ -684,6 +711,7 @@ impl OxidraftApp {
                 ("Detach", "detach", "Remove it and its references"),
                 ("Bind", "bind", "Make it part of this drawing, its layers named NAME$0$layer"),
                 ("Bind (Insert)", "insert", "Make it part of this drawing, merging its layers into this drawing's"),
+                ("Browse...", "browse xref", "Pick where its file is now, and read it from there"),
             ] {
                 if ui.button(label).on_hover_text(tip).clicked() {
                     *action = Some((what, x.name.clone()));
@@ -720,6 +748,10 @@ impl OxidraftApp {
         } else {
             ui.label(format!("{} images selected", self.image_selected.len()));
         }
+        let one = match self.image_selected.as_slice() {
+            [one] => Some(one.clone()),
+            _ => None,
+        };
         ui.horizontal(|ui| {
             for (label, what, tip) in [
                 ("Load", "load images", "Read the files and show the pictures"),
@@ -728,6 +760,21 @@ impl OxidraftApp {
             ] {
                 if ui.button(label).on_hover_text(tip).clicked() {
                     *action = Some((what, String::new()));
+                }
+            }
+            ui.separator();
+            let tip = "Pick where its file is now; other missing images in that folder are found too";
+            match one {
+                Some(name) => {
+                    if ui.button("Browse...").on_hover_text(tip).clicked() {
+                        *action = Some(("browse image", name));
+                    }
+                }
+                None => {
+                    let tip = "Pick the folder their files are in now";
+                    if ui.button("Find in Folder...").on_hover_text(tip).clicked() {
+                        *action = Some(("find images", String::new()));
+                    }
                 }
             }
         });

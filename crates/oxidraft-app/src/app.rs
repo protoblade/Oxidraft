@@ -61,6 +61,10 @@ pub struct OxidraftApp {
     pub(crate) details: std::collections::HashMap<String, crate::underlay::Detail>,
     pub(crate) detail_wants: std::cell::RefCell<Vec<crate::underlay::DetailWant>>,
     pub(crate) detail_generation: u64,
+    /// The layers with pictures on them that showed when last looked at,
+    /// and the drawing's revision then: a picture whose layer is turned on
+    /// loads.
+    pub(crate) shown_image_layers: Option<(u64, std::collections::HashSet<String>)>,
     pub(crate) loader: crate::underlay::Loader,
     pub(crate) raster_revision: u64,
     pub(crate) image_attach_dialog: Option<crate::underlay::ImageAttachDialog>,
@@ -151,6 +155,7 @@ impl OxidraftApp {
             details: Default::default(),
             detail_wants: Default::default(),
             detail_generation: 0,
+            shown_image_layers: None,
             loader: Default::default(),
             raster_revision: 0,
             image_attach_dialog: None,
@@ -197,6 +202,7 @@ impl OxidraftApp {
         self.doc = doc;
         self.saved_revision = self.doc.revision();
         self.zoom_extents_pending = true;
+        self.shown_image_layers = None;
         self.view_history.clear();
     }
 
@@ -256,6 +262,7 @@ impl OxidraftApp {
         self.engine.cancel(&mut self.doc);
         self.engine.cancel(&mut self.doc);
         self.doc = Document::new();
+        self.shown_image_layers = None;
         self.saved_revision = 0;
         self.path = None;
         self.dwg_version = None;
@@ -567,6 +574,7 @@ impl eframe::App for OxidraftApp {
         self.handle_shortcuts(&ctx);
         self.handle_clipboard_keys(&ctx);
         self.receive_pictures(&ctx);
+        self.load_images_turned_on();
         self.update_title(&ctx);
 
         self.top_bar(ui);

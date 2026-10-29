@@ -797,6 +797,18 @@ impl Document {
         }
     }
 
+    /// Marks an image or PDF underlay loaded, unloaded or not found. As in
+    /// AutoCAD, loading isn't a step to undo, but the drawing has changed:
+    /// its file keeps which images are loaded.
+    pub fn set_image_status(&mut self, name: &str, status: crate::XrefStatus) {
+        if let Some(def) = self.images.get_mut(&name.to_ascii_uppercase())
+            && def.status != status
+        {
+            def.status = status;
+            self.revision += 1;
+        }
+    }
+
     pub(crate) fn remove_image_def(&mut self, name: &str) -> Option<ImageDef> {
         let key = name.to_ascii_uppercase();
         let before = self.images.remove(&key)?;

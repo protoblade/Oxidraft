@@ -401,8 +401,8 @@ fn main() {
     h.run_steps(3);
     save(&mut h, &dir, "23-external-references");
 
-    // Four georeferenced tiles attached at once: two loaded, two still
-    // frames, with the palette listing them.
+    // Four georeferenced tiles attached at once, their layers off: two
+    // turned on (and so loaded), with the palette listing them all.
     let mut tiles = Vec::new();
     for (i, (x, y)) in [(-20.0, -20.0), (60.0, -20.0), (-20.0, 40.0), (60.0, 40.0)].into_iter().enumerate() {
         let png = dir.join(format!("ortho_{}.png", i + 1));
@@ -421,8 +421,13 @@ fn main() {
     let mut h = harness();
     h.state_mut().attach_images_unloaded(&tiles);
     h.run_steps(2);
-    h.state_mut().load_image("ortho_1");
-    h.state_mut().load_image("ortho_4");
+    // Their layers start off; turning two on loads those.
+    for layer in ["ortho_1", "ortho_4"] {
+        let doc = h.state_mut().document_mut();
+        let l = doc.layer(layer).cloned().expect("its layer");
+        doc.update_layer(Layer { on: true, ..l });
+        h.run_steps(1);
+    }
     for _ in 0..100 {
         h.run_steps(1);
         if !h.state().pictures_loading() {
@@ -483,7 +488,9 @@ fn main() {
     let mut h = harness();
     h.state_mut().attach_images_unloaded(&[ortho]);
     h.run_steps(2);
-    h.state_mut().load_image("ortho-large");
+    let l = h.state_mut().document_mut().layer("ortho-large").cloned().expect("its layer");
+    h.state_mut().document_mut().update_layer(Layer { on: true, ..l });
+    h.run_steps(1);
     for input in ["z", "20,20", "35,30"] {
         h.state_mut().type_command(input);
         h.run_steps(1);

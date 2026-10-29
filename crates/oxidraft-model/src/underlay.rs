@@ -56,15 +56,6 @@ impl Document {
         self.remove_image_def(name);
     }
 
-    pub fn set_image_status(&mut self, name: &str, status: XrefStatus) {
-        if let Some(mut def) = self.image_def(name).cloned()
-            && def.status != status
-        {
-            def.status = status;
-            self.set_image_def(def);
-        }
-    }
-
     /// A PDF page's size has been read: references read from a file, whose
     /// size was only known as a scale (one unit of scale an inch), take
     /// their real size.

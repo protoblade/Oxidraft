@@ -13,7 +13,9 @@ use std::time::Duration;
 use eframe::egui::{self, Align, Align2, Color32, FontId, Layout, Painter, Pos2, Rect, Shape, Stroke};
 use oxidraft_commands::ViewRequest;
 use oxidraft_geom::{Aabb, Point};
-use oxidraft_model::{Color, Geometry, ImageDef, XrefStatus, clip_to_convex, hatch, image_corners, sanitize_name};
+use oxidraft_model::{
+    Color, Geometry, ImageDef, Layer, XrefStatus, clip_to_convex, hatch, image_corners, sanitize_name,
+};
 use oxidraft_plot::Picture;
 use oxidraft_raster::{Info, Region};
 
@@ -119,6 +121,11 @@ pub(crate) struct Detail {
     pending: Option<(Region, f64, u64)>,
     /// Reading parts of this picture failed: its overview has to do.
     failed: bool,
+}
+
+/// The folder a file is in, for messages.
+fn folder_label(file: &Path) -> String {
+    file.parent().map_or(String::new(), |p| p.display().to_string())
 }
 
 /// A picture in one place: parts read for it don't fit another.
@@ -394,27 +401,143 @@ impl OxidraftApp {
         }
     }
 
-    /// The palette's Load: reads the file and shows the picture.
-    pub fn load_image(&mut self, name: &str) {
-        let Some(def) = self.doc.image_def(name).cloned() else { return };
+    /// The palette's Load: reads the file and shows the picture. Returns
+    /// false if the file isn't found (the image is then marked Not Found).
+    pub fn load_image(&mut self, name: &str) -> bool {
+        let Some(def) = self.doc.image_def(name).cloned() else { return false };
         if resolve(self.path.as_deref(), &def.path).is_none() {
+            self.doc.set_image_status(name, XrefStatus::NotFound);
             self.engine.log(format!("Image \"{}\" not found: {}", def.name, def.path));
-            return;
+            return false;
         }
         self.rasters.remove(&key(name));
-        self.doc.begin("IMAGE");
         self.doc.set_image_status(name, XrefStatus::Loaded);
-        self.doc.commit();
         self.request_picture(&def);
+        true
     }
 
     /// The palette's Unload: keeps the image attached, shows its frame only.
     pub fn unload_image(&mut self, name: &str) {
         self.rasters.remove(&key(name));
         self.raster_revision += 1;
-        self.doc.begin("IMAGE");
         self.doc.set_image_status(name, XrefStatus::Unloaded);
+    }
+
+    /// Loads the pictures whose layer has just been turned on or thawed
+    /// (as many GeoTIFFs attached at once wait, their layers off). Those
+    /// whose file isn't where it was are selected in the External
+    /// References palette, to browse for.
+    pub(crate) fn load_images_turned_on(&mut self) {
+        let revision = self.doc.revision();
+        if self.shown_image_layers.as_ref().is_some_and(|(r, _)| *r == revision) {
+            return;
+        }
+        let shown: HashSet<String> = self
+            .doc
+            .entities()
+            .filter(|e| matches!(e.geometry, Geometry::Image { .. }) && self.doc.is_shown(&e.layer))
+            .map(|e| e.layer.to_ascii_uppercase())
+            .collect();
+        // Just opened: what shows now is how it was saved.
+        let Some((_, before)) = self.shown_image_layers.replace((revision, shown.clone())) else { return };
+        let mut names: Vec<String> = Vec::new();
+        for e in self.doc.entities() {
+            if let Geometry::Image { image, .. } = &e.geometry
+                && shown.contains(&e.layer.to_ascii_uppercase())
+                && !before.contains(&e.layer.to_ascii_uppercase())
+                && self.doc.image_def(image).is_some_and(|d| d.status != XrefStatus::Loaded)
+                && !names.iter().any(|n| n.eq_ignore_ascii_case(image))
+            {
+                names.push(image.clone());
+            }
+        }
+        let missing: Vec<String> = names.into_iter().filter(|n| !self.load_image(n)).collect();
+        if !missing.is_empty() {
+            self.engine.log("Browse for the missing files in the External References palette.".to_string());
+            self.xref_palette_open = true;
+            self.xref_selected = None;
+            self.image_selected = missing;
+        }
+    }
+
+    /// Points image `name` at `file` (it moved, or was renamed) and loads
+    /// it. Other images missing from where they were saved that have a file
+    /// of their name in the same folder follow it there.
+    pub fn set_image_file(&mut self, name: &str, file: &Path) {
+        let Some(def) = self.doc.image_def(name).cloned() else { return };
+        let kind = if self.path.is_some() { PathType::Relative } else { PathType::Full };
+        self.engine.cancel(&mut self.doc);
+        self.doc.begin("IMAGE");
+        self.doc.set_image_def(ImageDef { path: self.saved_path(file, kind), ..def });
+        let mut moved = vec![name.to_string()];
+        if let Some(folder) = file.parent() {
+            moved.extend(self.find_missing_images_in(folder, None, kind));
+        }
         self.doc.commit();
+        for n in &moved {
+            self.load_image(n);
+        }
+        if moved.len() > 1 {
+            self.engine.log(format!("Found {} more missing image(s) in {}.", moved.len() - 1, folder_label(file)));
+        }
+    }
+
+    /// The palette's Find in Folder for several images: each takes the file
+    /// of its name in `folder`, and loads.
+    pub fn find_images_in(&mut self, names: &[String], folder: &Path) {
+        let kind = if self.path.is_some() { PathType::Relative } else { PathType::Full };
+        self.engine.cancel(&mut self.doc);
+        self.doc.begin("IMAGE");
+        let found = self.find_missing_images_in(folder, Some(names), kind);
+        self.doc.commit();
+        for n in &found {
+            self.load_image(n);
+        }
+        let left = names.len() - found.len();
+        let tail = if left > 0 { format!("; {left} not there") } else { String::new() };
+        self.engine.log(format!("Found {} image(s) in {}{tail}.", found.len(), folder.display()));
+    }
+
+    /// Repoints the images (`only` these, else those whose file can't be
+    /// found) to the file of their name in `folder`, where there is one.
+    /// Returns their names.
+    fn find_missing_images_in(&mut self, folder: &Path, only: Option<&[String]>, kind: PathType) -> Vec<String> {
+        let defs: Vec<ImageDef> = self.doc.image_defs().cloned().collect();
+        let mut found = Vec::new();
+        for def in defs {
+            let wanted = match only {
+                Some(names) => names.iter().any(|n| n.eq_ignore_ascii_case(&def.name)),
+                None => resolve(self.path.as_deref(), &def.path).is_none(),
+            };
+            let file_name = def.path.rsplit(['/', '\\']).next().unwrap_or(&def.path).to_string();
+            let candidate = folder.join(&file_name);
+            if wanted && !file_name.is_empty() && candidate.is_file() {
+                self.doc.set_image_def(ImageDef { path: self.saved_path(&candidate, kind), ..def.clone() });
+                found.push(def.name);
+            }
+        }
+        found
+    }
+
+    /// The palette's Browse: picks where image `name`'s file is now.
+    pub(crate) fn browse_image(&mut self, name: &str) {
+        let Some(def) = self.doc.image_def(name).cloned() else { return };
+        let ext = def.path.rsplit('.').next().unwrap_or("").to_string();
+        let mut dialog = rfd::FileDialog::new().set_title(format!("Find \"{}\"", def.name));
+        if !ext.is_empty() && !ext.contains(['/', '\\']) {
+            dialog = dialog.add_filter(ext.to_ascii_uppercase(), &[ext.as_str()]);
+        }
+        if let Some(file) = dialog.add_filter("All files", &["*"]).pick_file() {
+            self.set_image_file(name, &file);
+        }
+    }
+
+    /// The palette's Find in Folder: a folder where the selected images'
+    /// files are now.
+    pub(crate) fn browse_images_folder(&mut self, names: &[String]) {
+        if let Some(folder) = rfd::FileDialog::new().set_title("Find the images in a folder").pick_folder() {
+            self.find_images_in(names, &folder);
+        }
     }
 
     pub fn detach_image(&mut self, name: &str) {
@@ -536,13 +659,18 @@ impl OxidraftApp {
             let image = Geometry::Image { image: name.clone(), origin: g.origin, u: g.u, v: g.v, clip: Vec::new() };
             let bounds = image.bounds();
             extent = Some(extent.map_or(bounds, |b| b.union(bounds)));
-            let id = self.doc.add_on_layer(image, &sanitize_name(&name), Color::ByLayer);
+            let layer = sanitize_name(&name);
+            let id = self.doc.add_on_layer(image, &layer, Color::ByLayer);
             self.doc.send_to_back(&[id]);
+            // Its layer starts off: turning it on loads the picture.
+            if let Some(l) = self.doc.layer(&layer).cloned() {
+                self.doc.update_layer(Layer { on: false, ..l });
+            }
             placed += 1;
         }
         self.doc.commit();
         self.engine.log(format!(
-            "Attached {placed} image{} where their georeferencing puts them, not loaded: load them from the External References palette (XR).",
+            "Attached {placed} image{} where their georeferencing puts them, each on its own layer, turned off: turn a layer on to load its image.",
             if placed == 1 { "" } else { "s" }
         ));
         if !skipped.is_empty() {
