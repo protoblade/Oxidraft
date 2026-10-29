@@ -64,6 +64,7 @@ mod table;
 mod text_edit;
 mod trim_extend;
 mod underlay;
+mod units_cmd;
 mod views;
 mod wipeout;
 mod xclip;

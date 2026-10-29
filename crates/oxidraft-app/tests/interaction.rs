@@ -1833,3 +1833,27 @@ fn export_pdf_and_publish_write_a_page_per_sheet() {
     assert_eq!(pages(&batch), layouts + other_layouts + 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn drawing_units_dialog_sets_feet_and_inches() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["units"]);
+    h.run_steps(2);
+    assert!(h.query_by_label("1.5000,2.0039,0.0000").is_some(), "sample output");
+    h.get_by_role_and_label(Role::ComboBox, "Length type").click();
+    h.run_steps(2);
+    h.get_by_label("Architectural").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("0'-1 1/2\",0'-2\",0'-0\"").is_some(), "the sample follows");
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let units = h.state_mut().document_mut().units();
+    assert_eq!((units.length, units.length_precision), (oxidraft_model::LengthType::Architectural, 4));
+    // DIST answers in feet and inches, and takes them typed.
+    type_all(&mut h, &["dist", "0,0", "@2'6\"<0"]);
+    let history = h.state_mut().engine_mut().history().join("\n");
+    assert!(history.contains("Distance = 2'-6\""), "{history}");
+    // One undo step.
+    h.state_mut().document_mut().undo();
+    assert_eq!(h.state_mut().document_mut().units().length, oxidraft_model::LengthType::Decimal);
+}

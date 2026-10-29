@@ -268,6 +268,10 @@ enum Change {
         before: crate::annotation::DimStyle,
         after: crate::annotation::DimStyle,
     },
+    Units {
+        before: crate::units::Units,
+        after: crate::units::Units,
+    },
     /// REFEDIT's session: started, its working set changed, or ended.
     RefEdit {
         before: Option<Box<RefEdit>>,
@@ -332,6 +336,8 @@ pub struct Document {
     groups: Vec<Group>,
     /// The dimension style (DIMSTYLE) dimensions are drawn in.
     dim_style: crate::annotation::DimStyle,
+    /// UNITS: how lengths and angles show, and what a unit is.
+    units: crate::units::Units,
     /// The layer settings before each change, latest last (LAYERP).
     previous_layers: Vec<LayerTable>,
 }
@@ -396,6 +402,7 @@ impl Document {
             wipeout_frame: 1,
             groups: Vec::new(),
             dim_style: crate::annotation::DEFAULT_DIM_STYLE,
+            units: crate::units::DEFAULT_UNITS,
             previous_layers: Vec::new(),
         }
     }
@@ -459,6 +466,18 @@ impl Document {
         if style != self.dim_style {
             let before = std::mem::replace(&mut self.dim_style, style);
             self.record(Change::DimStyle { before, after: style });
+        }
+    }
+
+    /// UNITS: how lengths and angles show, and what a drawing unit is.
+    pub fn units(&self) -> crate::units::Units {
+        self.units
+    }
+
+    pub fn set_units(&mut self, units: crate::units::Units) {
+        if units != self.units {
+            let before = std::mem::replace(&mut self.units, units);
+            self.record(Change::Units { before, after: units });
         }
     }
 
@@ -1660,6 +1679,7 @@ impl Document {
                     Change::Linetype { .. } => "Linetype",
                     Change::Groups { .. } => "Group",
                     Change::DimStyle { .. } => "Dimension style",
+                    Change::Units { .. } => "Units",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -1714,6 +1734,7 @@ impl Document {
             Change::Views { before, after } => self.views = if forward { after } else { before }.clone(),
             Change::Groups { before, after } => self.groups = if forward { after } else { before }.clone(),
             Change::DimStyle { before, after } => self.dim_style = if forward { *after } else { *before },
+            Change::Units { before, after } => self.units = if forward { *after } else { *before },
             Change::Linetype { key, before, after } => {
                 match if forward { after } else { before } {
                     Some(l) => self.linetypes.insert(key.clone(), l.clone()),

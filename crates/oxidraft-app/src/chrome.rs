@@ -246,9 +246,18 @@ impl OxidraftApp {
                 }
             }
             ui.separator();
-            if ui.button("Plot...").clicked() {
-                self.run("PLOT");
+            for (label, cmd) in [("Export to PDF...", "EXPORTPDF"), ("Publish...", "PUBLISH"), ("Plot...", "PLOT")] {
+                if ui.button(label).clicked() {
+                    self.run(cmd);
+                }
             }
+            ui.menu_button("Drawing Utilities", |ui| {
+                for (label, cmd) in [("Units...", "UNITS"), ("Audit", "AUDIT"), ("Purge...", "PURGE")] {
+                    if ui.button(label).clicked() {
+                        self.run(cmd);
+                    }
+                }
+            });
             ui.separator();
             if ui.button("Options...").clicked() {
                 self.run("OPTIONS");
@@ -1109,7 +1118,8 @@ impl OxidraftApp {
                     self.tab_action(a);
                 }
                 ui.add_space(12.0);
-                let coords = self.cursor.map_or(String::new(), |p| format!("{:.4}, {:.4}, 0.0000", p.x, p.y));
+                let l = oxidraft_model::units::length;
+                let coords = self.cursor.map_or(String::new(), |p| format!("{}, {}, {}", l(p.x), l(p.y), l(0.0)));
                 ui.add_sized(
                     [210.0, 20.0],
                     egui::Label::new(egui::RichText::new(coords).monospace().color(theme::text_dim())),

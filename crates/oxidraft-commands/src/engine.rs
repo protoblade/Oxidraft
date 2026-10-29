@@ -77,6 +77,7 @@ use crate::{
     trim_extend::TrimExtend,
     underlay::AttachImage,
     underlay::ImageClip,
+    units_cmd::UnitsCmd,
     views::{Toggle, ViewCommand, Vports},
     wipeout::Wipeout,
     xclip::{Clip, XClipCommand},
@@ -408,6 +409,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["LAYP"],
         description: "Put the layer settings back as they were before the last change",
         make: None,
+    },
+    CommandInfo {
+        name: "UNITS",
+        aliases: &["UN"],
+        description: "Set how lengths and angles show, and what a drawing unit is",
+        make: None,
+    },
+    CommandInfo {
+        name: "-UNITS",
+        aliases: &["-UN"],
+        description: "Set the drawing units at the command line",
+        make: Some(|| Box::new(UnitsCmd::default())),
     },
     CommandInfo {
         name: "EXPORTPDF",
@@ -1508,6 +1521,7 @@ impl Engine {
 
     /// Handles text submitted on the command line (Enter or Space).
     pub fn submit(&mut self, text: &str, doc: &mut Document, cursor: Point, pick_tolerance: f64) {
+        oxidraft_model::units::set_current(doc.units());
         let text = text.trim();
         if !text.is_empty() {
             self.typed.push(text.to_string());
@@ -1568,6 +1582,7 @@ impl Engine {
     /// `point` is the snapped/tracked point used when a command wants a point;
     /// `raw` is the bare cursor, used for picking objects and selection windows.
     pub fn click(&mut self, point: Point, raw: Point, shift: bool, doc: &mut Document, pick_tolerance: f64) {
+        oxidraft_model::units::set_current(doc.units());
         if self.is_selecting() && self.active.is_some() && self.gathering.is_some() {
             self.gather(raw, doc, pick_tolerance);
             return;
@@ -1582,7 +1597,7 @@ impl Engine {
         }
         let Some(active) = &self.active else { return };
         let prompt = active.cmd.prompt();
-        self.log(format!("{prompt} {:.4},{:.4}", point.x, point.y));
+        self.log(format!("{prompt} {}", oxidraft_model::units::current().point(point.x, point.y)));
         self.feed(Input::Point(point), doc, point, pick_tolerance);
     }
 
@@ -1890,6 +1905,7 @@ impl Engine {
 
     /// Starts a command by name, as if typed. Returns false if unknown.
     pub fn run(&mut self, name: &str, doc: &mut Document) -> bool {
+        oxidraft_model::units::set_current(doc.units());
         let Some(info) = find(name) else { return false };
         if self.active.is_some() {
             self.cancel(doc);
@@ -2070,7 +2086,7 @@ mod tests {
     fn inquiry_commands_print_measurements_and_leave_no_undo_step() {
         let (mut e, mut d) = (engine(), Document::new());
         type_all(&mut e, &mut d, &["di", "0,0", "30,40"]);
-        assert!(e.history().iter().any(|l| l.starts_with("Distance = 50.0000,  Angle in XY Plane = 53.1301")));
+        assert!(e.history().iter().any(|l| l.starts_with("Distance = 50.0000,  Angle in XY Plane = 53,")));
         type_all(&mut e, &mut d, &["id", "3,4"]);
         assert!(e.history().iter().any(|l| l == "X = 3.0000     Y = 4.0000     Z = 0.0000"));
         type_all(&mut e, &mut d, &["aa", "0,0", "10,0", "10,5", "0,5", ""]);
@@ -2081,6 +2097,16 @@ mod tests {
         click(&mut e, &mut d, 1.0, 0.0);
         assert!(e.history().iter().any(|l| l == "Area = 3.1416, Circumference = 6.2832"));
         assert!(!d.can_undo() || d.undo_name() != Some("AREA"));
+
+        // In feet and inches, with bearings; and typed that way too.
+        d.set_units(oxidraft_model::Units {
+            length: oxidraft_model::LengthType::Architectural,
+            angle: oxidraft_model::AngleType::Surveyor,
+            ..Default::default()
+        });
+        type_all(&mut e, &mut d, &["di", "0,0", "@15'6-1/2\"<N45dE"]);
+        let last = e.history().iter().rev().find(|l| l.starts_with("Distance")).unwrap().clone();
+        assert_eq!(last, "Distance = 15'-6 1/2\",  Angle in XY Plane = N 45d E,  Angle from XY Plane = 0d");
     }
 
     #[test]

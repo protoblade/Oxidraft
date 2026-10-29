@@ -334,7 +334,7 @@ impl OxidraftApp {
                     ("Delta X", Value::Text(fmt(d.x))),
                     ("Delta Y", Value::Text(fmt(d.y))),
                     ("Length", Value::Text(fmt(d.length()))),
-                    ("Angle", Value::Text(format!("{:.0}°", start.angle_to(*end)))),
+                    ("Angle", Value::Text(crate::drawing_units::shown_direction(start.angle_to(*end)))),
                 ]
             }
             Geometry::Circle { center, radius } => vec![
@@ -353,7 +353,7 @@ impl OxidraftApp {
                     ("Radius", Value::Number(*radius)),
                     ("Start angle", Value::Angle(*start_angle)),
                     ("End angle", Value::Angle(*end_angle)),
-                    ("Total angle", Value::Text(format!("{:.0}°", arc.sweep))),
+                    ("Total angle", Value::Text(oxidraft_model::units::angle(arc.sweep))),
                     ("Arc length", Value::Text(fmt(arc.length()))),
                 ]
             }
@@ -384,8 +384,14 @@ impl OxidraftApp {
                 if el.is_full() {
                     rows.push(("Area", Value::Text(fmt(el.area()))));
                 } else {
-                    rows.push(("Start angle", Value::Text(format!("{:.0}°", el.center.angle_to(el.start_point())))));
-                    rows.push(("End angle", Value::Text(format!("{:.0}°", el.center.angle_to(el.end_point())))));
+                    rows.push((
+                        "Start angle",
+                        Value::Text(crate::drawing_units::shown_direction(el.center.angle_to(el.start_point()))),
+                    ));
+                    rows.push((
+                        "End angle",
+                        Value::Text(crate::drawing_units::shown_direction(el.center.angle_to(el.end_point()))),
+                    ));
                 }
                 rows.push(("Length", Value::Text(fmt(e.geometry.length()))));
                 rows

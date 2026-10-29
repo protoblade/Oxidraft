@@ -2,15 +2,9 @@
 //! measure; and LTSCALE, which sets a drawing setting.
 
 use oxidraft_geom::{Point, curve::Seg};
-use oxidraft_model::{Document, Geometry, Vertex, hatch};
+use oxidraft_model::{Document, Geometry, Vertex, hatch, units};
 
 use crate::{Command, Ctx, Input, Prompt, Step};
-
-/// An angle in degrees as AutoCAD prints it: no trailing zeros.
-fn angle(deg: f64) -> String {
-    let s = format!("{:.4}", deg.rem_euclid(360.0));
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
-}
 
 /// ID: prints the coordinates of a point.
 #[derive(Default)]
@@ -24,7 +18,8 @@ impl Command for Id {
     fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
         match input {
             Input::Point(p) => {
-                ctx.messages.push(format!("X = {:.4}     Y = {:.4}     Z = 0.0000", p.x, p.y));
+                let l = units::length;
+                ctx.messages.push(format!("X = {}     Y = {}     Z = {}", l(p.x), l(p.y), l(0.0)));
                 Ok(Step::Done)
             }
             Input::Enter => Ok(Step::Done),
@@ -55,12 +50,14 @@ impl Command for Dist {
             }
             (Some(a), Input::Point(b)) => {
                 let d = b - a;
+                let l = units::length;
                 ctx.messages.push(format!(
-                    "Distance = {:.4},  Angle in XY Plane = {},  Angle from XY Plane = 0",
-                    a.distance(b),
-                    angle(a.angle_to(b))
+                    "Distance = {},  Angle in XY Plane = {},  Angle from XY Plane = {}",
+                    l(a.distance(b)),
+                    units::direction(a.angle_to(b)),
+                    units::angle(0.0)
                 ));
-                ctx.messages.push(format!("Delta X = {:.4},  Delta Y = {:.4},  Delta Z = 0.0000", d.x, d.y));
+                ctx.messages.push(format!("Delta X = {},  Delta Y = {},  Delta Z = {}", l(d.x), l(d.y), l(0.0)));
                 Ok(Step::Done)
             }
             (_, Input::Enter) => Ok(Step::Done),
@@ -132,7 +129,7 @@ pub(crate) fn object_area(g: &Geometry) -> Option<(f64, f64, &'static str)> {
 
 impl Area {
     fn report(ctx: &mut Ctx, area: f64, perimeter: f64, word: &str) {
-        ctx.messages.push(format!("Area = {area:.4}, {word} = {perimeter:.4}"));
+        ctx.messages.push(format!("Area = {}, {word} = {}", units::area(area), units::length(perimeter)));
     }
 
     fn polygon(&self) -> Geometry {

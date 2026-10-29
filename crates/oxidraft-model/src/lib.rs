@@ -17,6 +17,7 @@ mod refedit;
 pub mod snap;
 pub mod table;
 mod underlay;
+pub mod units;
 mod xref;
 
 pub use annotation::Attach;
@@ -35,4 +36,5 @@ pub use palette::aci_rgb;
 pub use purge::Unused;
 pub use refedit::RefEdit;
 pub use underlay::{ImageDef, image_corners};
+pub use units::{AngleType, LengthType, Units};
 pub use xref::{Xref, XrefStatus, dependent_name, is_dependent};

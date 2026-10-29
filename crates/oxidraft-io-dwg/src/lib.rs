@@ -470,6 +470,28 @@ mod tests {
     }
 
     #[test]
+    fn units_survive() {
+        let mut doc = Document::new();
+        doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });
+        let units = oxidraft_model::Units {
+            length: oxidraft_model::LengthType::Architectural,
+            length_precision: 5,
+            angle: oxidraft_model::AngleType::Surveyor,
+            angle_precision: 2,
+            clockwise: true,
+            base_angle: 90.0,
+            insertion: 1,
+        };
+        doc.set_units(units);
+        let dxf = oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document;
+        assert_eq!(dxf.units(), units, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            let back = read(&write(&doc, version).unwrap()).unwrap().imported.document;
+            assert_eq!(back.units(), units, "{version:?}");
+        }
+    }
+
+    #[test]
     fn wipeouts_survive() {
         let mut doc = Document::new();
         // Not a rectangle: its bounds alone wouldn't do.

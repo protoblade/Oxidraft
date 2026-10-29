@@ -61,9 +61,10 @@ pub fn parse_input(
         return Ok(Input::Point(base + Point::new(x, y)));
     }
     if let Some((d, a)) = body.split_once('<') {
-        return Ok(Input::Point(base.polar(num(d)?, num(a)?)));
+        let angle = oxidraft_model::units::parse_direction(a).ok_or_else(|| format!("Not an angle: {}", a.trim()))?;
+        return Ok(Input::Point(base.polar(num(d)?, angle)));
     }
-    if !relative && let Ok(v) = body.parse::<f64>() {
+    if !relative && let Some(v) = oxidraft_model::units::parse_length(body) {
         return Ok(Input::Value(v));
     }
 
@@ -77,8 +78,9 @@ pub fn parse_input(
         .ok_or_else(|| format!("Invalid input: {t}"))
 }
 
+/// A number or a length in any of the units' forms (5'6", 3-1/2).
 fn num(s: &str) -> Result<f64, String> {
-    s.trim().parse::<f64>().map_err(|_| format!("Not a number: {}", s.trim()))
+    oxidraft_model::units::parse_length(s).ok_or_else(|| format!("Not a number: {}", s.trim()))
 }
 
 #[cfg(test)]

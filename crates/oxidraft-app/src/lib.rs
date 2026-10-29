@@ -8,6 +8,7 @@ mod chrome;
 mod clipboard;
 mod cmdline;
 mod compare;
+mod drawing_units;
 mod icons;
 mod layer_walk;
 mod layers;

@@ -1147,7 +1147,11 @@ impl OxidraftApp {
             let at = self.view.to_screen(rect, s.point) + vec2(14.0, 14.0);
             tooltip(painter, at, &[s.kind.label().to_string()], None);
         } else if let Some((base, angle)) = c.tracked.and_then(|t| t.polar) {
-            let text = format!("Polar: {:.4} < {:.0}°", base.distance(c.point), angle);
+            let text = format!(
+                "Polar: {} < {}",
+                oxidraft_model::units::length(base.distance(c.point)),
+                crate::drawing_units::shown_direction(angle)
+            );
             tooltip(painter, c.screen + vec2(18.0, 18.0), &[text], None);
         }
         if !self.engine.dynamic_input {
@@ -1162,12 +1166,12 @@ impl OxidraftApp {
                 match (self.engine.base_point(), &typed) {
                     (_, Some(t)) => fields.push(t.clone()),
                     (Some(b), None) => {
-                        fields.push(format!("{:.4}", b.distance(c.point)));
-                        fields.push(format!("{:.0}°", b.angle_to(c.point)));
+                        fields.push(oxidraft_model::units::length(b.distance(c.point)));
+                        fields.push(crate::drawing_units::shown_direction(b.angle_to(c.point)));
                     }
                     (None, None) if !self.picks_objects() => {
-                        fields.push(format!("{:.4}", c.point.x));
-                        fields.push(format!("{:.4}", c.point.y));
+                        fields.push(oxidraft_model::units::length(c.point.x));
+                        fields.push(oxidraft_model::units::length(c.point.y));
                     }
                     _ => {}
                 }

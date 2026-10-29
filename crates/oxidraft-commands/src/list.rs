@@ -4,13 +4,19 @@
 use oxidraft_geom::{Point, curve::Seg};
 use oxidraft_model::{
     Color, Entity, Geometry,
-    annotation::{angular_measurement, format_angle, format_measurement, measurement, radial_value},
-    linetype,
+    annotation::{angular_measurement, format_measurement, measurement, radial_value},
+    linetype, units,
 };
 
 use crate::{Command, Ctx, Input, Prompt, Step, UiRequest};
 
+/// A length, in the drawing's units.
 fn n(v: f64) -> String {
+    format!("{:>10}", units::length(v))
+}
+
+/// A plain number (a scale, a ratio).
+fn plain(v: f64) -> String {
     format!("{v:>10.4}")
 }
 
@@ -50,20 +56,20 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
             out.push(at("from point,", *start));
             out.push(at("to point,", *end));
             out.push(value("Length =", n(d.length()).trim()));
-            out.push(value("Angle in XY Plane =", format_angle(start.angle_to(*end))));
+            out.push(value("Angle in XY Plane =", units::direction(start.angle_to(*end))));
             out.push(value("Delta X =", format!("{}, Delta Y = {}", n(d.x).trim(), n(d.y).trim())));
         }
         Geometry::Circle { center, radius } => {
             out.push(at("center point,", *center));
             out.push(value("radius", n(*radius)));
             out.push(value("circumference", n(g.length())));
-            out.push(value("area", n(g.area().unwrap_or(0.0))));
+            out.push(value("area", units::area(g.area().unwrap_or(0.0))));
         }
         Geometry::Arc { center, radius, start_angle, end_angle } => {
             out.push(at("center point,", *center));
             out.push(value("radius", n(*radius)));
-            out.push(value("start angle", format_angle(*start_angle)));
-            out.push(value("end angle", format_angle(*end_angle)));
+            out.push(value("start angle", units::direction(*start_angle)));
+            out.push(value("end angle", units::direction(*end_angle)));
             out.push(value("length", n(g.length())));
         }
         Geometry::Polyline { vertices, closed } => {
@@ -73,7 +79,7 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
                 out.push(value("Constant width", n(w)));
             }
             if let Some(area) = g.area() {
-                out.push(value("area", n(area)));
+                out.push(value("area", units::area(area)));
                 out.push(value("perimeter", n(g.length())));
             } else {
                 out.push(value("length", n(g.length())));
@@ -86,7 +92,7 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
                     out.push(value("ending width", n(v.end_width)));
                 }
                 if let Some(Seg::Arc(a)) = segs.get(i).filter(|_| v.bulge != 0.0) {
-                    out.push(value("bulge", n(v.bulge)));
+                    out.push(value("bulge", plain(v.bulge)));
                     out.push(at("center", a.center));
                     out.push(value("radius", n(a.radius)));
                 }
@@ -96,13 +102,13 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
             out.push(at("Center:", e.center));
             out.push(at("Major Axis:", e.major));
             out.push(at("Minor Axis:", e.minor()));
-            out.push(value("Radius Ratio:", n(e.ratio).trim()));
+            out.push(value("Radius Ratio:", plain(e.ratio).trim()));
             if e.is_full() {
-                out.push(value("Area:", n(e.area()).trim()));
+                out.push(value("Area:", units::area(e.area())));
                 out.push(value("Circumference:", n(g.length()).trim()));
             } else {
-                out.push(value("Start Angle:", format_angle(e.center.angle_to(e.start_point()))));
-                out.push(value("End Angle:", format_angle(e.center.angle_to(e.end_point()))));
+                out.push(value("Start Angle:", units::direction(e.center.angle_to(e.start_point()))));
+                out.push(value("End Angle:", units::direction(e.center.angle_to(e.end_point()))));
                 out.push(value("Length:", n(g.length()).trim()));
             }
         }
@@ -114,7 +120,7 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
             let closed = if s.is_closed() { "Closed" } else { "Open" };
             out.push(value("Properties:", format!("Planar, {rational}, {periodic}, {closed}")));
             let (u0, u1) = s.domain();
-            out.push(value("Parametric Range:", format!("Start {}  End {}", n(u0).trim(), n(u1).trim())));
+            out.push(value("Parametric Range:", format!("Start {}  End {}", plain(u0).trim(), plain(u1).trim())));
             out.push(value("Number of control points:", s.control().len()));
             for p in s.control() {
                 out.push(at("", *p));
@@ -131,7 +137,7 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
             out.push(value("Width:", n(*width).trim()));
             out.push(value("Height:", n(*height).trim()));
             out.push(at("View center:", *view_center));
-            out.push(value("Scale:", format!("1:{}", n(view_height / height.max(1e-12)).trim())));
+            out.push(value("Scale:", format!("1:{}", plain(view_height / height.max(1e-12)).trim())));
         }
         Geometry::OrdinateDimension { feature, leader_end, x_datum, .. } => {
             out.push(at("Feature location:", *feature));
@@ -174,7 +180,7 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
             out.push(at("Insertion point:", *origin));
             out.push(value("Width:", n(u.length()).trim()));
             out.push(value("Height:", n(v.length()).trim()));
-            out.push(value("Rotation:", format_angle(Point::ORIGIN.angle_to(*u))));
+            out.push(value("Rotation:", units::direction(Point::ORIGIN.angle_to(*u))));
             if clip.len() >= 3 {
                 out.push(value("", "Clipped"));
             }
@@ -190,9 +196,12 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
         Geometry::Insert { block, placement, attributes, .. } => {
             out.push(value("Block Name:", format!("\"{block}\"")));
             out.push(at("at point,", placement.position));
-            out.push(value("X scale factor:", n(if placement.mirror { -placement.scale } else { placement.scale })));
-            out.push(value("Y scale factor:", n(placement.scale)));
-            out.push(value("rotation angle:", format_angle(placement.rotation)));
+            out.push(value(
+                "X scale factor:",
+                plain(if placement.mirror { -placement.scale } else { placement.scale }),
+            ));
+            out.push(value("Y scale factor:", plain(placement.scale)));
+            out.push(value("rotation angle:", units::direction(placement.rotation)));
             for a in attributes {
                 out.push(format!("{:>20}  Layer: \"{}\"", "ATTRIBUTE", a.layer));
                 out.push(value("Tag:", &a.tag));
@@ -205,7 +214,7 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
         Geometry::Text { position, height, rotation, content, .. } => {
             out.push(at("Location:", *position));
             out.push(value("Text height:", n(*height)));
-            out.push(value("Rotation:", format_angle(*rotation)));
+            out.push(value("Rotation:", units::direction(*rotation)));
             out.push(value("Contents:", content.replace('\n', "\\P")));
         }
         Geometry::Dimension { p1, p2, line, rotation, aligned, text, .. } => {
@@ -225,7 +234,7 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
             out.push(at("center point,", *center));
         }
         Geometry::AngularDimension { vertex, p1, p2, text, .. } => {
-            out.push(value("Measurement:", format_angle(angular_measurement(*vertex, *p1, *p2))));
+            out.push(value("Measurement:", units::angle(angular_measurement(*vertex, *p1, *p2))));
             if let Some(t) = text {
                 out.push(value("Text override:", t));
             }
@@ -239,10 +248,10 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
         }
         Geometry::Hatch { pattern, scale, angle, .. } => {
             out.push(value("Pattern name:", pattern.name()));
-            out.push(value("Scale:", n(*scale)));
-            out.push(value("Angle:", format_angle(*angle)));
+            out.push(value("Scale:", plain(*scale)));
+            out.push(value("Angle:", units::direction(*angle)));
             if let Some((area, _, _)) = crate::inquiry::object_area(g) {
-                out.push(value("Area", n(area)));
+                out.push(value("Area", units::area(area)));
             }
         }
     }

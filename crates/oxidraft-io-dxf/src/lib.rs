@@ -577,6 +577,79 @@ fn add_attributes(drawing: &mut Drawing, de: &mut DxfEntity, g: &Geometry, style
     }
 }
 
+/// $INSUNITS values in order.
+const DXF_UNITS: [dxf::enums::Units; 25] = {
+    use dxf::enums::Units as U;
+    [
+        U::Unitless,
+        U::Inches,
+        U::Feet,
+        U::Miles,
+        U::Millimeters,
+        U::Centimeters,
+        U::Meters,
+        U::Kilometers,
+        U::Microinches,
+        U::Mils,
+        U::Yards,
+        U::Angstroms,
+        U::Nanometers,
+        U::Microns,
+        U::Decimeters,
+        U::Decameters,
+        U::Hectometers,
+        U::Gigameters,
+        U::AstronomicalUnits,
+        U::LightYears,
+        U::Parsecs,
+        U::USSurveyFeet,
+        U::USSurveyInch,
+        U::USSurveyYard,
+        U::USSurveyMile,
+    ]
+};
+
+/// UNITS into the header: $LUNITS, $LUPREC, $AUNITS, $AUPREC, $ANGDIR,
+/// $ANGBASE (degrees), $INSUNITS and $MEASUREMENT.
+fn write_units(h: &mut dxf::Header, u: oxidraft_model::Units) {
+    use dxf::enums::{AngleDirection, AngleFormat, DrawingUnits, UnitFormat};
+    use oxidraft_model::{AngleType, LengthType};
+    h.unit_format = match u.length {
+        LengthType::Scientific => UnitFormat::Scientific,
+        LengthType::Decimal => UnitFormat::Decimal,
+        LengthType::Engineering => UnitFormat::Engineering,
+        LengthType::Architectural => UnitFormat::ArchitecturalStacked,
+        LengthType::Fractional => UnitFormat::FractionalStacked,
+    };
+    h.unit_precision = i16::from(u.length_precision);
+    h.angle_unit_format = match u.angle {
+        AngleType::DecimalDegrees => AngleFormat::DecimalDegrees,
+        AngleType::DegMinSec => AngleFormat::DegreesMinutesSeconds,
+        AngleType::Grads => AngleFormat::Gradians,
+        AngleType::Radians => AngleFormat::Radians,
+        AngleType::Surveyor => AngleFormat::SurveyorsUnits,
+    };
+    h.angle_unit_precision = i16::from(u.angle_precision);
+    h.angle_direction = if u.clockwise { AngleDirection::Clockwise } else { AngleDirection::CounterClockwise };
+    h.angle_zero_direction = u.base_angle;
+    h.default_drawing_units = DXF_UNITS.get(u.insertion as usize).copied().unwrap_or(dxf::enums::Units::Unitless);
+    let english = matches!(u.insertion, 1 | 2 | 3 | 8 | 9 | 10 | 21..=24);
+    h.drawing_units = if english { DrawingUnits::English } else { DrawingUnits::Metric };
+}
+
+fn read_units(h: &dxf::Header) -> oxidraft_model::Units {
+    use oxidraft_model::{AngleType, LengthType};
+    oxidraft_model::Units {
+        length: LengthType::from_code(h.unit_format as i16),
+        length_precision: h.unit_precision.clamp(0, 8) as u8,
+        angle: AngleType::from_code(h.angle_unit_format as i16),
+        angle_precision: h.angle_unit_precision.clamp(0, 8) as u8,
+        clockwise: h.angle_direction == dxf::enums::AngleDirection::Clockwise,
+        base_angle: if h.angle_zero_direction.is_finite() { h.angle_zero_direction } else { 0.0 },
+        insertion: h.default_drawing_units as i16,
+    }
+}
+
 fn build(doc: &Document) -> Built {
     let mut drawing = Drawing::new();
     // R2000 is the oldest version with lightweight polylines; PDF underlays
@@ -592,6 +665,7 @@ fn build(doc: &Document) -> Built {
     drawing.header.dimension_line_gap = dim.gap;
     drawing.header.dimension_unit_tolerance_decimal_places = dim.decimals as i16;
     drawing.header.insertion_base = to_dxf(doc.insbase());
+    write_units(&mut drawing.header, doc.units());
     drawing.header.point_display_mode = doc.pdmode();
     drawing.header.point_display_size = doc.pdsize();
     drawing.header.attribute_visibility = match doc.attdisp() {
@@ -1113,6 +1187,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         doc.set_ltscale(drawing.header.line_type_scale);
     }
     doc.set_insbase(from_dxf(&drawing.header.insertion_base));
+    doc.set_units(read_units(&drawing.header));
     let h = &drawing.header;
     let positive = |v: f64, default: f64| if v > 0.0 && v.is_finite() { v } else { default };
     let d = oxidraft_model::annotation::DEFAULT_DIM_STYLE;
