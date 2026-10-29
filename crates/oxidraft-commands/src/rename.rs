@@ -11,17 +11,19 @@ pub enum Named {
     Block,
     Layer,
     Linetype,
+    TextStyle,
     View,
 }
 
 impl Named {
-    pub const ALL: [Named; 4] = [Named::Block, Named::Layer, Named::Linetype, Named::View];
+    pub const ALL: [Named; 5] = [Named::Block, Named::Layer, Named::Linetype, Named::TextStyle, Named::View];
 
     pub fn plural(self) -> &'static str {
         match self {
             Named::Block => "Blocks",
             Named::Layer => "Layers",
             Named::Linetype => "Linetypes",
+            Named::TextStyle => "Text styles",
             Named::View => "Views",
         }
     }
@@ -31,6 +33,7 @@ impl Named {
             Named::Block => "block",
             Named::Layer => "layer",
             Named::Linetype => "linetype",
+            Named::TextStyle => "text style",
             Named::View => "view",
         }
     }
@@ -62,6 +65,12 @@ impl Named {
                 }
                 names
             }
+            Named::TextStyle => doc
+                .text_styles()
+                .iter()
+                .filter(|s| !s.name.eq_ignore_ascii_case(oxidraft_model::annotation::STANDARD))
+                .map(|s| s.name.clone())
+                .collect(),
             Named::View => doc.views().iter().map(|v| v.name.clone()).collect(),
         };
         names.retain(|n| !oxidraft_model::is_dependent(n));
@@ -75,6 +84,7 @@ impl Named {
             Named::Block => doc.rename_block(old, new),
             Named::Layer => doc.rename_layer(old, new.trim()),
             Named::Linetype => doc.rename_linetype(old, new),
+            Named::TextStyle => doc.rename_text_style(old, new),
             Named::View => doc.rename_view(old, new),
         }
     }
@@ -89,7 +99,9 @@ pub struct Rename {
 impl Command for Rename {
     fn prompt(&self) -> Prompt {
         match (self.kind, &self.old) {
-            (None, _) => Prompt::new("Enter object type to rename").with_keywords(&["Block", "LAyer", "LType", "VIew"]),
+            (None, _) => {
+                Prompt::new("Enter object type to rename").with_keywords(&["Block", "LAyer", "LType", "Style", "VIew"])
+            }
             (Some(k), None) => Prompt::new(format!("Enter old {} name", k.noun())),
             (Some(k), Some(old)) => Prompt::new(format!("Rename {} {old} to", k.noun())),
         }
@@ -102,6 +114,7 @@ impl Command for Rename {
                     "Block" => Named::Block,
                     "LAyer" => Named::Layer,
                     "LType" => Named::Linetype,
+                    "Style" => Named::TextStyle,
                     _ => Named::View,
                 });
             }

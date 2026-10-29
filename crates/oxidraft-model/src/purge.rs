@@ -3,21 +3,23 @@
 
 use crate::{Document, EntityId, Geometry, entity::Entity, xref::is_dependent};
 
-/// What PURGE can take out: layers, blocks and linetypes nothing uses.
+/// What PURGE can take out: layers, blocks, linetypes and text styles
+/// nothing uses.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Unused {
     pub layers: Vec<String>,
     pub blocks: Vec<String>,
     pub linetypes: Vec<String>,
+    pub text_styles: Vec<String>,
 }
 
 impl Unused {
     pub fn is_empty(&self) -> bool {
-        self.layers.is_empty() && self.blocks.is_empty() && self.linetypes.is_empty()
+        self.count() == 0
     }
 
     pub fn count(&self) -> usize {
-        self.layers.len() + self.blocks.len() + self.linetypes.len()
+        self.layers.len() + self.blocks.len() + self.linetypes.len() + self.text_styles.len()
     }
 }
 
@@ -74,6 +76,14 @@ impl Document {
                 .filter(|n| !n.starts_with('*') && self.xref(n).is_none() && !is_dependent(n) && !is_used_block(n))
                 .collect(),
             linetypes: self.own_linetypes().into_iter().filter(|n| !has(&linetypes_used, n)).collect(),
+            // Standard and the current style stay.
+            text_styles: self
+                .text_styles()
+                .iter()
+                .map(|s| s.name.clone())
+                .filter(|n| !n.eq_ignore_ascii_case(crate::annotation::STANDARD))
+                .filter(|n| !n.eq_ignore_ascii_case(&self.current_text_style().name) && !self.text_style_in_use(n))
+                .collect(),
         }
     }
 
@@ -93,6 +103,9 @@ impl Document {
             for l in &what.linetypes {
                 count += usize::from(self.remove_linetype(l));
             }
+            for s in &what.text_styles {
+                count += usize::from(self.delete_text_style(s).is_ok());
+            }
             if !nested {
                 return count;
             }
@@ -102,6 +115,7 @@ impl Document {
                 layers: if what.layers.is_empty() { Vec::new() } else { next.layers },
                 blocks: if what.blocks.is_empty() { Vec::new() } else { next.blocks },
                 linetypes: if what.linetypes.is_empty() { Vec::new() } else { next.linetypes },
+                text_styles: Vec::new(),
             };
             if what.is_empty() {
                 return count;

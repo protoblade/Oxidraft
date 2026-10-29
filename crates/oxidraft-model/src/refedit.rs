@@ -267,6 +267,7 @@ mod tests {
                 "0",
                 Color::ByLayer,
                 Geometry::Text {
+                    look: Default::default(),
                     position: Point::new(0.0, 3.0),
                     height: 0.5,
                     rotation: 10.0,

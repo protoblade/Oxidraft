@@ -245,6 +245,7 @@ mod tests {
         // Text shows by its insertion point.
         let text = |x: f64| {
             styled(Geometry::Text {
+                look: Default::default(),
                 position: Point::new(x, 5.0),
                 height: 1.0,
                 rotation: 0.0,

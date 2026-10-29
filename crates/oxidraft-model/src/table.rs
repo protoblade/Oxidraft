@@ -97,6 +97,7 @@ pub fn primitives(g: &Geometry) -> Vec<Geometry> {
             // The title a size larger, as the Standard table style has it.
             let height = if r == 0 { text_height * 1.4 } else { *text_height };
             out.push(Geometry::Text {
+                look: Default::default(),
                 position: grid.cell_center(r, c),
                 height,
                 rotation: *rotation,

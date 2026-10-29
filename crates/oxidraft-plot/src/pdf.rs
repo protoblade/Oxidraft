@@ -103,8 +103,11 @@ fn item_ops(ops: &mut String, used: &mut Used, sheet: &Sheet, items: &[Item]) {
                 }
                 ops.push_str("f*\n");
             }
-            Item::Text { at, rotation, size, text, color: c } => {
+            Item::Text { at, rotation, size, text, color: c, width_factor, oblique } => {
+                // Rotation after stretching along the line and slanting.
                 let (sin, cos) = rotation.to_radians().sin_cos();
+                let t = oblique.to_radians().tan();
+                let (a, b, cc, d) = (cos * width_factor, sin * width_factor, cos * t - sin, sin * t + cos);
                 let mut hex = String::new();
                 for ch in text.chars() {
                     let g = FONT.glyph(ch);
@@ -116,10 +119,10 @@ fn item_ops(ops: &mut String, used: &mut Used, sheet: &Sheet, items: &[Item]) {
                     "BT {} rg /F1 {} Tf {} {} {} {} {} {} Tm <{hex}> Tj ET",
                     color(*c),
                     num(*size),
-                    num(cos),
-                    num(sin),
-                    num(-sin),
-                    num(cos),
+                    num(a),
+                    num(b),
+                    num(cc),
+                    num(d),
                     num(at.x),
                     num(at.y)
                 );
@@ -367,6 +370,7 @@ mod tests {
         let mut doc = Document::new();
         doc.add(Geometry::Line { start: Point::ORIGIN, end: Point::new(100.0, 50.0) });
         doc.add(Geometry::Text {
+            look: Default::default(),
             position: Point::new(10.0, 10.0),
             height: 2.5,
             rotation: 0.0,
@@ -409,6 +413,20 @@ mod tests {
             let offset: usize = line[..10].parse().unwrap();
             assert!(bytes[offset..].starts_with(format!("{} 0 obj", i + 1).as_bytes()), "object {}", i + 1);
         }
+        // A narrow, slanted style: the text matrix stretches and shears.
+        let mut styled = Document::new();
+        styled.add(Geometry::Text {
+            position: Point::new(10.0, 10.0),
+            height: 2.5,
+            rotation: 0.0,
+            width: 0.0,
+            attach: Attach::BottomLeft,
+            content: "A".into(),
+            look: oxidraft_model::TextLook { style: "Narrow".into(), width_factor: 0.5, oblique: 45.0 },
+        });
+        let narrow = crate::render(&styled, oxidraft_model::MODEL, &settings).unwrap();
+        let (ops, _) = content(&narrow);
+        assert!(ops.contains(" 0.5 0 1 1 "), "{ops}");
         // The glyphs shown map back to their characters.
         let (_, used) = content(&sheet);
         assert!(used.glyphs.values().any(|&c| c == 'ł'));

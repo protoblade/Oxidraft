@@ -213,7 +213,8 @@ impl Command for Overkill {
     }
 }
 
-const PURGE_OPTIONS: &[&str] = &["Blocks", "LAyers", "LTypes", "Zero-length geometry", "Empty text objects", "All"];
+const PURGE_OPTIONS: &[&str] =
+    &["Blocks", "LAyers", "LTypes", "STyles", "Zero-length geometry", "Empty text objects", "All"];
 
 /// -PURGE: blocks, layers, linetypes (or All) nothing uses, nested ones
 /// too, or zero-length geometry and empty text.
@@ -249,6 +250,7 @@ impl Command for Purge {
             blocks: if matches!(kind, "Blocks" | "All") { all.blocks } else { Vec::new() },
             layers: if matches!(kind, "LAyers" | "All") { all.layers } else { Vec::new() },
             linetypes: if matches!(kind, "LTypes" | "All") { all.linetypes } else { Vec::new() },
+            text_styles: if matches!(kind, "STyles" | "All") { all.text_styles } else { Vec::new() },
         };
         let count = ctx.doc.purge(&what, true);
         ctx.messages.push(if count == 0 {

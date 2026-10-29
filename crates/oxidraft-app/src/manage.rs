@@ -20,6 +20,7 @@ enum Kind {
     Block,
     Layer,
     Linetype,
+    TextStyle,
 }
 
 impl Kind {
@@ -28,6 +29,7 @@ impl Kind {
             Kind::Block => "Blocks",
             Kind::Layer => "Layers",
             Kind::Linetype => "Linetypes",
+            Kind::TextStyle => "Text styles",
         }
     }
 }
@@ -146,6 +148,7 @@ impl OxidraftApp {
         items.extend(unused.blocks.into_iter().map(|n| (Kind::Block, n, true)));
         items.extend(unused.layers.into_iter().map(|n| (Kind::Layer, n, true)));
         items.extend(unused.linetypes.into_iter().map(|n| (Kind::Linetype, n, true)));
+        items.extend(unused.text_styles.into_iter().map(|n| (Kind::TextStyle, n, true)));
         self.purge = Some(PurgeDialog { items, nested: true, zero_length: false, empty_text: false });
     }
 
@@ -167,7 +170,7 @@ impl OxidraftApp {
                         if d.items.is_empty() {
                             ui.colored_label(theme::text_dim(), "Nothing unused to purge.");
                         }
-                        for kind in [Kind::Block, Kind::Layer, Kind::Linetype] {
+                        for kind in [Kind::Block, Kind::Layer, Kind::Linetype, Kind::TextStyle] {
                             if !d.items.iter().any(|i| i.0 == kind) {
                                 continue;
                             }
@@ -193,8 +196,12 @@ impl OxidraftApp {
             let picked = |kind: Kind| -> Vec<String> {
                 d.items.iter().filter(|i| i.0 == kind && (all || i.2)).map(|i| i.1.clone()).collect()
             };
-            let what =
-                Unused { blocks: picked(Kind::Block), layers: picked(Kind::Layer), linetypes: picked(Kind::Linetype) };
+            let what = Unused {
+                blocks: picked(Kind::Block),
+                layers: picked(Kind::Layer),
+                linetypes: picked(Kind::Linetype),
+                text_styles: picked(Kind::TextStyle),
+            };
             self.doc.begin("PURGE");
             let mut count = self.doc.purge(&what, d.nested);
             let empty: Vec<EntityId> = self

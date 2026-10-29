@@ -78,6 +78,7 @@ use crate::{
     stretch::Stretch,
     table::{TableEdit, TableInsert},
     text_edit::{JustifyText, ScaleText},
+    text_style::StyleCmd,
     trim_extend::TrimExtend,
     underlay::AttachImage,
     underlay::ImageClip,
@@ -492,6 +493,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["-LW"],
         description: "Set the lineweight new objects get at the command line",
         make: Some(|| Box::new(LweightCmd::default())),
+    },
+    CommandInfo {
+        name: "STYLE",
+        aliases: &["ST", "DDSTYLE"],
+        description: "Make, change and set current text styles",
+        make: None,
+    },
+    CommandInfo {
+        name: "-STYLE",
+        aliases: &["-ST"],
+        description: "Make or change a text style at the command line",
+        make: Some(|| Box::new(StyleCmd::default())),
     },
     CommandInfo {
         name: "EXPORTPDF",

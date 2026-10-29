@@ -59,6 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Annotation: a title, overall dimensions, a leader, and the right room hatched
     // around the table and column.
     doc.add(Geometry::Text {
+        look: Default::default(),
         position: Point::new(0.0, 80.0),
         height: 4.0,
         rotation: 0.0,

@@ -127,6 +127,8 @@ pub enum Geometry {
         width: f64,
         attach: Attach,
         content: String,
+        /// Its text style, width factor and oblique angle.
+        look: crate::annotation::TextLook,
     },
     /// A linear dimension measuring `p1` to `p2`, with its dimension line
     /// through `line`. Rotated (DIMLINEAR) measures along `rotation`;
@@ -306,6 +308,7 @@ pub struct Attribute {
 impl Attribute {
     pub fn text(&self) -> Geometry {
         Geometry::Text {
+            look: Default::default(),
             position: self.position,
             height: self.height,
             rotation: self.rotation,
@@ -465,6 +468,7 @@ impl Geometry {
             }
             Geometry::AttributeDefinition { tag, position, height, rotation, attach, .. } => {
                 Some(vec![Geometry::Text {
+                    look: Default::default(),
                     position: *position,
                     height: *height,
                     rotation: *rotation,
@@ -482,8 +486,9 @@ impl Geometry {
     /// which aren't curves to snap to, trim or intersect.
     fn outline(&self) -> Vec<Seg> {
         match self {
-            Geometry::Text { position, height, rotation, width, attach, content } => {
-                let b = annotation::text_box(*position, *height, *rotation, *width, *attach, content);
+            Geometry::Text { position, height, rotation, width, attach, content, look } => {
+                let b =
+                    annotation::text_box(*position, *height, *rotation, *width, *attach, content, look.width_factor);
                 (0..4).map(|i| Seg::Line(Segment::new(b[i], b[(i + 1) % 4]))).collect()
             }
             Geometry::Hatch { loops, .. } => loops.iter().flat_map(|l| hatch::loop_segments(l)).collect(),
@@ -516,8 +521,9 @@ impl Geometry {
     /// True if `p` is inside a text box or a hatched area.
     pub fn contains(&self, p: Point) -> bool {
         match self {
-            Geometry::Text { position, height, rotation, width, attach, content } => {
-                let b = annotation::text_box(*position, *height, *rotation, *width, *attach, content);
+            Geometry::Text { position, height, rotation, width, attach, content, look } => {
+                let b =
+                    annotation::text_box(*position, *height, *rotation, *width, *attach, content, look.width_factor);
                 hatch::contains(&[b.to_vec()], p)
             }
             Geometry::Hatch { loops, .. } => hatch::contains(&hatch::polygons(loops), p),
@@ -930,7 +936,8 @@ impl Geometry {
             Geometry::Ray { base, direction } => {
                 Geometry::Ray { base: f(*base), direction: f(*base + *direction) - f(*base) }
             }
-            Geometry::Text { position, height, rotation, width, attach, content } => Geometry::Text {
+            Geometry::Text { position, height, rotation, width, attach, content, look } => Geometry::Text {
+                look: look.clone(),
                 position: f(*position),
                 height: height * length_factor,
                 // Mirrored text stays readable (AutoCAD's MIRRTEXT=0).

@@ -177,6 +177,7 @@ impl Block {
                     return None;
                 };
                 let text = Geometry::Text {
+                    look: Default::default(),
                     position: *position,
                     height: *height,
                     rotation: *rotation,
@@ -276,6 +277,11 @@ enum Change {
         before: CurrentProps,
         after: CurrentProps,
     },
+    /// The text styles and the current one.
+    TextStyles {
+        before: (Vec<crate::annotation::TextStyle>, String),
+        after: (Vec<crate::annotation::TextStyle>, String),
+    },
     /// REFEDIT's session: started, its working set changed, or ended.
     RefEdit {
         before: Option<Box<RefEdit>>,
@@ -344,6 +350,9 @@ pub struct Document {
     units: crate::units::Units,
     /// New objects' color, linetype and lineweight.
     current: CurrentProps,
+    /// Text styles (STYLE), Standard first, and the one new text gets.
+    text_styles: Vec<crate::annotation::TextStyle>,
+    current_text_style: String,
     /// The layer settings before each change, latest last (LAYERP).
     previous_layers: Vec<LayerTable>,
 }
@@ -425,6 +434,8 @@ impl Document {
             dim_style: crate::annotation::DEFAULT_DIM_STYLE,
             units: crate::units::DEFAULT_UNITS,
             current: CurrentProps::by_layer(),
+            text_styles: vec![crate::annotation::TextStyle::standard()],
+            current_text_style: crate::annotation::STANDARD.into(),
             previous_layers: Vec::new(),
         }
     }
@@ -513,6 +524,142 @@ impl Document {
             let before = std::mem::replace(&mut self.current, props.clone());
             self.record(Change::Current { before, after: props });
         }
+    }
+
+    /// The text styles, Standard first.
+    pub fn text_styles(&self) -> &[crate::annotation::TextStyle] {
+        &self.text_styles
+    }
+
+    pub fn text_style(&self, name: &str) -> Option<&crate::annotation::TextStyle> {
+        self.text_styles.iter().find(|s| s.name.eq_ignore_ascii_case(name.trim()))
+    }
+
+    /// The style new text gets (TEXTSTYLE).
+    pub fn current_text_style(&self) -> crate::annotation::TextStyle {
+        self.text_style(&self.current_text_style).cloned().unwrap_or_else(crate::annotation::TextStyle::standard)
+    }
+
+    fn set_text_styles(&mut self, styles: Vec<crate::annotation::TextStyle>, current: String) {
+        let after = (styles, current);
+        if after.0 != self.text_styles || after.1 != self.current_text_style {
+            let before = (
+                std::mem::replace(&mut self.text_styles, after.0.clone()),
+                std::mem::replace(&mut self.current_text_style, after.1.clone()),
+            );
+            self.record(Change::TextStyles { before, after });
+        }
+    }
+
+    /// Adds a text style, or changes the one with its name (ignoring case).
+    pub fn set_text_style(&mut self, style: crate::annotation::TextStyle) -> Result<(), String> {
+        check_name(&style.name)?;
+        let valid = style.width_factor > 0.0 && style.height >= 0.0 && style.oblique.abs() <= 85.0;
+        if !valid {
+            return Err("Width factor must be above 0, height 0 or more, and oblique within 85 degrees.".into());
+        }
+        let mut styles = self.text_styles.clone();
+        match styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(&style.name)) {
+            Some(s) => *s = crate::annotation::TextStyle { name: s.name.clone(), ..style },
+            None => styles.push(style),
+        }
+        self.set_text_styles(styles, self.current_text_style.clone());
+        Ok(())
+    }
+
+    /// Makes a text style the one new text gets.
+    pub fn set_current_text_style(&mut self, name: &str) -> Result<(), String> {
+        let style = self.text_style(name).ok_or_else(|| format!("Text style \"{}\" not found.", name.trim()))?;
+        let name = style.name.clone();
+        self.set_text_styles(self.text_styles.clone(), name);
+        Ok(())
+    }
+
+    /// True if some text (in a block too) uses the style.
+    pub fn text_style_in_use(&self, name: &str) -> bool {
+        let uses = |g: &Geometry| matches!(g, Geometry::Text { look, .. } if look.style.eq_ignore_ascii_case(name));
+        self.entities.values().any(|e| uses(&e.geometry))
+            || self.blocks.values().any(|b| b.entities.iter().any(|be| uses(&be.geometry)))
+    }
+
+    /// Deletes a text style nothing uses. Standard and the current one stay.
+    pub fn delete_text_style(&mut self, name: &str) -> Result<(), String> {
+        let style =
+            self.text_style(name).cloned().ok_or_else(|| format!("Text style \"{}\" not found.", name.trim()))?;
+        if style.name.eq_ignore_ascii_case(crate::annotation::STANDARD) {
+            return Err("The Standard text style can't be deleted.".into());
+        }
+        if style.name.eq_ignore_ascii_case(&self.current_text_style) {
+            return Err("The current text style can't be deleted.".into());
+        }
+        if self.text_style_in_use(&style.name) {
+            return Err(format!("Text style \"{}\" is in use.", style.name));
+        }
+        let styles = self.text_styles.iter().filter(|s| s.name != style.name).cloned().collect();
+        self.set_text_styles(styles, self.current_text_style.clone());
+        Ok(())
+    }
+
+    /// RENAME a text style, and the text that uses it. Standard can't be.
+    pub fn rename_text_style(&mut self, old: &str, new: &str) -> Result<(), String> {
+        let new = new.trim();
+        check_name(new)?;
+        let style = self.text_style(old).cloned().ok_or_else(|| format!("Text style \"{}\" not found.", old.trim()))?;
+        if style.name.eq_ignore_ascii_case(crate::annotation::STANDARD) {
+            return Err("The Standard text style can't be renamed.".into());
+        }
+        if !new.eq_ignore_ascii_case(&style.name) && self.text_style(new).is_some() {
+            return Err(format!("A text style named \"{new}\" already exists."));
+        }
+        let old = style.name.clone();
+        let styles =
+            self.text_styles
+                .iter()
+                .map(|s| {
+                    if s.name == old {
+                        crate::annotation::TextStyle { name: new.into(), ..s.clone() }
+                    } else {
+                        s.clone()
+                    }
+                })
+                .collect();
+        let current = if self.current_text_style.eq_ignore_ascii_case(&old) {
+            new.into()
+        } else {
+            self.current_text_style.clone()
+        };
+        self.set_text_styles(styles, current);
+        let restyle = |g: &mut Geometry| {
+            if let Geometry::Text { look, .. } = g
+                && look.style.eq_ignore_ascii_case(&old)
+            {
+                look.style = new.to_string();
+            }
+        };
+        let ids: Vec<EntityId> = self
+            .entities
+            .values()
+            .filter(|e| matches!(&e.geometry, Geometry::Text { look, .. } if look.style.eq_ignore_ascii_case(&old)))
+            .map(|e| e.id)
+            .collect();
+        for id in ids {
+            self.update(id, |e| restyle(&mut e.geometry));
+        }
+        let blocks: Vec<Block> = self
+            .blocks
+            .values()
+            .filter(|b| {
+                b.entities.iter().any(
+                    |be| matches!(&be.geometry, Geometry::Text { look, .. } if look.style.eq_ignore_ascii_case(&old)),
+                )
+            })
+            .cloned()
+            .collect();
+        for mut b in blocks {
+            b.entities.iter_mut().for_each(|be| restyle(&mut be.geometry));
+            self.define_block(b);
+        }
+        Ok(())
     }
 
     /// Loads a linetype into the drawing (LINETYPE's Load), undoably.
@@ -1079,6 +1226,7 @@ impl Document {
                         invisible: false,
                         ..
                     } => Geometry::Text {
+                        look: Default::default(),
                         position: *position,
                         height: *height,
                         rotation: *rotation,
@@ -1834,6 +1982,7 @@ impl Document {
                     Change::DimStyle { .. } => "Dimension style",
                     Change::Units { .. } => "Units",
                     Change::Current { .. } => "Current properties",
+                    Change::TextStyles { .. } => "Text style",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -1890,6 +2039,9 @@ impl Document {
             Change::DimStyle { before, after } => self.dim_style = if forward { *after } else { *before },
             Change::Units { before, after } => self.units = if forward { *after } else { *before },
             Change::Current { before, after } => self.current = if forward { after } else { before }.clone(),
+            Change::TextStyles { before, after } => {
+                (self.text_styles, self.current_text_style) = if forward { after } else { before }.clone();
+            }
             Change::Linetype { key, before, after } => {
                 match if forward { after } else { before } {
                     Some(l) => self.linetypes.insert(key.clone(), l.clone()),

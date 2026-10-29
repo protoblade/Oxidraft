@@ -144,7 +144,7 @@ fn paint_items(
                 }
                 painter.add(Shape::mesh(mesh));
             }
-            Item::Text { at, rotation, size, text, color } => {
+            Item::Text { at, rotation, size, text, color, width_factor, oblique } => {
                 let px = *size as f32 * k;
                 if px < 2.0 {
                     continue;
@@ -157,7 +157,9 @@ fn paint_items(
                 });
                 let angle = -(*rotation as f32).to_radians();
                 let pos = to(*at) - egui::emath::Rot2::from_angle(angle) * vec2(0.0, baseline);
-                painter.add(egui::epaint::TextShape::new(pos, galley, rgb(*color)).with_angle(angle));
+                let shape = egui::epaint::TextShape::new(pos, galley, rgb(*color)).with_angle(angle);
+                let (wf, oblique) = (*width_factor as f32, *oblique as f32);
+                crate::canvas::paint_text(painter, shape, to(*at), wf, oblique, 0.0);
             }
             Item::Clipped { clip: frame, shape, items } => {
                 let clip = Rect::from_two_pos(to(frame.min), to(frame.max)).intersect(painter.clip_rect());

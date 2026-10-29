@@ -1724,6 +1724,7 @@ fn dimension_style_and_find_and_replace_dialogs() {
 
     // FIND: text replaced everywhere.
     h.state_mut().document_mut().add(Geometry::Text {
+        look: Default::default(),
         position: Point::new(10.0, 30.0),
         height: 2.5,
         rotation: 0.0,
@@ -2014,4 +2015,38 @@ fn current_color_linetype_and_lineweight_from_the_ribbon_and_dialogs() {
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(current(&mut h).lineweight, Lineweight::Hundredths(13));
+}
+
+#[test]
+fn text_style_dialog_makes_a_style_that_new_text_gets() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["st"]);
+    h.run_steps(2);
+    assert!(h.query_by_label("Current text style: Standard").is_some());
+    h.get_by_label("New...").click();
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(Role::TextInput, "Style Name").is_some(), "the name asked for");
+    let ok = h.get_by_role_and_label(Role::Button, "OK").rect().center();
+    click(&mut h, ok);
+    h.run_steps(2);
+    assert!(h.state_mut().document_mut().text_style("Style1").is_some());
+    h.get_by_label("Set Current").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().current_text_style().name, "Style1");
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    type_all(&mut h, &["text", "0,30", "2.5", "0", "HELLO", ""]);
+    let look = h.state_mut().document_mut().entities().find_map(|e| match &e.geometry {
+        Geometry::Text { look, .. } => Some(look.clone()),
+        _ => None,
+    });
+    assert_eq!(look.map(|l| l.style), Some("Style1".to_string()));
+    // Annotate's dropdown shows it, and can switch back.
+    h.get_by_role_and_label(Role::Tab, "Annotate").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::ComboBox, "Text style").click();
+    h.run_steps(2);
+    h.get_by_label("Standard").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().current_text_style().name, "Standard");
 }

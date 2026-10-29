@@ -504,9 +504,12 @@ impl OxidraftApp {
                 rows.extend(attributes.iter().map(|a| (a.tag.as_str(), Value::Edit(a.value.clone()))));
                 rows
             }
-            Geometry::Text { position, height, rotation, width, content, .. } => vec![
+            Geometry::Text { position, height, rotation, width, content, look, .. } => vec![
                 ("Contents", Value::Edit(content.clone())),
+                ("Style", Value::Text(look.style.clone())),
                 ("Height", Value::Number(*height)),
+                ("Width factor", Value::Number(look.width_factor)),
+                ("Obliquing", Value::Number(look.oblique)),
                 ("Rotation", Value::Angle(*rotation)),
                 ("Width", Value::Number(*width)),
                 ("Position X", Value::Number(position.x)),
@@ -676,6 +679,8 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
         (Geometry::Text { height, .. }, "Height") if v > 0.0 => *height = v,
         (Geometry::Text { rotation, .. }, "Rotation") => *rotation = v.rem_euclid(360.0),
         (Geometry::Text { width, .. }, "Width") if v >= 0.0 => *width = v,
+        (Geometry::Text { look, .. }, "Width factor") if v > 0.0 => look.width_factor = v,
+        (Geometry::Text { look, .. }, "Obliquing") if v.abs() <= 85.0 => look.oblique = v,
         (Geometry::Text { position, .. }, "Position X") => position.x = v,
         (Geometry::Text { position, .. }, "Position Y") => position.y = v,
         (

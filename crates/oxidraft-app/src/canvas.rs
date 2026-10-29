@@ -932,11 +932,11 @@ impl OxidraftApp {
     /// Text at its attachment point. AutoCAD's text height is the capital
     /// height, about 0.7 of the font size.
     fn draw_text(&self, painter: &Painter, rect: Rect, g: &Geometry, stroke: Stroke) {
-        let Geometry::Text { position, height, rotation, width, attach, content } = g else { return };
+        let Geometry::Text { position, height, rotation, width, attach, content, look } = g else { return };
         let anchor = self.view.to_screen(rect, *position);
         // A selected text glows as a box instead.
         if stroke.width >= 4.0 {
-            let corners = text_box(*position, *height, *rotation, *width, *attach, content);
+            let corners = text_box(*position, *height, *rotation, *width, *attach, content, look.width_factor);
             let pts: Vec<Pos2> = corners.iter().map(|p| self.view.to_screen(rect, *p)).collect();
             painter.add(Shape::convex_polygon(pts, stroke.color.gamma_multiply(0.5), Stroke::NONE));
             return;
@@ -963,7 +963,8 @@ impl OxidraftApp {
         // World angles run counterclockwise; egui's clockwise on a y-down screen.
         let angle = -((*rotation + self.view.rotation) as f32).to_radians();
         let pos = anchor - egui::emath::Rot2::from_angle(angle) * offset;
-        painter.add(egui::epaint::TextShape::new(pos, galley, stroke.color).with_angle(angle));
+        let shape = egui::epaint::TextShape::new(pos, galley, stroke.color).with_angle(angle);
+        paint_text(painter, shape, anchor, look.width_factor as f32, look.oblique as f32, first - offset.y);
     }
 
     /// Solid fills as triangles; patterns as lines clipped to the boundary
@@ -1320,4 +1321,37 @@ fn tooltip(painter: &Painter, at: Pos2, lines: &[String], fields: Option<&[Strin
         }
         painter.galley(pos, galley, theme::text());
     }
+}
+
+/// Paints text stretched by `width_factor` and slanted by `oblique` degrees
+/// along its own line, about `anchor` (its text style's look); plain text
+/// as it is. `baseline` is where the first line sits below `anchor`, which
+/// slanting leaves in place.
+pub(crate) fn paint_text(
+    painter: &Painter,
+    shape: egui::epaint::TextShape,
+    anchor: Pos2,
+    width_factor: f32,
+    oblique: f32,
+    baseline: f32,
+) {
+    if (width_factor - 1.0).abs() < 1e-6 && oblique.abs() < 1e-6 {
+        painter.add(shape);
+        return;
+    }
+    let ctx = painter.ctx();
+    let font_size = ctx.fonts(|f| f.font_image_size());
+    let options = egui::epaint::TessellationOptions::default();
+    let mut tessellator = egui::epaint::Tessellator::new(ctx.pixels_per_point(), options, font_size, Vec::new());
+    let mut mesh = egui::Mesh::default();
+    tessellator.tessellate_text(&shape, &mut mesh);
+    let rot = egui::emath::Rot2::from_angle(shape.angle);
+    let shear = oblique.to_radians().tan();
+    for v in &mut mesh.vertices {
+        // Along the line and down from it; screen y points down, so up is negative.
+        let local = rot.inverse() * (v.pos - anchor);
+        let local = vec2(local.x * width_factor - (local.y - baseline) * shear, local.y);
+        v.pos = anchor + rot * local;
+    }
+    painter.add(Shape::mesh(mesh));
 }

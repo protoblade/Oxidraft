@@ -9,6 +9,59 @@ use oxidraft_geom::{
 use crate::entity::{Geometry, Vertex};
 use crate::hatch::HatchPattern;
 
+/// The text style every drawing has.
+pub const STANDARD: &str = "Standard";
+
+/// A text style (STYLE): the font named, a fixed height (0: asked for each
+/// text), how wide the characters are and how slanted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextStyle {
+    pub name: String,
+    /// The font file or family AutoCAD would use (Oxidraft draws its own
+    /// typeface; the name is kept for AutoCAD).
+    pub font: String,
+    pub height: f64,
+    pub width_factor: f64,
+    /// Degrees from upright, positive leaning right.
+    pub oblique: f64,
+}
+
+impl TextStyle {
+    pub fn standard() -> Self {
+        Self::new(STANDARD)
+    }
+
+    pub fn new(name: &str) -> Self {
+        Self { name: name.into(), font: "arial.ttf".into(), height: 0.0, width_factor: 1.0, oblique: 0.0 }
+    }
+}
+
+/// A text's style and how its characters are drawn: as wide and slanted as
+/// the style had them when the text was made (or as set since).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextLook {
+    pub style: String,
+    pub width_factor: f64,
+    pub oblique: f64,
+}
+
+impl Default for TextLook {
+    fn default() -> Self {
+        Self { style: STANDARD.into(), width_factor: 1.0, oblique: 0.0 }
+    }
+}
+
+impl TextLook {
+    pub fn of(style: &TextStyle) -> Self {
+        Self { style: style.name.clone(), width_factor: style.width_factor, oblique: style.oblique }
+    }
+
+    /// Drawn as plain upright characters of their usual width.
+    pub fn is_plain(&self) -> bool {
+        (self.width_factor - 1.0).abs() < 1e-9 && self.oblique.abs() < 1e-9
+    }
+}
+
 /// Which point of a text's box its position refers to (MTEXT attachment).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Attach {
@@ -174,8 +227,12 @@ pub fn text_box(
     wrap_width: f64,
     attach: Attach,
     content: &str,
+    width_factor: f64,
 ) -> [Point; 4] {
-    let (w, h) = text_extent(content, height, wrap_width);
+    // Wider characters: fewer to a wrapped line, each line wider.
+    let wf = if width_factor > 0.0 { width_factor } else { 1.0 };
+    let (w, h) = text_extent(content, height, wrap_width / wf);
+    let w = w * wf;
     let (fx, fy) = attach.fractions();
     let (x0, y0) = (-fx * w, -h * (1.0 - fy));
     [(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h)]
@@ -306,6 +363,7 @@ pub fn dimension_primitives(
     let angle = readable(r);
     let up = Point::ORIGIN.polar(1.0, angle + 90.0);
     out.push(Geometry::Text {
+        look: Default::default(),
         position: d1.midpoint(d2) + up * (s.gap * scale),
         height: s.text_height * scale,
         rotation: angle,
@@ -397,6 +455,7 @@ pub fn radial_primitives(
         out.push(arrowhead(point, w, s.arrow_size * scale));
         let right = text_at.x >= point.x;
         out.push(Geometry::Text {
+            look: Default::default(),
             position: text_at + Point::new(if right { s.gap } else { -s.gap } * scale, 0.0),
             height: s.text_height * scale,
             rotation: 0.0,
@@ -416,6 +475,7 @@ pub fn radial_primitives(
     let up = Point::ORIGIN.polar(1.0, angle + 90.0);
     let along = text_at - center;
     out.push(Geometry::Text {
+        look: Default::default(),
         position: center + u * along.dot(u) + up * (s.gap * scale),
         height: s.text_height * scale,
         rotation: angle,
@@ -463,6 +523,7 @@ pub fn angular_primitives(
     let angle = readable(mid - 90.0);
     let outward = Point::ORIGIN.polar(1.0, angle + 90.0).dot(Point::ORIGIN.polar(1.0, mid)) > 0.0;
     out.push(Geometry::Text {
+        look: Default::default(),
         position: vertex.polar(r + s.gap * scale, mid),
         height: s.text_height * scale,
         rotation: angle,
@@ -492,6 +553,7 @@ pub fn leader_primitives(points: &[Point], content: &str, scale: f64) -> Vec<Geo
     }
     if has_text {
         out.push(Geometry::Text {
+            look: Default::default(),
             position: land_end + Point::new(side * s.gap * scale, 0.0),
             height: s.text_height * scale,
             rotation: 0.0,
@@ -531,6 +593,7 @@ pub fn ordinate_primitives(feature: Point, end: Point, x_datum: bool, text: Opti
     let past = at(along + dir * s.gap * scale, across);
     let attach = if dir > 0.0 { Attach::MiddleLeft } else { Attach::MiddleRight };
     out.push(Geometry::Text {
+        look: Default::default(),
         position: past,
         height: s.text_height * scale,
         rotation,
@@ -576,6 +639,7 @@ pub fn arc_length_primitives(
     let at = center.polar(dim_radius, mid) + up * (s.gap * scale);
     let height = s.text_height * scale;
     out.push(Geometry::Text {
+        look: Default::default(),
         position: at,
         height,
         rotation,
@@ -630,6 +694,7 @@ pub fn jogged_primitives(
     out.push(arrowhead(point, u * -1.0, h));
     let rotation = readable(Point::ORIGIN.angle_to(u));
     out.push(Geometry::Text {
+        look: Default::default(),
         position: center_override.lerp(point, 0.35) + Point::ORIGIN.polar(s.gap * scale, rotation + 90.0),
         height: s.text_height * scale,
         rotation,

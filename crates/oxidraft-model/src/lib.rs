@@ -20,7 +20,7 @@ mod underlay;
 pub mod units;
 mod xref;
 
-pub use annotation::Attach;
+pub use annotation::{Attach, TextLook, TextStyle};
 pub use clip::clip_to_convex;
 pub use document::{
     AttributeDisplay, Block, BlockEntity, CurrentProps, Document, Group, Layer, NamedView, Styled, check_name,

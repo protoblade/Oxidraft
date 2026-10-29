@@ -69,6 +69,7 @@ fn sample() -> Document {
     // Annotation: a title, overall dimensions, a leader, and the right room hatched
     // around the table and column.
     doc.add(Geometry::Text {
+        look: Default::default(),
         position: Point::new(0.0, 80.0),
         height: 4.0,
         rotation: 0.0,
@@ -404,6 +405,7 @@ fn main() {
     }
     site.add_on_layer(
         Geometry::Text {
+            look: Default::default(),
             position: Point::new(110.0, 75.0),
             height: 3.0,
             rotation: 0.0,
@@ -635,6 +637,7 @@ fn main() {
         doc.add(rect(0.0, 0.0, 405.0, 257.0));
         doc.add(rect(285.0, 0.0, 405.0, 40.0));
         doc.add(Geometry::Text {
+            look: Default::default(),
             position: Point::new(292.0, 22.0),
             height: 6.0,
             rotation: 0.0,
@@ -643,6 +646,7 @@ fn main() {
             content: "GROUND FLOOR".into(),
         });
         doc.add(Geometry::Text {
+            look: Default::default(),
             position: Point::new(292.0, 9.0),
             height: 4.0,
             rotation: 0.0,
@@ -834,6 +838,33 @@ fn main() {
     save(&mut h, &dir, "43-compare");
     std::fs::remove_file(&earlier_path).ok();
     std::fs::remove_file(&current_path).ok();
+
+    // Text styles: a narrow, slanted one in the drawing and its dialog.
+    let mut h = harness();
+    {
+        let doc = h.state_mut().document_mut();
+        let narrow = oxidraft_model::TextStyle {
+            name: "Narrow".into(),
+            font: "romans.shx".into(),
+            height: 0.0,
+            width_factor: 0.6,
+            oblique: 20.0,
+        };
+        doc.set_text_style(narrow.clone()).unwrap();
+        doc.set_current_text_style("Narrow").unwrap();
+        doc.add(Geometry::Text {
+            position: Point::new(70.0, 4.0),
+            height: 3.0,
+            rotation: 0.0,
+            width: 0.0,
+            attach: Attach::BottomLeft,
+            content: "NARROW SLANTED".into(),
+            look: oxidraft_model::TextLook::of(&narrow),
+        });
+    }
+    h.state_mut().type_command("style");
+    h.run_steps(3);
+    save(&mut h, &dir, "44-text-style");
 
     // AutoComplete on the command line.
     let mut h = harness();

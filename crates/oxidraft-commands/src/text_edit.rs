@@ -133,9 +133,10 @@ pub struct JustifyText {
 /// `g` hung from `attach` instead, its box where it was.
 fn justified(g: &Geometry, to: Attach) -> Geometry {
     let mut g = g.clone();
-    if let Geometry::Text { position, height, rotation, width, attach, content } = &mut g {
-        let now = text_box(*position, *height, *rotation, *width, *attach, content);
-        let at_origin = text_box(Point::ORIGIN, *height, *rotation, *width, to, content);
+    if let Geometry::Text { position, height, rotation, width, attach, content, look } = &mut g {
+        let wf = look.width_factor;
+        let now = text_box(*position, *height, *rotation, *width, *attach, content, wf);
+        let at_origin = text_box(Point::ORIGIN, *height, *rotation, *width, to, content, wf);
         *position = now[0] - at_origin[0];
         *attach = to;
     }
@@ -202,6 +203,7 @@ mod tests {
     fn scaletext_and_justifytext() {
         let (mut e, mut d) = (Engine::new(), Document::new());
         let t = d.add(Geometry::Text {
+            look: Default::default(),
             position: Point::new(10.0, 10.0),
             height: 2.0,
             rotation: 0.0,
@@ -217,13 +219,13 @@ mod tests {
         e.select_all(&d);
         run(&mut e, &mut d, &["justifytext", "mc"]);
         let after = d.entity(t).unwrap().geometry.clone();
-        let Geometry::Text { attach, position, height, rotation, width, content } = &after else { panic!() };
+        let Geometry::Text { attach, position, height, rotation, width, content, .. } = &after else { panic!() };
         assert_eq!(*attach, Attach::MiddleCenter);
         // The text didn't move: its box is where it was.
         let Geometry::Text { position: p0, attach: a0, .. } = before else { panic!() };
         let (old, new) = (
-            text_box(p0, 6.0, 0.0, 0.0, a0, "ROOM"),
-            text_box(*position, *height, *rotation, *width, *attach, content),
+            text_box(p0, 6.0, 0.0, 0.0, a0, "ROOM", 1.0),
+            text_box(*position, *height, *rotation, *width, *attach, content, 1.0),
         );
         assert!(old.iter().zip(&new).all(|(a, b)| a.distance(*b) < 1e-9));
     }

@@ -2,44 +2,82 @@
 
 use oxidraft_geom::{EPSILON, Point};
 use oxidraft_model::{
-    Attach, Geometry, Vertex,
+    Attach, Document, Geometry, TextLook, TextStyle, Vertex,
     annotation::{LINE_SPACING, dimension_text, format_measurement, measurement},
 };
 
 use crate::{Command, Ctx, Input, Prompt, Step, Vars};
 
-fn style_line(height: f64) -> String {
-    format!("Current text style:  \"Standard\"  Text height:  {height:.4}  Annotative:  No")
+fn style_line(style: &TextStyle, height: f64) -> String {
+    let height = if style.height > 0.0 { style.height } else { height };
+    format!("Current text style:  \"{}\"  Text height:  {height:.4}  Annotative:  No", style.name)
+}
+
+/// TEXT's and MTEXT's Style option: `?` lists the styles; a name makes
+/// that style current. Returns the style chosen.
+fn choose_style(text: &str, ctx: &mut Ctx) -> Result<Option<TextStyle>, String> {
+    if text.trim() == "?" {
+        let names: Vec<String> = ctx.doc.text_styles().iter().map(|s| s.name.clone()).collect();
+        ctx.messages.push(format!("Text styles: {}", names.join(", ")));
+        return Ok(None);
+    }
+    ctx.doc.set_current_text_style(text)?;
+    Ok(Some(ctx.doc.current_text_style()))
+}
+
+fn current_style(doc: &Document) -> TextStyle {
+    doc.current_text_style()
 }
 
 enum TextStage {
     Start,
+    Style,
     Height { start: Point },
     Rotation { start: Point },
     Lines { start: Point, rotation: f64, line: usize },
 }
 
-/// TEXT (DTEXT): single-line text, one object per line; an empty line ends it.
+/// TEXT (DTEXT): single-line text, one object per line; an empty line ends
+/// it. In the current text style; a style with a height doesn't ask for one.
 pub struct SingleText {
     stage: TextStage,
     height: f64,
+    style: TextStyle,
 }
 
 impl Default for SingleText {
     fn default() -> Self {
-        Self { stage: TextStage::Start, height: 2.5 }
+        Self { stage: TextStage::Start, height: 2.5, style: TextStyle::standard() }
+    }
+}
+
+impl SingleText {
+    /// After the start point: the height, unless the style fixes it.
+    fn after_start(&mut self, start: Point) {
+        self.stage = if self.style.height > 0.0 {
+            self.height = self.style.height;
+            TextStage::Rotation { start }
+        } else {
+            TextStage::Height { start }
+        };
     }
 }
 
 impl Command for SingleText {
     fn start(&mut self, vars: &Vars) -> Option<String> {
         self.height = vars.text_height;
-        Some(format!("{}  Justify:  Left", style_line(self.height)))
+        None
+    }
+
+    fn prepare(&mut self, doc: &Document) -> Option<String> {
+        self.style = current_style(doc);
+        Some(format!("{}  Justify:  Left", style_line(&self.style, self.height)))
     }
 
     fn prompt(&self) -> Prompt {
         match self.stage {
-            TextStage::Start => Prompt::new("Specify start point of text"),
+            TextStage::Start => Prompt::new("Specify start point of text").with_keywords(&["Style"]),
+            TextStage::Style => Prompt::new("Enter style name or [?]").with_default(&self.style.name),
             TextStage::Height { .. } => Prompt::new("Specify height").with_default(format!("{:.4}", self.height)),
             TextStage::Rotation { .. } => Prompt::new("Specify rotation angle of text").with_default("0"),
             TextStage::Lines { .. } => Prompt::new("Enter text"),
@@ -48,7 +86,16 @@ impl Command for SingleText {
 
     fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
         match (&self.stage, input) {
-            (TextStage::Start, Input::Point(p)) => self.stage = TextStage::Height { start: p },
+            (TextStage::Start, Input::Point(p)) => self.after_start(p),
+            (TextStage::Start, Input::Keyword(_)) => self.stage = TextStage::Style,
+            (TextStage::Style, Input::Text(t)) => {
+                if let Some(style) = choose_style(&t, ctx)? {
+                    ctx.messages.push(style_line(&style, self.height));
+                    self.style = style;
+                    self.stage = TextStage::Start;
+                }
+            }
+            (TextStage::Style, Input::Enter) => self.stage = TextStage::Start,
             (TextStage::Height { start }, input @ (Input::Value(_) | Input::Point(_) | Input::Enter)) => {
                 let h = match input {
                     Input::Value(v) => v,
@@ -73,6 +120,7 @@ impl Command for SingleText {
             (TextStage::Lines { start, rotation, line }, Input::Text(t)) => {
                 let offset = Point::new(0.0, -(*line as f64) * self.height * LINE_SPACING);
                 ctx.doc.add(Geometry::Text {
+                    look: TextLook::of(&self.style),
                     position: (*start + offset).rotated_about(*start, *rotation),
                     height: self.height,
                     rotation: *rotation,
@@ -96,7 +144,7 @@ impl Command for SingleText {
     }
 
     fn wants_text(&self) -> bool {
-        matches!(self.stage, TextStage::Lines { .. })
+        matches!(self.stage, TextStage::Lines { .. } | TextStage::Style)
     }
 
     fn text_with_spaces(&self) -> bool {
@@ -107,22 +155,25 @@ impl Command for SingleText {
 enum MTextStage {
     First,
     Opposite { first: Point },
+    Style { first: Point },
     Height { first: Point },
     Rotation { first: Point },
     Width { first: Point },
     Content { position: Point, width: f64 },
 }
 
-/// MTEXT: paragraph text in a box. Type `\P` for a new paragraph.
+/// MTEXT: paragraph text in a box, in the current text style. Type `\P`
+/// for a new paragraph.
 pub struct MText {
     stage: MTextStage,
     height: f64,
     rotation: f64,
+    style: TextStyle,
 }
 
 impl Default for MText {
     fn default() -> Self {
-        Self { stage: MTextStage::First, height: 2.5, rotation: 0.0 }
+        Self { stage: MTextStage::First, height: 2.5, rotation: 0.0, style: TextStyle::standard() }
     }
 }
 
@@ -136,15 +187,24 @@ impl MText {
 impl Command for MText {
     fn start(&mut self, vars: &Vars) -> Option<String> {
         self.height = vars.text_height;
-        Some(style_line(self.height))
+        None
+    }
+
+    fn prepare(&mut self, doc: &Document) -> Option<String> {
+        self.style = current_style(doc);
+        if self.style.height > 0.0 {
+            self.height = self.style.height;
+        }
+        Some(style_line(&self.style, self.height))
     }
 
     fn prompt(&self) -> Prompt {
         match self.stage {
             MTextStage::First => Prompt::new("Specify first corner"),
             MTextStage::Opposite { .. } => {
-                Prompt::new("Specify opposite corner").with_keywords(&["Height", "Rotation", "Width"])
+                Prompt::new("Specify opposite corner").with_keywords(&["Height", "Rotation", "Style", "Width"])
             }
+            MTextStage::Style { .. } => Prompt::new("Enter style name or [?]").with_default(&self.style.name),
             MTextStage::Height { .. } => Prompt::new("Specify height").with_default(format!("{:.4}", self.height)),
             MTextStage::Rotation { .. } => {
                 Prompt::new("Specify rotation angle").with_default(format!("{:.0}", self.rotation))
@@ -171,6 +231,18 @@ impl Command for MText {
             (MTextStage::Opposite { first }, Input::Keyword("Width")) => {
                 self.stage = MTextStage::Width { first: *first }
             }
+            (MTextStage::Opposite { first }, Input::Keyword(_)) => self.stage = MTextStage::Style { first: *first },
+            (MTextStage::Style { first }, Input::Text(t)) => {
+                let first = *first;
+                if let Some(style) = choose_style(&t, ctx)? {
+                    if style.height > 0.0 {
+                        self.height = style.height;
+                    }
+                    self.style = style;
+                    self.stage = MTextStage::Opposite { first };
+                }
+            }
+            (MTextStage::Style { first }, Input::Enter) => self.stage = MTextStage::Opposite { first: *first },
             (MTextStage::Height { first }, input @ (Input::Value(_) | Input::Enter)) => {
                 if let Input::Value(h) = input {
                     if h <= EPSILON {
@@ -192,6 +264,7 @@ impl Command for MText {
             }
             (MTextStage::Content { position, width }, Input::Text(content)) => {
                 ctx.doc.add(Geometry::Text {
+                    look: TextLook::of(&self.style),
                     position: *position,
                     height: self.height,
                     rotation: self.rotation,
@@ -222,7 +295,7 @@ impl Command for MText {
     }
 
     fn wants_text(&self) -> bool {
-        matches!(self.stage, MTextStage::Content { .. })
+        matches!(self.stage, MTextStage::Content { .. } | MTextStage::Style { .. })
     }
 
     fn text_with_spaces(&self) -> bool {

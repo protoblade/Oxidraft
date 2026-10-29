@@ -25,6 +25,7 @@ mod settings;
 mod shortcut_menu;
 mod styles;
 mod tables;
+mod text_styles;
 pub mod theme;
 mod tiles;
 mod underlay;

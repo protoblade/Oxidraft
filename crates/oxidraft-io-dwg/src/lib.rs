@@ -160,6 +160,7 @@ mod tests {
         );
         doc.add(Geometry::Circle { center: Point::new(50.0, 50.0), radius: 5.0 });
         doc.add(Geometry::Text {
+            look: Default::default(),
             position: Point::new(10.0, 10.0),
             height: 2.5,
             rotation: 30.0,
@@ -371,6 +372,7 @@ mod tests {
         let plan = doc.add_layout(Layout { id: MODEL, name: "Plan 1-500".into(), tab_order: 2, paper: a3 });
         doc.set_space(sheet);
         doc.add(Geometry::Text {
+            look: Default::default(),
             position: Point::new(300.0, 20.0),
             height: 5.0,
             rotation: 0.0,
@@ -509,6 +511,48 @@ mod tests {
         // Unset: ByLayer.
         let plain = read(&write(&Document::new(), Version::R2018).unwrap()).unwrap().imported.document;
         assert_eq!(plain.current_props(), &oxidraft_model::CurrentProps::by_layer());
+    }
+
+    #[test]
+    fn text_styles_survive() {
+        use oxidraft_model::{Attach, TextLook, TextStyle};
+        let mut doc = Document::new();
+        let narrow = TextStyle {
+            name: "Narrow".into(),
+            font: "romans.shx".into(),
+            height: 0.0,
+            width_factor: 0.7,
+            oblique: 15.0,
+        };
+        doc.set_text_style(narrow.clone()).unwrap();
+        doc.set_current_text_style("Narrow").unwrap();
+        let text = |content: &str, attach| Geometry::Text {
+            position: Point::new(0.0, 0.0),
+            height: 2.5,
+            rotation: 0.0,
+            width: 0.0,
+            attach,
+            content: content.into(),
+            look: TextLook::of(&narrow),
+        };
+        doc.add(text("ROOM", Attach::BottomLeft));
+        doc.add(text("Two\\Plines", Attach::MiddleCenter));
+        let check = |back: &Document, how: &str| {
+            assert_eq!(back.text_style("narrow"), Some(&narrow), "{how}");
+            assert!(back.text_style("Standard").is_some(), "{how}");
+            assert_eq!(back.current_text_style().name, "Narrow", "{how}");
+            for e in back.entities() {
+                let Geometry::Text { look, .. } = &e.geometry else { continue };
+                assert_eq!(look, &TextLook::of(&narrow), "{how}");
+            }
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        check(&oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
     }
 
     #[test]

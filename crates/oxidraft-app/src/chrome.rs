@@ -577,11 +577,13 @@ impl OxidraftApp {
 
     /// The Annotate tab: text, dimensions, leaders, tables and markup.
     fn annotate_tab(&mut self, ui: &mut Ui) {
-        ribbon_panel(ui, "Text", |ui| {
+        let text_panel = ribbon_panel_more(ui, "Text", |ui| {
             for t in ANNOTATE_TEXT {
                 self.large_tool(ui, t);
             }
             ui.vertical(|ui| {
+                ui.add_space(2.0);
+                self.text_style_combo(ui);
                 for t in [
                     tool(Icon::Zoom, "Find Text", Some("FIND"), "Finds and replaces text"),
                     tool(Icon::Scale, "Scale", Some("SCALETEXT"), "Gives text a new height, each about its own point"),
@@ -591,6 +593,10 @@ impl OxidraftApp {
                 }
             });
         });
+        // The panel's title opens STYLE, as its arrow does in AutoCAD.
+        if text_panel.clicked() {
+            self.run("STYLE");
+        }
         ribbon_panel(ui, "Dimensions", |ui| {
             self.large_tool(
                 ui,

@@ -89,6 +89,30 @@ fn lineweight_from_dxf(v: i16) -> Lineweight {
     if v == 0 { Lineweight::ByLayer } else { Lineweight::from_dxf(v) }
 }
 
+/// A text style's name in DXF: Standard as the dxf crate (and AutoCAD's
+/// readers) expect it, "STANDARD".
+fn style_to_dxf(name: &str) -> String {
+    if name.trim().is_empty() || name.eq_ignore_ascii_case(oxidraft_model::annotation::STANDARD) {
+        "STANDARD".into()
+    } else {
+        name.to_string()
+    }
+}
+
+/// An oblique angle as read: within 85° and without the rounding of a
+/// trip through radians.
+fn oblique_from_dxf(a: f64) -> f64 {
+    ((a * 1e9).round() / 1e9).clamp(-85.0, 85.0)
+}
+
+fn style_from_dxf(name: &str) -> String {
+    if name.trim().is_empty() || name.eq_ignore_ascii_case(oxidraft_model::annotation::STANDARD) {
+        oxidraft_model::annotation::STANDARD.into()
+    } else {
+        name.to_string()
+    }
+}
+
 fn to_dxf_attach(a: Attach) -> AttachmentPoint {
     match a {
         Attach::TopLeft => AttachmentPoint::TopLeft,
@@ -333,14 +357,16 @@ impl Exporter {
                 rotation: placement.rotation,
                 ..Default::default()
             })],
-            Geometry::Text { position, height, rotation, width, attach, content } => {
-                let single_line = *attach == Attach::BottomLeft && !content.contains("\\P") && !content.contains('\n');
-                if single_line {
+            Geometry::Text { position, height, rotation, width, attach, content, look } => {
+                if is_single_line(*attach, content) {
                     return vec![EntityType::Text(dxf::entities::Text {
                         location: to_dxf(*position),
                         text_height: *height,
                         value: content.clone(),
                         rotation: *rotation,
+                        relative_x_scale_factor: look.width_factor,
+                        oblique_angle: look.oblique,
+                        text_style_name: style_to_dxf(&look.style),
                         ..Default::default()
                     })];
                 }
@@ -353,6 +379,7 @@ impl Exporter {
                     text: content.replace('\n', "\\P"),
                     rotation_angle: r,
                     x_axis_direction: dxf::Vector::new(r.cos(), r.sin(), 0.0),
+                    text_style_name: style_to_dxf(&look.style),
                     ..Default::default()
                 })]
             }
@@ -637,6 +664,74 @@ fn write_units(h: &mut dxf::Header, u: oxidraft_model::Units) {
     h.drawing_units = if english { DrawingUnits::English } else { DrawingUnits::Metric };
 }
 
+/// True if a text is written as TEXT rather than MTEXT.
+fn is_single_line(attach: Attach, content: &str) -> bool {
+    attach == Attach::BottomLeft && !content.contains("\\P") && !content.contains('\n')
+}
+
+/// The STYLE table and $TEXTSTYLE. A font named without an extension is a
+/// TrueType font's.
+fn write_text_styles(drawing: &mut Drawing, doc: &Document) {
+    for s in doc.text_styles() {
+        let name = style_to_dxf(&s.name);
+        let font = if s.font.contains('.') { s.font.clone() } else { format!("{}.ttf", s.font.to_lowercase()) };
+        let set = |x: &mut dxf::tables::Style| {
+            x.text_height = s.height;
+            x.width_factor = s.width_factor;
+            x.oblique_angle = s.oblique;
+            x.primary_font_file_name = font.clone();
+        };
+        if let Some(x) = drawing.styles_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
+            set(x);
+            continue;
+        }
+        let mut x = dxf::tables::Style { name, ..Default::default() };
+        set(&mut x);
+        drawing.add_style(x);
+    }
+    drawing.header.text_style = style_to_dxf(&doc.current_text_style().name);
+}
+
+fn read_text_styles(doc: &mut Document, drawing: &Drawing) {
+    for s in drawing.styles() {
+        // Unnamed styles are shape files that linetypes use.
+        if s.name.trim().is_empty() || s.text_generation_flags & 1 != 0 {
+            continue;
+        }
+        let style = oxidraft_model::TextStyle {
+            name: style_from_dxf(&s.name),
+            font: if s.primary_font_file_name.is_empty() {
+                "arial.ttf".into()
+            } else {
+                s.primary_font_file_name.clone()
+            },
+            height: s.text_height.max(0.0),
+            width_factor: if s.width_factor > 0.0 { s.width_factor } else { 1.0 },
+            oblique: oblique_from_dxf(s.oblique_angle),
+        };
+        let _ = doc.set_text_style(style);
+    }
+    let _ = doc.set_current_text_style(&style_from_dxf(&drawing.header.text_style));
+}
+
+/// MTEXT has no width factor or slant of its own: its style's.
+fn restyle_mtext(doc: &mut Document) {
+    let ids: Vec<_> = doc
+        .all_entities()
+        .filter(|e| matches!(&e.geometry, Geometry::Text { attach, content, .. } if !is_single_line(*attach, content)))
+        .map(|e| e.id)
+        .collect();
+    for id in ids {
+        let Some(Geometry::Text { look, .. }) = doc.entity(id).map(|e| &e.geometry) else { continue };
+        let Some(style) = doc.text_style(&look.style).cloned() else { continue };
+        doc.update(id, |e| {
+            if let Geometry::Text { look, .. } = &mut e.geometry {
+                (look.width_factor, look.oblique) = (style.width_factor, style.oblique);
+            }
+        });
+    }
+}
+
 fn read_units(h: &dxf::Header) -> oxidraft_model::Units {
     use oxidraft_model::{AngleType, LengthType};
     oxidraft_model::Units {
@@ -666,6 +761,7 @@ fn build(doc: &Document) -> Built {
     drawing.header.dimension_unit_tolerance_decimal_places = dim.decimals as i16;
     drawing.header.insertion_base = to_dxf(doc.insbase());
     write_units(&mut drawing.header, doc.units());
+    write_text_styles(&mut drawing, doc);
     let current = doc.current_props();
     drawing.header.current_entity_color = to_dxf_color(current.color);
     drawing.header.current_entity_line_type = linetype_to_dxf(&current.linetype);
@@ -993,6 +1089,11 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
         EntityType::Text(t) => {
             let (attach, second) = text_justification(t.horizontal_text_justification, t.vertical_text_justification);
             Geometry::Text {
+                look: oxidraft_model::TextLook {
+                    style: style_from_dxf(&t.text_style_name),
+                    width_factor: if t.relative_x_scale_factor > 0.0 { t.relative_x_scale_factor } else { 1.0 },
+                    oblique: oblique_from_dxf(t.oblique_angle),
+                },
                 position: from_dxf(if second { &t.second_alignment_point } else { &t.location }),
                 height: t.text_height,
                 rotation: t.rotation,
@@ -1021,7 +1122,9 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
             let x = &m.x_axis_direction;
             let rotation =
                 if x.x.hypot(x.y) > 1e-9 { x.y.atan2(x.x).to_degrees() } else { m.rotation_angle.to_degrees() };
+            // Its width factor and slant are its style's (see `restyle_mtext`).
             Geometry::Text {
+                look: oxidraft_model::TextLook { style: style_from_dxf(&m.text_style_name), ..Default::default() },
                 position: from_dxf(&m.insertion_point),
                 height: m.initial_text_height,
                 rotation,
@@ -1193,6 +1296,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
     }
     doc.set_insbase(from_dxf(&drawing.header.insertion_base));
     doc.set_units(read_units(&drawing.header));
+    read_text_styles(&mut doc, drawing);
     doc.set_current_props(oxidraft_model::CurrentProps {
         color: from_dxf_color(&drawing.header.current_entity_color),
         linetype: linetype_from_dxf(&drawing.header.current_entity_line_type),
@@ -1518,6 +1622,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         .collect();
     order.sort_by(|a, b| a.0.total_cmp(&b.0));
     doc.set_draw_order(&order.into_iter().map(|(_, id)| id).collect::<Vec<_>>());
+    restyle_mtext(&mut doc);
     // A freshly opened file starts with an empty undo history.
     doc.forget_history();
     Imported { document: doc, skipped }
@@ -2244,6 +2349,7 @@ mod tests {
     fn roundtrip_annotations_and_hatches() {
         let mut doc = Document::new();
         let mtext = Geometry::Text {
+            look: Default::default(),
             position: Point::new(1.0, 2.0),
             height: 2.5,
             rotation: 30.0,
@@ -2252,6 +2358,7 @@ mod tests {
             content: "Line one\\PLine two".into(),
         };
         let single = Geometry::Text {
+            look: Default::default(),
             position: Point::new(5.0, 5.0),
             height: 3.0,
             rotation: 0.0,

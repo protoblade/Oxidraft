@@ -37,7 +37,9 @@ pub enum Item {
     Fill { polygons: Vec<Vec<Point>>, color: Rgb },
     /// A line of text from the start of its baseline; `size` is the font
     /// size in millimeters.
-    Text { at: Point, rotation: f64, size: f64, text: String, color: Rgb },
+    /// A line of text from its baseline's start: `width_factor` stretches
+    /// it along the line, `oblique` slants it (degrees, leaning right).
+    Text { at: Point, rotation: f64, size: f64, text: String, color: Rgb, width_factor: f64, oblique: f64 },
     /// Picture `name` over the parallelogram from `origin` along `u` and
     /// `v`, inside `clip` when that has points; in grays for monochrome
     /// and grayscale pen tables.
@@ -293,10 +295,11 @@ impl<'a> Plotter<'a> {
     /// anchored by its attachment between the first line's capitals and
     /// the last line's baseline.
     fn text(&mut self, g: &Geometry, color: Rgb) {
-        let Geometry::Text { position, height, rotation, width, attach, content } = g else { return };
+        let Geometry::Text { position, height, rotation, width, attach, content, look } = g else { return };
         let size = height / 0.7;
-        let lines = font::lines(content, if *width > 0.0 { width / size } else { 0.0 });
-        let widest = lines.iter().map(|l| FONT.width(l)).fold(0.0, f64::max);
+        let wf = if look.width_factor > 0.0 { look.width_factor } else { 1.0 };
+        let lines = font::lines(content, if *width > 0.0 { width / (size * wf) } else { 0.0 });
+        let widest = lines.iter().map(|l| FONT.width(l)).fold(0.0, f64::max) * wf;
         let row = FONT.row_height();
         let span = 0.7 + (lines.len() as f64 - 1.0) * row;
         let (fx, fy) = attach.fractions();
@@ -312,6 +315,8 @@ impl<'a> Plotter<'a> {
                 size: size * self.unit(),
                 text: line,
                 color,
+                width_factor: wf,
+                oblique: look.oblique,
             };
             self.items.push(item);
         }
@@ -533,6 +538,7 @@ mod tests {
         let id = doc.add(Geometry::Line { start: Point::ORIGIN, end: Point::new(50.0, 0.0) });
         doc.update(id, |e| e.linetype = "DASHED".into());
         doc.add(Geometry::Text {
+            look: Default::default(),
             position: Point::new(10.0, 20.0),
             height: 3.5,
             rotation: 0.0,

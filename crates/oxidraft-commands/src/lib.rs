@@ -65,6 +65,7 @@ mod splinedit;
 mod stretch;
 mod table;
 mod text_edit;
+pub mod text_style;
 mod trim_extend;
 mod underlay;
 mod units_cmd;
