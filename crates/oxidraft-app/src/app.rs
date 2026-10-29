@@ -101,6 +101,9 @@ pub struct OxidraftApp {
     pub(crate) view_manager: Option<crate::named_views::ViewManager>,
     pub(crate) show_file_tabs: bool,
     pub(crate) show_layout_tabs: bool,
+    /// PURGE's and ALIASEDIT's dialogs.
+    pub(crate) purge: Option<crate::manage::PurgeDialog>,
+    pub(crate) alias_dialog: Option<crate::manage::AliasDialog>,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
     pub(crate) ribbon_space: oxidraft_model::Space,
@@ -234,6 +237,8 @@ impl OxidraftApp {
             view_manager: None,
             show_file_tabs: true,
             show_layout_tabs: true,
+            purge: None,
+            alias_dialog: None,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
@@ -532,6 +537,8 @@ impl OxidraftApp {
             "PAGESETUP" => self.page_setup_command(),
             "TABLE" | "TB" => self.open_insert_table(),
             "VIEW" | "V" => self.open_view_manager(),
+            "PURGE" | "PU" => self.open_purge(),
+            "ALIASEDIT" => self.open_aliases(),
             "FILETAB" => self.show_file_tabs = true,
             "FILETABCLOSE" => self.show_file_tabs = false,
             // Viewports and layouts are made on the sheets: out of the
@@ -551,7 +558,11 @@ impl OxidraftApp {
         self.recall = None;
         if !self.engine.is_active() {
             // AutoComplete: Enter accepts the highlighted suggestion.
-            if let Some(c) = Engine::suggest(&text).get(self.suggestion) {
+            // The user's own aliases first; then AutoComplete's pick.
+            let expanded = self.engine.expand_alias(&text);
+            if expanded != text.trim() {
+                text = expanded;
+            } else if let Some(c) = Engine::suggest(&text).get(self.suggestion) {
                 text = c.name.to_string();
             }
             self.suggestion = 0;
@@ -621,6 +632,8 @@ impl OxidraftApp {
             || self.insert_table.is_some()
             || self.table_editor.is_some()
             || self.view_manager.is_some()
+            || self.purge.is_some()
+            || self.alias_dialog.is_some()
             || self.from_template.is_some()
             || self.cycling.is_some();
         if !open || !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -639,6 +652,8 @@ impl OxidraftApp {
             && self.insert_table.take().is_none()
             && self.table_editor.take().is_none()
             && self.view_manager.take().is_none()
+            && self.purge.take().is_none()
+            && self.alias_dialog.take().is_none()
             && self.from_template.take().is_none()
             && self.cycling.take().is_none()
         {
@@ -853,6 +868,8 @@ impl eframe::App for OxidraftApp {
         self.insert_table_dialog(&ctx);
         self.table_editor_dialog(&ctx);
         self.view_manager_dialog(&ctx);
+        self.purge_dialog(&ctx);
+        self.alias_dialog(&ctx);
         self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);

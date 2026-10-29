@@ -97,6 +97,10 @@ pub enum Icon {
     ViewManager,
     FileTabs,
     LayoutTabs,
+    Purge,
+    Overkill,
+    Audit,
+    Aliases,
 }
 
 /// Accent colors used inside icons, as in AutoCAD's icon set.
@@ -415,6 +419,31 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
             pen.closed(&[(0.1, 0.15), (0.9, 0.15), (0.9, 0.85), (0.1, 0.85)], c);
             pen.filled(&[(0.14, y0), (0.4, y0), (0.4, y1), (0.14, y1)], blue);
             pen.closed(&[(0.42, y0), (0.68, y0), (0.68, y1), (0.42, y1)], c);
+        }
+        // A broom over a sheet.
+        Icon::Purge => {
+            pen.closed(&[(0.12, 0.62), (0.88, 0.62), (0.88, 0.9), (0.12, 0.9)], c);
+            pen.line(&[(0.75, 0.08), (0.45, 0.55)], yellow);
+            pen.filled(&[(0.35, 0.5), (0.55, 0.6), (0.42, 0.78), (0.24, 0.66)], yellow);
+        }
+        // Two lines on top of each other, one struck out.
+        Icon::Overkill => {
+            pen.line(&[(0.1, 0.45), (0.9, 0.45)], c);
+            pen.line(&[(0.1, 0.6), (0.9, 0.6)], blue);
+            pen.line(&[(0.62, 0.72), (0.82, 0.92)], red);
+            pen.line(&[(0.62, 0.92), (0.82, 0.72)], red);
+        }
+        // A sheet with a check mark.
+        Icon::Audit => {
+            pen.closed(&[(0.18, 0.1), (0.72, 0.1), (0.72, 0.9), (0.18, 0.9)], c);
+            pen.line(&[(0.32, 0.52), (0.46, 0.68), (0.88, 0.22)], green);
+        }
+        // A key cap with letters.
+        Icon::Aliases => {
+            pen.closed(&[(0.12, 0.22), (0.88, 0.22), (0.88, 0.78), (0.12, 0.78)], c);
+            pen.line(&[(0.25, 0.65), (0.35, 0.35), (0.45, 0.65)], blue);
+            pen.line(&[(0.29, 0.54), (0.41, 0.54)], blue);
+            pen.line(&[(0.58, 0.35), (0.58, 0.65), (0.75, 0.65)], yellow);
         }
         Icon::Leader => {
             pen.arrow((0.55, 0.45), (0.12, 0.88), c);

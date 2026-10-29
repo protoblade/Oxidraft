@@ -18,6 +18,7 @@ use crate::{
     break_join::Join,
     chamfer::Chamfer,
     circle::Circle,
+    cleanup::{Audit, Overkill, Purge},
     clipboard::CopyClip,
     clipboard::Paste,
     dims::DimAngular,
@@ -667,6 +668,31 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "PSPACE", aliases: &["PS"], description: "Go back to a layout's paper space", make: None },
     CommandInfo { name: "VPMIN", aliases: &[], description: "Go back to the layout from VPMAX", make: None },
     CommandInfo {
+        name: "PURGE",
+        aliases: &["PU"],
+        description: "Remove unused layers, blocks and linetypes, and empty objects",
+        make: None,
+    },
+    CommandInfo {
+        name: "-PURGE",
+        aliases: &[],
+        description: "Purge on the command line: Blocks, LAyers, LTypes, Zero-length geometry, Empty text, All",
+        make: Some(|| Box::new(Purge)),
+    },
+    CommandInfo {
+        name: "OVERKILL",
+        aliases: &["OV"],
+        description: "Delete duplicate objects and join lines lying along each other",
+        make: Some(|| Box::new(Overkill)),
+    },
+    CommandInfo {
+        name: "AUDIT",
+        aliases: &[],
+        description: "Check the drawing for broken objects, and mend them",
+        make: Some(|| Box::new(Audit)),
+    },
+    CommandInfo { name: "ALIASEDIT", aliases: &[], description: "Edit your own command aliases", make: None },
+    CommandInfo {
         name: "VPORTS",
         aliases: &["-VPORTS"],
         description: "Split model space's drawing area into 1, 2, 3 or 4 viewports",
@@ -789,6 +815,9 @@ pub struct Engine {
     pub dynamic_input: bool,
     /// Settings remembered between commands (OFFSETDIST, FILLETRAD, …).
     pub vars: Vars,
+    /// The user's own command aliases (ALIASEDIT), as (alias, command);
+    /// they come before the built-in ones.
+    pub aliases: Vec<(String, String)>,
     /// View changes asked for since the app last took them.
     view_requests: Vec<ViewRequest>,
     ui_requests: Vec<UiRequest>,
@@ -827,6 +856,7 @@ impl Engine {
             polar_increment: 90.0,
             dynamic_input: true,
             vars: Vars::default(),
+            aliases: Vec::new(),
             view_requests: Vec::new(),
             ui_requests: Vec::new(),
             copied: None,
@@ -1258,6 +1288,15 @@ impl Engine {
 
     // ---- input ------------------------------------------------------------------
 
+    /// The command a user alias stands for, or `text` as it is.
+    pub fn expand_alias(&self, text: &str) -> String {
+        let t = text.trim();
+        self.aliases
+            .iter()
+            .find(|(alias, _)| alias.eq_ignore_ascii_case(t))
+            .map_or_else(|| t.to_string(), |(_, command)| command.clone())
+    }
+
     /// Handles text submitted on the command line (Enter or Space).
     pub fn submit(&mut self, text: &str, doc: &mut Document, cursor: Point, pick_tolerance: f64) {
         let text = text.trim();
@@ -1267,6 +1306,8 @@ impl Engine {
                 self.inputs.push(text.to_string());
             }
         }
+        let expanded = if self.active.is_none() { self.expand_alias(text) } else { text.to_string() };
+        let text = expanded.as_str();
         let Some(active) = &self.active else {
             self.window_start = None;
             self.log(format!("Command: {text}"));
@@ -2547,6 +2588,14 @@ mod tests {
         assert_eq!(e.selection().len(), 1);
         e.select_lasso(ring(&[(-1.0, -1.0), (16.0, -1.0), (16.0, 1.0), (-1.0, 1.0)]), false, true, &mut d, 0.5);
         assert!(e.selection().is_empty());
+    }
+
+    #[test]
+    fn user_aliases_run_their_commands() {
+        let (mut e, mut d) = (engine(), Document::new());
+        e.aliases = vec![("QQ".into(), "CIRCLE".into())];
+        type_all(&mut e, &mut d, &["qq", "0,0", "5"]);
+        assert!(matches!(only(&d), Geometry::Circle { radius, .. } if radius == 5.0));
     }
 
     #[test]

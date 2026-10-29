@@ -1588,3 +1588,36 @@ fn ucs_icon_navigation_bar_and_file_tabs_can_be_hidden() {
     h.run_steps(2);
     assert!(h.state_mut().engine_mut().vars.nav_bar);
 }
+
+#[test]
+fn purge_dialog_takes_out_unused_layers() {
+    let mut h = app_with_line();
+    h.state_mut().document_mut().add_layer(oxidraft_model::Layer::new("Idle", 3));
+    h.run_steps(1);
+    type_all(&mut h, &["purge"]);
+    h.run_steps(2);
+    assert!(h.query_by_label("Idle").is_some(), "listed");
+    h.get_by_label("Purge All").click();
+    h.run_steps(2);
+    assert!(h.state_mut().document_mut().layer("Idle").is_none());
+    assert!(h.query_by_label("Nothing unused to purge.").is_some());
+}
+
+#[test]
+fn edit_aliases_adds_a_shortcut_of_your_own() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["aliasedit"]);
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Alias").focus();
+    h.get_by_role_and_label(Role::TextInput, "Alias").type_text("qq");
+    h.get_by_role_and_label(Role::TextInput, "Command").focus();
+    h.get_by_role_and_label(Role::TextInput, "Command").type_text("circle");
+    h.run_steps(1);
+    let add = h.get_by_label("Add").rect().center();
+    click(&mut h, add);
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    type_all(&mut h, &["qq"]);
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("CIRCLE"));
+}

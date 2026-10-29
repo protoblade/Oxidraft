@@ -189,6 +189,11 @@ enum Change {
         before: Vec<NamedView>,
         after: Vec<NamedView>,
     },
+    Linetype {
+        key: String,
+        before: Option<Linetype>,
+        after: Option<Linetype>,
+    },
     /// REFEDIT's session: started, its working set changed, or ended.
     RefEdit {
         before: Option<Box<RefEdit>>,
@@ -614,6 +619,20 @@ impl Document {
         }
     }
 
+    /// The drawing's own linetypes (not Continuous or the standard ones it
+    /// hasn't loaded).
+    pub fn own_linetypes(&self) -> Vec<String> {
+        self.linetypes.values().map(|l| l.name.clone()).collect()
+    }
+
+    /// Removes one of the drawing's linetypes (PURGE), undoably.
+    pub fn remove_linetype(&mut self, name: &str) -> bool {
+        let key = name.to_ascii_uppercase();
+        let Some(before) = self.linetypes.remove(&key) else { return false };
+        self.record(Change::Linetype { key, before: Some(before), after: None });
+        true
+    }
+
     /// LTSCALE.
     pub fn ltscale(&self) -> f64 {
         self.ltscale
@@ -977,13 +996,6 @@ impl Document {
         let mut table = self.table.clone();
         f(&mut table.layers);
         self.set_table(table);
-    }
-
-    /// Forgets a linetype definition the drawing has.
-    pub(crate) fn remove_linetype(&mut self, name: &str) {
-        if self.linetypes.remove(&name.to_ascii_uppercase()).is_some() {
-            self.revision += 1;
-        }
     }
 
     // ---- external references -----------------------------------------------
@@ -1357,6 +1369,7 @@ impl Document {
                     Change::RefEdit { .. } => "Reference edit",
                     Change::Layouts { .. } => "Layout",
                     Change::Views { .. } => "View",
+                    Change::Linetype { .. } => "Linetype",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -1409,6 +1422,12 @@ impl Document {
                 self.refedit = if forward { after } else { before }.as_deref().cloned()
             }
             Change::Views { before, after } => self.views = if forward { after } else { before }.clone(),
+            Change::Linetype { key, before, after } => {
+                match if forward { after } else { before } {
+                    Some(l) => self.linetypes.insert(key.clone(), l.clone()),
+                    None => self.linetypes.remove(key),
+                };
+            }
             Change::Layouts { before, after } => {
                 self.layouts = if forward { after } else { before }.clone();
                 // Undoing a new layout while drawing in it: back to model space.

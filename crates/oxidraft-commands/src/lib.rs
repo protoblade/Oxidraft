@@ -14,6 +14,7 @@ mod block;
 mod break_join;
 mod chamfer;
 mod circle;
+mod cleanup;
 mod clipboard;
 mod common;
 mod dims;

@@ -271,6 +271,8 @@ impl OxidraftApp {
                     self.home_tab(ui);
                 } else if self.ribbon_tab == LAYOUT_TAB {
                     self.layout_ribbon(ui);
+                } else if RIBBON_TABS[self.ribbon_tab] == "Manage" {
+                    self.manage_tab(ui);
                 } else if RIBBON_TABS[self.ribbon_tab] == "View" {
                     self.view_tab(ui);
                 } else if RIBBON_TABS[self.ribbon_tab] == "Annotate" {
@@ -444,6 +446,27 @@ impl OxidraftApp {
             if self.toggle_tool(ui, Icon::LayoutTabs, "Layout\nTabs", layouts, "Shows the Model and layout tabs") {
                 self.show_layout_tabs = !layouts;
             }
+        });
+    }
+
+    /// The Manage tab: cleaning the drawing up, and the user's aliases.
+    fn manage_tab(&mut self, ui: &mut Ui) {
+        ribbon_panel(ui, "Cleanup", |ui| {
+            for t in [
+                tool(Icon::Purge, "Purge", Some("PURGE"), "Removes layers, blocks and linetypes nothing uses (PU)"),
+                tool(
+                    Icon::Overkill,
+                    "Overkill",
+                    Some("OVERKILL"),
+                    "Deletes duplicate objects and joins lines along each other (OV)",
+                ),
+                tool(Icon::Audit, "Audit", Some("AUDIT"), "Checks the drawing for broken objects, and mends them"),
+            ] {
+                self.large_tool(ui, &t);
+            }
+        });
+        ribbon_panel(ui, "Customization", |ui| {
+            self.large_tool(ui, &tool(Icon::Aliases, "Edit\nAliases", Some("ALIASEDIT"), "Your own command aliases"));
         });
     }
 

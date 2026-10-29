@@ -20,6 +20,8 @@ pub struct Settings {
     pub properties_dock: Dock,
     /// The Blocks palette's library folder.
     pub block_library: Option<PathBuf>,
+    /// Command aliases of the user's own (ALIASEDIT), as (alias, command).
+    pub aliases: Vec<(String, String)>,
 }
 
 /// Where a palette sits: docked at the left or right of the drawing
@@ -77,6 +79,7 @@ impl OxidraftApp {
             theme::set(ctx, settings.color_theme, settings.background);
         }
         self.engine.vars.color_theme = u8::from(settings.color_theme == ColorTheme::Light);
+        self.engine.aliases = settings.aliases.clone();
         if settings != self.settings
             && let Some(path) = &self.settings_path
             && let Err(e) = settings.save(path)
@@ -162,6 +165,7 @@ mod tests {
             background: Background::White,
             properties_dock: Dock::Right,
             block_library: Some("/blocks".into()),
+            aliases: vec![("QQ".into(), "CIRCLE".into())],
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);

@@ -10,6 +10,7 @@ mod cmdline;
 mod icons;
 mod layers;
 mod layouts;
+mod manage;
 mod named_views;
 mod plot;
 mod properties;
