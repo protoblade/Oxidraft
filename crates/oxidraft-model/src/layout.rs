@@ -39,6 +39,48 @@ pub struct Paper {
 }
 
 impl Paper {
+    /// An ISO A4 sheet, landscape, as AutoCAD's Layout1 has: what a new
+    /// layout gets.
+    pub fn a4_landscape() -> Paper {
+        Paper {
+            size_name: "ISO_A4_(297.00_x_210.00_MM)".into(),
+            width: 297.0,
+            height: 210.0,
+            margins: [7.5, 20.0, 7.5, 20.0],
+            rotation: 0,
+            millimeters: true,
+            raw: Vec::new(),
+        }
+    }
+
+    /// The page setup with another paper: `size_name`, `width` x `height`
+    /// millimeters, `margins` (left, bottom, right, top, millimeters), and
+    /// `rotation` quarter turns. A page setup read from a file changes to
+    /// match, so it's written back with the new paper.
+    pub fn resized(&self, size_name: &str, width: f64, height: f64, margins: [f64; 4], rotation: u8) -> Paper {
+        let mut p = Paper {
+            size_name: size_name.to_string(),
+            width,
+            height,
+            margins,
+            rotation: rotation % 4,
+            millimeters: self.millimeters,
+            raw: self.raw.clone(),
+        };
+        let number = |v: f64| format!("{v:.6}");
+        for (code, value) in &mut p.raw {
+            *value = match *code {
+                4 => size_name.to_string(),
+                40..=43 => number(margins[(*code - 40) as usize]),
+                44 => number(width),
+                45 => number(height),
+                73 => (rotation % 4).to_string(),
+                _ => continue,
+            };
+        }
+        p
+    }
+
     /// The sheet and its printable area in paper space. As in AutoCAD, the
     /// origin is the printable area's lower-left corner. An unknown paper
     /// size is A4 landscape.

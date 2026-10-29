@@ -325,6 +325,96 @@ impl Document {
         id
     }
 
+    /// A name for a new layout: the first of Layout1, Layout2, … not taken.
+    pub fn next_layout_name(&self) -> String {
+        (1..).map(|n| format!("Layout{n}")).find(|n| self.layout_named(n).is_none()).unwrap_or_default()
+    }
+
+    /// The layout called `name`, ignoring case.
+    pub fn layout_named(&self, name: &str) -> Option<&crate::layout::Layout> {
+        self.layouts.iter().find(|l| l.name.eq_ignore_ascii_case(name.trim()))
+    }
+
+    /// Whether `name` can name a layout (but `except`): valid, not
+    /// "Model", and not another layout's, ignoring case.
+    pub fn check_layout_name(&self, name: &str, except: Option<crate::layout::Space>) -> Result<(), String> {
+        check_name(name)?;
+        if name.trim().eq_ignore_ascii_case("Model") {
+            return Err("A layout can't be called Model.".into());
+        }
+        match self.layout_named(name) {
+            Some(l) if Some(l.id) != except => Err(format!("A layout named \"{}\" already exists.", l.name)),
+            _ => Ok(()),
+        }
+    }
+
+    /// A new layout after the others, on an A4 sheet. Returns its space.
+    pub fn new_layout(&mut self, name: &str) -> Result<crate::layout::Space, String> {
+        self.check_layout_name(name, None)?;
+        let tab_order = self.layouts.iter().map(|l| l.tab_order).max().unwrap_or(0) + 1;
+        let paper = crate::layout::Paper::a4_landscape();
+        let layout = crate::layout::Layout { id: crate::layout::MODEL, name: name.trim().into(), tab_order, paper };
+        Ok(self.add_layout(layout))
+    }
+
+    pub fn rename_layout(&mut self, space: crate::layout::Space, name: &str) -> Result<(), String> {
+        self.check_layout_name(name, Some(space))?;
+        let mut after = self.layouts.clone();
+        let layout = after.iter_mut().find(|l| l.id == space).ok_or("There's no such layout.")?;
+        layout.name = name.trim().into();
+        self.set_layouts(after);
+        Ok(())
+    }
+
+    /// Changes a layout's page setup.
+    pub fn set_paper(&mut self, space: crate::layout::Space, paper: crate::layout::Paper) -> bool {
+        let mut after = self.layouts.clone();
+        let Some(layout) = after.iter_mut().find(|l| l.id == space) else { return false };
+        layout.paper = paper;
+        self.set_layouts(after);
+        true
+    }
+
+    /// Deletes a layout and everything on its sheet. Drawing in it, the
+    /// drawing goes back to model space.
+    pub fn delete_layout(&mut self, space: crate::layout::Space) -> bool {
+        if self.layout(space).is_none() {
+            return false;
+        }
+        let ids: Vec<EntityId> = self.entities.values().filter(|e| e.space == space).map(|e| e.id).collect();
+        for id in ids {
+            self.remove(id);
+        }
+        let after = self.layouts.iter().filter(|l| l.id != space).cloned().collect();
+        self.set_layouts(after);
+        if self.space == space {
+            self.space = crate::layout::MODEL;
+        }
+        true
+    }
+
+    /// A copy of a layout, with its page setup and everything on its
+    /// sheet, called `name` and placed just after it. Returns its space.
+    pub fn copy_layout(&mut self, space: crate::layout::Space, name: &str) -> Result<crate::layout::Space, String> {
+        self.check_layout_name(name, None)?;
+        let source = self.layout(space).cloned().ok_or("There's no such layout.")?;
+        // The tabs after it move along one.
+        let mut after = self.layouts.clone();
+        for l in after.iter_mut().filter(|l| l.tab_order > source.tab_order) {
+            l.tab_order += 1;
+        }
+        self.set_layouts(after);
+        let copy = crate::layout::Layout { name: name.trim().into(), tab_order: source.tab_order + 1, ..source };
+        let id = self.add_layout(copy);
+        let objects: Vec<Entity> = self.space_in_draw_order(space).into_iter().cloned().collect();
+        let current = std::mem::replace(&mut self.space, id);
+        for e in &objects {
+            self.add_like(e.geometry.clone(), e);
+        }
+        self.space = current;
+        Ok(id)
+    }
+
     pub fn set_layouts(&mut self, layouts: Vec<crate::layout::Layout>) {
         let before = std::mem::replace(&mut self.layouts, layouts.clone());
         if before != layouts {
@@ -1256,7 +1346,13 @@ impl Document {
             Change::RefEdit { before, after } => {
                 self.refedit = if forward { after } else { before }.as_deref().cloned()
             }
-            Change::Layouts { before, after } => self.layouts = if forward { after } else { before }.clone(),
+            Change::Layouts { before, after } => {
+                self.layouts = if forward { after } else { before }.clone();
+                // Undoing a new layout while drawing in it: back to model space.
+                if self.layout(self.space).is_none() {
+                    self.space = crate::layout::MODEL;
+                }
+            }
         }
     }
 }
@@ -1265,6 +1361,7 @@ impl Document {
 mod tests {
     use super::*;
     use crate::entity::Placement;
+    use crate::layout::{MODEL, Paper};
 
     fn line(x: f64) -> Geometry {
         Geometry::Line { start: Point::new(x, 0.0), end: Point::new(x, 1.0) }
@@ -1272,6 +1369,53 @@ mod tests {
 
     fn draw_order(d: &Document) -> Vec<u64> {
         d.entities_in_draw_order().iter().map(|e| e.id.0).collect()
+    }
+
+    #[test]
+    fn layouts_are_made_renamed_copied_and_deleted_with_their_sheets() {
+        let mut d = Document::new();
+        d.add(line(0.0));
+        assert_eq!(d.next_layout_name(), "Layout1");
+        d.begin("LAYOUT");
+        let one = d.new_layout("Layout1").unwrap();
+        d.commit();
+        let two = d.new_layout("Plan").unwrap();
+        assert_eq!(d.next_layout_name(), "Layout2");
+        assert!(d.new_layout("plan").is_err(), "names are unique, ignoring case");
+        assert!(d.new_layout("Model").is_err() && d.new_layout("a:b").is_err());
+        d.set_space(one);
+        d.add(line(1.0));
+        d.add(line(2.0));
+
+        // A copy goes just after its layout, with what's on its sheet.
+        let copy = d.copy_layout(one, "Layout1 (2)").unwrap();
+        let tabs: Vec<&str> = d.layouts().iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(tabs, ["Layout1", "Layout1 (2)", "Plan"]);
+        assert_eq!(d.space(), one, "copying doesn't switch");
+        assert_eq!(d.all_entities().filter(|e| e.space == copy).count(), 2);
+
+        assert!(d.rename_layout(two, "Layout1").is_err());
+        d.rename_layout(two, "Site").unwrap();
+        assert_eq!(d.layout(two).unwrap().name, "Site");
+
+        // Deleting the one drawn in: its objects go, and so back to model space.
+        d.begin("LAYOUT");
+        assert!(d.delete_layout(one));
+        d.commit();
+        assert_eq!(d.space(), MODEL);
+        assert!(d.layout(one).is_none() && d.all_entities().all(|e| e.space != one));
+        d.undo();
+        assert_eq!(d.all_entities().filter(|e| e.space == one).count(), 2);
+        assert!(d.layout(one).is_some());
+    }
+
+    #[test]
+    fn a_new_paper_changes_a_page_setup_from_a_file_too() {
+        let raw = vec![(4, "Letter".to_string()), (44, "215.9".into()), (45, "279.4".into()), (73, "1".into())];
+        let p = Paper { raw, ..Paper::a4_landscape() }.resized("ISO A3", 420.0, 297.0, [5.0; 4], 0);
+        assert_eq!((p.width, p.height, p.rotation), (420.0, 297.0, 0));
+        let value = |code: i32| p.raw.iter().find(|r| r.0 == code).unwrap().1.clone();
+        assert_eq!((value(4), value(44), value(73)), ("ISO A3".into(), "420.000000".into(), "0".into()));
     }
 
     #[test]

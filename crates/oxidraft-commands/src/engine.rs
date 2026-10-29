@@ -39,6 +39,7 @@ use crate::{
     layer::LayIso,
     layer::LayMcur,
     layer::LayerPick,
+    layouts::LayoutCommand,
     lengthen::Lengthen,
     line::Line,
     list::List,
@@ -567,6 +568,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["ICL", "PDFCLIP"],
         description: "Clip an image or PDF underlay to a rectangle or polygon",
         make: Some(|| Box::new(ImageClip::default())),
+    },
+    CommandInfo {
+        name: "LAYOUT",
+        aliases: &["LO"],
+        description: "Make, copy, rename, delete or switch to a layout",
+        make: Some(|| Box::new(LayoutCommand::default())),
     },
     CommandInfo {
         name: "MVIEW",
