@@ -17,6 +17,17 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document) {
         }
         add_record(cad, oxidraft_io_dxf::SETTINGS_RECORD, entries);
     }
+    // DWGPROPS, as AutoCAD keeps it: a cookie, then title (2), subject
+    // (3), author (4), comments (6) and keywords (7).
+    let p = doc.properties();
+    if *p != oxidraft_model::DrawingProperties::default() {
+        let mut entries = vec![XRecordEntry::string(1, "DWGPROPS COOKIE")];
+        for (code, value) in [(2, &p.title), (3, &p.subject), (4, &p.author), (6, &p.comments), (7, &p.keywords)] {
+            entries.push(XRecordEntry::string(code, value.clone()));
+        }
+        entries.extend([XRecordEntry::string(8, ""), XRecordEntry::string(9, "")]);
+        add_record(cad, "DWGPROPS", entries);
+    }
     // Layer states: each its name (1), description (3) and current layer
     // (2), then its layers: name (8), on 1 / frozen 2 / locked 4 (90),
     // color (62), linetype (6), lineweight (370) and transparency (440).

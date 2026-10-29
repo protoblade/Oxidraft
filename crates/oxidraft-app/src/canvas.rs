@@ -479,11 +479,20 @@ impl OxidraftApp {
         }
         // Snap mode (F9): to the snap spacing, where no object snap applies.
         let vars = &self.engine.vars;
-        let on_snap = if vars.snap && vars.snap_spacing > 0.0 {
-            let k = vars.snap_spacing;
-            Point::new((raw.x / k).round() * k, (raw.y / k).round() * k)
-        } else {
-            raw
+        let on_snap = match (vars.snap && vars.snap_spacing > 0.0, vars.isoplane) {
+            // Isometric snap: the points `k` apart along 30° and 150°.
+            (true, Some(_)) => {
+                let k = vars.snap_spacing;
+                let (c, h) = (30f64.to_radians().cos() * k, 30f64.to_radians().sin() * k);
+                let (u, v) = (raw.x / c, raw.y / h);
+                let (i, j) = (((u + v) / 2.0).round(), ((v - u) / 2.0).round());
+                Point::new((i - j) * c, (i + j) * h)
+            }
+            (true, None) => {
+                let k = vars.snap_spacing;
+                Point::new((raw.x / k).round() * k, (raw.y / k).round() * k)
+            }
+            (false, _) => raw,
         };
         let tracked = self.engine.track(on_snap, tolerance);
         CursorState { screen, raw, point: tracked.point, snap: None, tracked: Some(tracked) }
@@ -598,6 +607,9 @@ impl OxidraftApp {
             Some(s) if s * self.view.scale >= 4.0 => (s, s * 5.0),
             _ => self.view.grid_step(10.0),
         };
+        if self.engine.vars.isoplane.is_some() {
+            return self.draw_iso_grid(painter, rect, minor);
+        }
         let min = self.view.to_world(rect, rect.left_bottom());
         let max = self.view.to_world(rect, rect.right_top());
         let ratio = (major / minor).round() as i64;
@@ -628,6 +640,32 @@ impl OxidraftApp {
             };
             painter.line_segment([pos2(rect.left(), sy), pos2(rect.right(), sy)], Stroke::new(1.0, color));
             y += minor;
+        }
+    }
+
+    /// The isometric grid: lines along 30°, 90° and 150°, through the
+    /// points `spacing` apart along the isometric axes.
+    fn draw_iso_grid(&self, painter: &Painter, rect: Rect, spacing: f64) {
+        let gap = spacing * 30f64.to_radians().cos();
+        let corners = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()]
+            .map(|c| self.view.to_world(rect, c));
+        let center = self.view.to_world(rect, rect.center());
+        let reach = corners[0].distance(corners[2]);
+        for along in [30.0, 90.0, 150.0] {
+            let (d, n) = (Point::ORIGIN.polar(1.0, along), Point::ORIGIN.polar(1.0, along + 90.0));
+            let offsets = corners.map(|c| c.dot(n) / gap);
+            let lo = offsets.iter().copied().fold(f64::INFINITY, f64::min).floor() as i64;
+            let hi = offsets.iter().copied().fold(f64::NEG_INFINITY, f64::max).ceil() as i64;
+            if hi - lo > 2000 {
+                continue;
+            }
+            for k in lo..=hi {
+                let p = n * (k as f64 * gap);
+                let mid = p + d * d.dot(center - p);
+                let (a, b) = (self.view.to_screen(rect, mid - d * reach), self.view.to_screen(rect, mid + d * reach));
+                let color = if k.rem_euclid(5) == 0 { theme::grid_major() } else { theme::grid_minor() };
+                painter.line_segment([a, b], Stroke::new(1.0, color));
+            }
         }
     }
 

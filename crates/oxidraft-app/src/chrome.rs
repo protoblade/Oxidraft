@@ -1204,6 +1204,11 @@ impl OxidraftApp {
                         self.selection_cycling = cycling;
                         self.log_toggle("Selection cycling", cycling);
                     }
+                    let mut iso = self.engine.vars.isoplane.is_some();
+                    if status_toggle(ui, "ISO", &mut iso, "Isometric Drafting (ISODRAFT); F5 changes the plane") {
+                        self.engine.vars.isoplane = iso.then_some(oxidraft_commands::IsoPlane::Top);
+                        self.log_toggle("Isometric drafting", iso);
+                    }
                     let mut lwt = self.show_lineweights;
                     if status_toggle(ui, "LWT", &mut lwt, "Show/Hide Lineweight") {
                         self.show_lineweights = lwt;
@@ -1470,6 +1475,8 @@ fn status_toggle(ui: &mut Ui, label: &str, on: &mut bool, tip: &str) -> bool {
         (true, false) => theme::text_dim(),
     };
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, color);
+    let state = *on;
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, state, label));
     let clicked = response.on_hover_text(tip).clicked();
     if clicked {
         *on = !*on;

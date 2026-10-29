@@ -804,8 +804,29 @@ fn read_layer_states(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
     }
 }
 
+/// DWGPROPS: the drawing's title, subject, author, comments and keywords.
+fn read_properties(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
+    let Some(handle) = raw.dictionaries.values().flatten().find(|(n, _)| n == "DWGPROPS").map(|(_, h)| *h) else {
+        return;
+    };
+    let Some(pairs) = raw.xrecords.get(&handle) else { return };
+    let mut p = oxidraft_model::DrawingProperties::default();
+    for (code, value) in pairs {
+        match code {
+            2 => p.title = value.clone(),
+            3 => p.subject = value.clone(),
+            4 => p.author = value.clone(),
+            6 => p.comments = value.clone(),
+            7 => p.keywords = value.clone(),
+            _ => {}
+        }
+    }
+    doc.set_properties(p);
+}
+
 fn read_settings(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
     read_layer_states(doc, raw);
+    read_properties(doc, raw);
     let Some(handle) = raw.dictionaries.values().flatten().find(|(n, _)| n == SETTINGS_RECORD).map(|(_, h)| *h) else {
         return;
     };

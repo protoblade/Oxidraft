@@ -236,3 +236,96 @@ impl Command for Toggle {
         Ok(Step::Done)
     }
 }
+
+/// ISODRAFT: isometric drafting on one of the planes (ortho runs along
+/// its axes, the grid and snap turn isometric, ELLIPSE gains Isocircle),
+/// or back to Orthographic.
+#[derive(Default)]
+pub struct IsoDraft;
+
+impl Command for IsoDraft {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Enter an option")
+            .with_keywords(&["Orthographic", "isoplane Left", "isoplane Top", "isoplane Right"])
+            .with_default("Orthographic")
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        ctx.vars.isoplane = match input {
+            Input::Keyword("isoplane Left") => Some(crate::IsoPlane::Left),
+            Input::Keyword("isoplane Top") => Some(crate::IsoPlane::Top),
+            Input::Keyword("isoplane Right") => Some(crate::IsoPlane::Right),
+            Input::Keyword(_) | Input::Enter => None,
+            _ => return Err("Enter an option.".into()),
+        };
+        Ok(Step::Done)
+    }
+}
+
+/// ISOPLANE: which isometric plane to draft on; Enter takes the next.
+#[derive(Default)]
+pub struct IsoPlaneCmd {
+    next: Option<crate::IsoPlane>,
+}
+
+impl Command for IsoPlaneCmd {
+    fn start(&mut self, vars: &Vars) -> Option<String> {
+        self.next = Some(vars.isoplane.map_or(crate::IsoPlane::Left, crate::IsoPlane::next));
+        Some(format!("Current isoplane: {}", vars.isoplane.map_or("None", |p| p.name())))
+    }
+
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Enter isometric plane setting")
+            .with_keywords(&["Left", "Top", "Right"])
+            .with_default(self.next.map_or("Top", |p| p.name()))
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let plane = match input {
+            Input::Keyword("Left") => crate::IsoPlane::Left,
+            Input::Keyword("Top") => crate::IsoPlane::Top,
+            Input::Keyword("Right") => crate::IsoPlane::Right,
+            Input::Enter => self.next.unwrap_or(crate::IsoPlane::Top),
+            _ => return Err("Enter Left, Top or Right.".into()),
+        };
+        ctx.vars.isoplane = Some(plane);
+        ctx.messages.push(format!("Current isoplane: {}", plane.name()));
+        Ok(Step::Done)
+    }
+}
+
+#[cfg(test)]
+mod iso_tests {
+    use crate::{Engine, IsoPlane};
+    use oxidraft_geom::Point;
+    use oxidraft_model::{Document, Geometry};
+
+    #[test]
+    fn isometric_ortho_and_isocircles() {
+        let (mut e, mut d) = (Engine::new(), Document::new());
+        e.dynamic_input = false;
+        for t in ["isodraft", "t"] {
+            e.submit(t, &mut d, Point::ORIGIN, 0.5);
+        }
+        assert_eq!(e.vars.isoplane, Some(IsoPlane::Top));
+        // Ortho runs along 30° and 150°.
+        e.set_ortho(true);
+        for t in ["line", "0,0"] {
+            e.submit(t, &mut d, Point::ORIGIN, 0.5);
+        }
+        let p = e.track(Point::new(10.0, 4.0), 0.5).point;
+        assert!((p.y / p.x - 30f64.to_radians().tan()).abs() < 1e-9, "{p:?}");
+        e.submit("", &mut d, Point::ORIGIN, 0.5);
+        e.set_ortho(false);
+        // An isocircle on the top plane: wide and flat.
+        for t in ["ellipse", "i", "0,0", "10"] {
+            e.submit(t, &mut d, Point::ORIGIN, 0.5);
+        }
+        let Some(Geometry::Ellipse(el)) = d.entities().last().map(|x| x.geometry.clone()) else { panic!() };
+        assert!((el.major.length() - 10.0 * 1.5f64.sqrt()).abs() < 1e-9 && el.major.y.abs() < 1e-9);
+        // ISOPLANE: Enter takes the next one.
+        e.submit("isoplane", &mut d, Point::ORIGIN, 0.5);
+        e.submit("", &mut d, Point::ORIGIN, 0.5);
+        assert_eq!(e.vars.isoplane, Some(IsoPlane::Right));
+    }
+}

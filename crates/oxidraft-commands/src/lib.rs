@@ -198,6 +198,52 @@ pub enum Step {
     Done,
 }
 
+/// An isometric drawing plane (ISOPLANE): which two of the three
+/// isometric axes (30°, 90°, 150°) it lies along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IsoPlane {
+    Left,
+    Top,
+    Right,
+}
+
+impl IsoPlane {
+    pub fn name(self) -> &'static str {
+        match self {
+            IsoPlane::Left => "Left",
+            IsoPlane::Top => "Top",
+            IsoPlane::Right => "Right",
+        }
+    }
+
+    /// Its two axes' directions, in degrees.
+    pub fn axes(self) -> [f64; 2] {
+        match self {
+            IsoPlane::Left => [90.0, 150.0],
+            IsoPlane::Top => [30.0, 150.0],
+            IsoPlane::Right => [30.0, 90.0],
+        }
+    }
+
+    /// Where a circle on it looks longest: an isocircle's major axis.
+    pub fn major_angle(self) -> f64 {
+        match self {
+            IsoPlane::Left => 120.0,
+            IsoPlane::Top => 0.0,
+            IsoPlane::Right => 60.0,
+        }
+    }
+
+    /// Left, Top, Right and round again (F5).
+    pub fn next(self) -> IsoPlane {
+        match self {
+            IsoPlane::Left => IsoPlane::Top,
+            IsoPlane::Top => IsoPlane::Right,
+            IsoPlane::Right => IsoPlane::Left,
+        }
+    }
+}
+
 /// Settings that persist between commands, like AutoCAD system variables.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Vars {
@@ -246,6 +292,9 @@ pub struct Vars {
     pub revcloud_polygonal: bool,
     /// COLORTHEME: 0 dark, 1 light. The app keeps it; it's here for the prompt.
     pub color_theme: u8,
+    /// ISODRAFT: the isometric plane drawn on, or `None` for orthographic
+    /// drafting.
+    pub isoplane: Option<IsoPlane>,
     /// What the last ERASE took out, for OOPS to put back.
     pub erased: Vec<oxidraft_model::Entity>,
     /// The last area AREA or MEASUREGEOM measured (for Volume).
@@ -293,6 +342,7 @@ impl Default for Vars {
             revcloud_calligraphy: false,
             revcloud_polygonal: false,
             color_theme: 0,
+            isoplane: None,
             erased: Vec::new(),
             last_area: 0.0,
             snap: false,

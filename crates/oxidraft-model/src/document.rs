@@ -284,6 +284,10 @@ enum Change {
         before: Vec<LayerState>,
         after: Vec<LayerState>,
     },
+    Properties {
+        before: DrawingProperties,
+        after: DrawingProperties,
+    },
     /// The multileader and table styles.
     AnnotationStyles {
         before: (crate::annotation::LeaderStyle, crate::table::TableStyle),
@@ -364,6 +368,8 @@ pub struct Document {
     current: CurrentProps,
     /// LAYERSTATE: named layer settings.
     layer_states: Vec<LayerState>,
+    /// DWGPROPS.
+    properties: DrawingProperties,
     /// MLEADERSTYLE and TABLESTYLE.
     leader_style: crate::annotation::LeaderStyle,
     table_style: crate::table::TableStyle,
@@ -387,6 +393,16 @@ impl Group {
     pub fn is_unnamed(&self) -> bool {
         self.name.starts_with('*')
     }
+}
+
+/// DWGPROPS: the drawing's summary properties.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DrawingProperties {
+    pub title: String,
+    pub subject: String,
+    pub author: String,
+    pub keywords: String,
+    pub comments: String,
 }
 
 /// A named snapshot of the layers' settings (LAYERSTATE): each layer's on,
@@ -470,6 +486,7 @@ impl Document {
             units: crate::units::DEFAULT_UNITS,
             current: CurrentProps::by_layer(),
             layer_states: Vec::new(),
+            properties: DrawingProperties::default(),
             leader_style: crate::annotation::DEFAULT_LEADER_STYLE,
             table_style: crate::table::DEFAULT_TABLE_STYLE,
             text_styles: vec![crate::annotation::TextStyle::standard()],
@@ -561,6 +578,18 @@ impl Document {
         if props != self.current {
             let before = std::mem::replace(&mut self.current, props.clone());
             self.record(Change::Current { before, after: props });
+        }
+    }
+
+    /// DWGPROPS: title, subject, author, keywords and comments.
+    pub fn properties(&self) -> &DrawingProperties {
+        &self.properties
+    }
+
+    pub fn set_properties(&mut self, props: DrawingProperties) {
+        if props != self.properties {
+            let before = std::mem::replace(&mut self.properties, props.clone());
+            self.record(Change::Properties { before, after: props });
         }
     }
 
@@ -2152,6 +2181,7 @@ impl Document {
                     Change::TextStyles { .. } => "Text style",
                     Change::AnnotationStyles { .. } => "Style",
                     Change::LayerStates { .. } => "Layer state",
+                    Change::Properties { .. } => "Drawing properties",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -2208,6 +2238,7 @@ impl Document {
             Change::DimStyle { before, after } => self.dim_style = if forward { *after } else { *before },
             Change::Units { before, after } => self.units = if forward { *after } else { *before },
             Change::Current { before, after } => self.current = if forward { after } else { before }.clone(),
+            Change::Properties { before, after } => self.properties = if forward { after } else { before }.clone(),
             Change::LayerStates { before, after } => {
                 self.layer_states = if forward { after } else { before }.clone();
             }

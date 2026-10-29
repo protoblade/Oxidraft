@@ -726,6 +726,25 @@ mod tests {
     }
 
     #[test]
+    fn drawing_properties_survive() {
+        let mut doc = Document::new();
+        doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });
+        let props = oxidraft_model::DrawingProperties {
+            title: "Ground floor".into(),
+            subject: "Plan".into(),
+            author: "Studio".into(),
+            keywords: "house, plan".into(),
+            comments: "First issue".into(),
+        };
+        doc.set_properties(props.clone());
+        let check = |back: &Document, how: &str| assert_eq!(back.properties(), &props, "{how}");
+        check(&oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
     fn units_survive() {
         let mut doc = Document::new();
         doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });

@@ -10,6 +10,12 @@ use crate::{Command, Ctx, Input, Prompt, Step};
 enum Stage {
     First,
     Center,
+    /// Isocircle: its center, then its radius or diameter.
+    IsoCenter,
+    IsoRadius {
+        center: Point,
+        diameter: bool,
+    },
     /// The second axis point: the other endpoint (`from_center` false) or,
     /// after Center, the endpoint.
     AxisEnd {
@@ -65,11 +71,20 @@ fn ellipse_from(center: Point, axis: Point, other: f64) -> Option<Ellipse> {
 pub struct EllipseCmd {
     stage: Stage,
     arc: bool,
+    /// The isometric plane, when drafting isometrically: the Isocircle option.
+    iso: Option<crate::IsoPlane>,
 }
 
 impl EllipseCmd {
     pub fn full() -> Self {
-        Self { stage: Stage::First, arc: false }
+        Self { stage: Stage::First, arc: false, iso: None }
+    }
+
+    /// A circle `r` across on the isometric plane, as it's drawn.
+    fn isocircle(plane: crate::IsoPlane, center: Point, r: f64) -> Option<Ellipse> {
+        (r > EPSILON).then(|| {
+            Ellipse::full(center, Point::ORIGIN.polar(r * 1.5f64.sqrt(), plane.major_angle()), 1.0 / 3f64.sqrt())
+        })
     }
 
     /// The ellipse once its shape is known: added, or on to its arc angles.
@@ -111,13 +126,26 @@ impl EllipseCmd {
 }
 
 impl Command for EllipseCmd {
+    fn start(&mut self, vars: &crate::Vars) -> Option<String> {
+        self.iso = vars.isoplane;
+        None
+    }
+
     fn prompt(&self) -> Prompt {
         let what = if self.arc { "elliptical arc" } else { "ellipse" };
         match self.stage {
             Stage::First if self.arc => {
                 Prompt::new(format!("Specify axis endpoint of {what}")).with_keywords(&["Center"])
             }
+            Stage::First if self.iso.is_some() => {
+                Prompt::new(format!("Specify axis endpoint of {what}")).with_keywords(&["Arc", "Center", "Isocircle"])
+            }
             Stage::First => Prompt::new(format!("Specify axis endpoint of {what}")).with_keywords(&["Arc", "Center"]),
+            Stage::IsoCenter => Prompt::new("Specify center of isocircle"),
+            Stage::IsoRadius { diameter: false, .. } => {
+                Prompt::new("Specify radius of isocircle").with_keywords(&["Diameter"])
+            }
+            Stage::IsoRadius { diameter: true, .. } => Prompt::new("Specify diameter of isocircle"),
             Stage::Center => Prompt::new(format!("Specify center of {what}")),
             Stage::AxisEnd { from_center: false, .. } => Prompt::new("Specify other endpoint of axis"),
             Stage::AxisEnd { from_center: true, .. } => Prompt::new("Specify endpoint of axis"),
@@ -141,6 +169,23 @@ impl Command for EllipseCmd {
         match (self.stage, input) {
             (Stage::First, Input::Keyword("Arc")) => self.arc = true,
             (Stage::First, Input::Keyword("Center")) => self.stage = Stage::Center,
+            (Stage::First, Input::Keyword("Isocircle")) => self.stage = Stage::IsoCenter,
+            (Stage::IsoCenter, Input::Point(center)) => self.stage = Stage::IsoRadius { center, diameter: false },
+            (Stage::IsoRadius { center, .. }, Input::Keyword(_)) => {
+                self.stage = Stage::IsoRadius { center, diameter: true };
+            }
+            (Stage::IsoRadius { center, diameter }, input @ (Input::Value(_) | Input::Point(_))) => {
+                let plane = self.iso.ok_or("Not drafting isometrically.")?;
+                let d = match input {
+                    Input::Value(v) => v,
+                    Input::Point(p) => center.distance(p),
+                    _ => 0.0,
+                };
+                let r = if diameter { d / 2.0 } else { d };
+                let e = Self::isocircle(plane, center, r).ok_or("Value must be positive and nonzero.")?;
+                ctx.doc.add(Geometry::Ellipse(e));
+                return Ok(Step::Done);
+            }
             (Stage::First, Input::Point(p1)) => self.stage = Stage::AxisEnd { p1, from_center: false },
             (Stage::Center, Input::Point(center)) => self.stage = Stage::AxisEnd { p1: center, from_center: true },
             (Stage::AxisEnd { p1, from_center }, Input::Point(p2)) => {
@@ -209,6 +254,11 @@ impl Command for EllipseCmd {
 
     fn preview(&self, cursor: Point) -> Vec<Geometry> {
         match self.stage {
+            Stage::IsoRadius { center, diameter } => {
+                let d = center.distance(cursor);
+                let r = if diameter { d / 2.0 } else { d };
+                self.iso.and_then(|p| Self::isocircle(p, center, r)).map(Geometry::Ellipse).into_iter().collect()
+            }
             Stage::AxisEnd { p1, .. } => vec![Geometry::Line { start: p1, end: cursor }],
             Stage::Distance { center, axis } => {
                 let mut out = vec![Geometry::Line { start: center, end: cursor }];
@@ -233,7 +283,9 @@ impl Command for EllipseCmd {
     fn base_point(&self) -> Option<Point> {
         match self.stage {
             Stage::AxisEnd { p1, .. } => Some(p1),
-            Stage::Distance { center, .. } | Stage::Rotation { center, .. } => Some(center),
+            Stage::Distance { center, .. } | Stage::Rotation { center, .. } | Stage::IsoRadius { center, .. } => {
+                Some(center)
+            }
             Stage::Start { e, .. } | Stage::End { e, .. } => Some(e.center),
             _ => None,
         }

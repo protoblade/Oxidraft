@@ -131,6 +131,10 @@ pub struct OxidraftApp {
     pub(crate) style_dialog: Option<crate::annotation_styles::StyleDialog>,
     pub(crate) attribute_manager: Option<crate::battman::AttributeManager>,
     pub(crate) layer_states_dialog: Option<crate::layer_states::LayerStatesDialog>,
+    /// "Save changes?" before NEW, OPEN, CLOSE or QUIT; and quitting once answered.
+    pub(crate) save_prompt: Option<crate::files::Then>,
+    pub(crate) quit_now: bool,
+    pub(crate) properties_dialog: Option<crate::files::PropertiesDialog>,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
     pub(crate) ribbon_space: oxidraft_model::Space,
@@ -287,6 +291,9 @@ impl OxidraftApp {
             style_dialog: None,
             attribute_manager: None,
             layer_states_dialog: None,
+            save_prompt: None,
+            quit_now: false,
+            properties_dialog: None,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
@@ -569,8 +576,13 @@ impl OxidraftApp {
             "PASTEBLOCK" => self.paste_block_command(),
             "SAVE" | "QSAVE" => self.save(false),
             "SAVEAS" => self.save(true),
-            "OPEN" => self.open_dialog(),
-            "NEW" => self.new_drawing(),
+            "OPEN" => self.after_saving(crate::files::Then::Open),
+            "NEW" => self.after_saving(crate::files::Then::New),
+            "CLOSE" | "CLOSEALL" => self.after_saving(crate::files::Then::Close),
+            "QUIT" | "EXIT" => self.after_saving(crate::files::Then::Quit),
+            "RECOVER" => self.after_saving(crate::files::Then::Recover),
+            "SCRIPT" | "SCR" => self.script_dialog(),
+            "DWGPROPS" => self.open_drawing_properties(),
             "LAYER" | "LA" => self.layer_manager_open = true,
             "PLOT" | "PRINT" => self.open_plot(false),
             "EXTERNALREFERENCES" | "ER" | "XREF" | "XR" => self.xref_palette_open = true,
@@ -881,6 +893,14 @@ impl OxidraftApp {
             self.engine.vars.snap = !self.engine.vars.snap;
             self.log_toggle("Snap", self.engine.vars.snap);
         }
+        // F5 or Ctrl+E: the next isometric plane, while drafting isometrically.
+        if ctx.input_mut(|i| i.consume_key(none, Key::F5) || i.consume_key(Modifiers::CTRL, Key::E))
+            && let Some(plane) = self.engine.vars.isoplane
+        {
+            let next = plane.next();
+            self.engine.vars.isoplane = Some(next);
+            self.engine.log(format!("<Isoplane {}>", next.name()));
+        }
         if f10 {
             self.engine.set_polar(!self.engine.polar());
             self.log_toggle("Polar", self.engine.polar());
@@ -898,10 +918,10 @@ impl OxidraftApp {
             self.save(false);
         }
         if open {
-            self.open_dialog();
+            self.after_saving(crate::files::Then::Open);
         }
         if new {
-            self.new_drawing();
+            self.after_saving(crate::files::Then::New);
         }
         if select_all {
             self.engine.select_all(&self.doc);
@@ -984,6 +1004,8 @@ impl eframe::App for OxidraftApp {
         self.annotation_style_dialog(&ctx);
         self.attribute_manager_dialog(&ctx);
         self.layer_states_dialog(&ctx);
+        self.drawing_properties_dialog(&ctx);
+        self.save_prompt_dialog(&ctx);
         self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);

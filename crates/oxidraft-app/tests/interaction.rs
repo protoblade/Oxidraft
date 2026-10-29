@@ -2244,3 +2244,32 @@ fn layer_states_manager_saves_and_restores() {
     h.run_steps(2);
     assert!(h.state_mut().document_mut().layer("Walls").unwrap().on);
 }
+
+#[test]
+fn new_asks_to_save_changes_and_scripts_run() {
+    let mut h = app_with_line();
+    // A change, then NEW: asked first; Cancel keeps the drawing.
+    type_all(&mut h, &["circle", "50,30", "5"]);
+    let before = h.state_mut().document_mut().len();
+    type_all(&mut h, &["new"]);
+    h.run_steps(2);
+    assert!(h.query_by_label("Save changes to Drawing1.dxf?").is_some());
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().len(), before);
+    // No: a fresh drawing.
+    type_all(&mut h, &["new"]);
+    h.run_steps(2);
+    h.get_by_label("No").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().len(), 0);
+    // A script: each space or line end is Enter.
+    h.state_mut().run_script("line 0,0 10,0 10,10 \ncircle 5,5 2\n");
+    h.run_steps(1);
+    let kinds: Vec<&str> = h.state_mut().document_mut().entities().map(|e| e.geometry.name()).collect();
+    assert_eq!(kinds, ["Line", "Line", "Circle"]);
+    // ISO on the status bar: isometric drafting on the top plane.
+    h.get_by_label("ISO").click();
+    h.run_steps(1);
+    assert_eq!(h.state_mut().engine_mut().vars.isoplane, Some(oxidraft_commands::IsoPlane::Top));
+}

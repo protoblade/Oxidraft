@@ -666,6 +666,43 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(Blend::default())),
     },
     CommandInfo {
+        name: "CLOSE",
+        aliases: &["CLOSEALL"],
+        description: "Close the drawing (asks to save changes)",
+        make: None,
+    },
+    CommandInfo { name: "QUIT", aliases: &["EXIT"], description: "Quit Oxidraft (asks to save changes)", make: None },
+    CommandInfo {
+        name: "RECOVER",
+        aliases: &[],
+        description: "Open a damaged drawing and fix what AUDIT finds",
+        make: None,
+    },
+    CommandInfo {
+        name: "SCRIPT",
+        aliases: &["SCR"],
+        description: "Run the commands in a script (.scr) file",
+        make: None,
+    },
+    CommandInfo {
+        name: "DWGPROPS",
+        aliases: &[],
+        description: "The drawing's title, subject, author, keywords and comments",
+        make: None,
+    },
+    CommandInfo {
+        name: "ISODRAFT",
+        aliases: &[],
+        description: "Draft isometrically on a plane, or orthographically",
+        make: Some(|| Box::new(crate::views::IsoDraft)),
+    },
+    CommandInfo {
+        name: "ISOPLANE",
+        aliases: &[],
+        description: "Choose the isometric plane: Left, Top or Right (F5)",
+        make: Some(|| Box::new(crate::views::IsoPlaneCmd::default())),
+    },
+    CommandInfo {
         name: "EXPORTPDF",
         aliases: &[],
         description: "Save the current layout, or all of them, as a PDF",
@@ -1751,6 +1788,19 @@ impl Engine {
         let free = Tracked { point: cursor, polar: None };
         let Some(base) = self.base_point() else { return free };
         let d = cursor - base;
+        // Isometric: along whichever of the plane's two axes is nearer.
+        if self.ortho
+            && let Some(plane) = self.vars.isoplane
+        {
+            let along = |a: f64| {
+                let u = Point::ORIGIN.polar(1.0, a);
+                base + u * d.dot(u)
+            };
+            let [a, b] = plane.axes();
+            let (pa, pb) = (along(a), along(b));
+            let point = if pa.distance(cursor) <= pb.distance(cursor) { pa } else { pb };
+            return Tracked { point, polar: None };
+        }
         if self.ortho {
             let point =
                 if d.x.abs() >= d.y.abs() { Point::new(cursor.x, base.y) } else { Point::new(base.x, cursor.y) };
