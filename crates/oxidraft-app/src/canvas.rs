@@ -972,7 +972,21 @@ impl OxidraftApp {
             }
             painter.add(Shape::mesh(mesh));
         };
-        if *pattern == HatchPattern::Solid {
+        if let HatchPattern::Gradient { kind, from, to } = *pattern {
+            // Shaded smoothly between the two colors, as the screen shows them.
+            let rgb = |c: Color32| [c.r(), c.g(), c.b()];
+            let (from, to) = (rgb(theme::aci(from)), rgb(theme::aci(to)));
+            let mut mesh = egui::Mesh::default();
+            for t in hatch::gradient_triangles(&polys, kind, *angle) {
+                let i = mesh.vertices.len() as u32;
+                for (p, f) in t {
+                    let [r, g, b] = hatch::blend_rgb(from, to, f);
+                    mesh.colored_vertex(self.view.to_screen(rect, p), Color32::from_rgb(r, g, b));
+                }
+                mesh.add_triangle(i, i + 1, i + 2);
+            }
+            painter.add(Shape::mesh(mesh));
+        } else if *pattern == HatchPattern::Solid {
             fill(stroke.color);
         } else if spacing_px < 2.0 {
             fill(stroke.color.gamma_multiply(0.3));

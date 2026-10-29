@@ -72,6 +72,7 @@ const DRAW_MORE: &[Tool] = &[
     tool(Icon::Ray, "Ray", Some("RAY"), "Creates a line infinite one way"),
     tool(Icon::RevCloud, "Revision Cloud", Some("REVCLOUD"), "Draws a cloud of arcs around an area or object"),
     tool(Icon::Donut, "Donut", Some("DONUT"), "Creates filled rings and dots (DO)"),
+    tool(Icon::Hatch, "Boundary", Some("BOUNDARY"), "Draws closed polylines around an area picked inside (BO)"),
 ];
 const MODIFY_GRID: &[[Tool; 3]] = &[
     [
@@ -107,6 +108,7 @@ const MODIFY_MORE: &[Tool] = &[
     tool(Icon::Lengthen, "Lengthen", Some("LENGTHEN"), "Changes the length of an object (LEN)"),
     tool(Icon::EditPolyline, "Edit Polyline", Some("PEDIT"), "Closes, opens, joins or reverses polylines (PE)"),
     tool(Icon::Spline, "Edit Spline", Some("SPLINEDIT"), "Edits a spline's fit points, vertices and order (SPE)"),
+    tool(Icon::Spline, "Blend Curves", Some("BLEND"), "Joins two objects' ends with a smooth spline"),
     tool(Icon::Hatch, "Edit Hatch", Some("HATCHEDIT"), "Changes a hatch's pattern, draw order or boundaries (HE)"),
     tool(Icon::Move, "Align", Some("ALIGN"), "Moves, turns and scales objects so two points land on two others (AL)"),
     tool(Icon::Lengthen, "Reverse", Some("REVERSE"), "Reverses lines, polylines and splines"),

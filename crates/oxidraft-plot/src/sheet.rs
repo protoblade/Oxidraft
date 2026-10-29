@@ -325,7 +325,15 @@ impl<'a> Plotter<'a> {
     fn hatch(&mut self, g: &Geometry, color: Rgb, width: f64) {
         let Geometry::Hatch { loops, pattern, scale, angle } = g else { return };
         let polys = hatch::polygons(loops);
-        if *pattern == HatchPattern::Solid {
+        if let HatchPattern::Gradient { kind, from, to } = *pattern {
+            // Small triangles, each in the color halfway through it.
+            let (from, to) = (self.settings.style.rgb(from), self.settings.style.rgb(to));
+            for t in hatch::gradient_triangles(&polys, kind, *angle) {
+                let mid = (t[0].1 + t[1].1 + t[2].1) / 3.0;
+                let polygon = t.iter().map(|(p, _)| self.paper(*p)).collect();
+                self.items.push(Item::Fill { polygons: vec![polygon], color: hatch::blend_rgb(from, to, mid) });
+            }
+        } else if *pattern == HatchPattern::Solid {
             let polygons = polys.iter().map(|p| p.iter().map(|q| self.paper(*q)).collect()).collect();
             self.items.push(Item::Fill { polygons, color });
         } else if let Some(lines) = hatch::pattern_lines(&polys, *pattern, *scale, *angle, 200_000) {

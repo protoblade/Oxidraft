@@ -913,6 +913,31 @@ fn main() {
     h.run_steps(3);
     save(&mut h, &dir, "45-tolerance-dims");
 
+    // Gradient fills: linear, and spherical.
+    let mut h = harness();
+    {
+        let doc = h.state_mut().document_mut();
+        let rect = |x: f64, y: f64, w: f64, hgt: f64| {
+            [(x, y), (x + w, y), (x + w, y + hgt), (x, y + hgt)].map(|(a, b)| Vertex::at(Point::new(a, b))).to_vec()
+        };
+        let gradient = |kind| HatchPattern::Gradient { kind, from: 5, to: 2 };
+        use oxidraft_model::hatch::GradientKind;
+        doc.add(Geometry::Hatch {
+            loops: vec![rect(5.0, 5.0, 45.0, 20.0)],
+            pattern: gradient(GradientKind::Linear),
+            scale: 1.0,
+            angle: 0.0,
+        });
+        doc.add(Geometry::Hatch {
+            loops: vec![rect(5.0, 30.0, 45.0, 25.0)],
+            pattern: gradient(GradientKind::Spherical),
+            scale: 1.0,
+            angle: 0.0,
+        });
+    }
+    h.run_steps(3);
+    save(&mut h, &dir, "46-gradient");
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");

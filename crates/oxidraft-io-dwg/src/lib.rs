@@ -651,6 +651,33 @@ mod tests {
     }
 
     #[test]
+    fn gradients_survive() {
+        use oxidraft_model::{HatchPattern, hatch::GradientKind};
+        let mut doc = Document::new();
+        let square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+            .map(|(x, y)| oxidraft_model::Vertex::at(Point::new(x, y)));
+        let pattern = HatchPattern::Gradient { kind: GradientKind::Spherical, from: 1, to: 3 };
+        doc.add(Geometry::Hatch { loops: vec![square.to_vec()], pattern, scale: 1.0, angle: 30.0 });
+        let check = |back: &Document, how: &str| {
+            let got = back.entities().find_map(|e| match &e.geometry {
+                Geometry::Hatch { pattern, angle, .. } => Some((*pattern, *angle)),
+                _ => None,
+            });
+            let (p, a) = got.unwrap_or_else(|| panic!("no hatch ({how})"));
+            assert_eq!(p, pattern, "{how}");
+            assert!((a - 30.0).abs() < 1e-6, "{how}: {a}");
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        check(&oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document, "DXF");
+        check(&read(&write(&doc, Version::R2018).unwrap()).unwrap().imported.document, "R2018");
+        // AutoCAD 2000's DWG predates gradients: a solid fill there.
+        let old = read(&write(&doc, Version::R2000).unwrap()).unwrap().imported.document;
+        assert!(old.entities().any(|e| matches!(e.geometry, Geometry::Hatch { pattern: HatchPattern::Solid, .. })));
+    }
+
+    #[test]
     fn units_survive() {
         let mut doc = Document::new();
         doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });

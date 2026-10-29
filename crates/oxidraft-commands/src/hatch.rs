@@ -14,6 +14,8 @@ enum Stage {
 /// HATCH: fills areas found around picked points (or inside picked closed
 /// objects) with the current pattern. Islands inside are left out.
 pub struct Hatch {
+    /// GRADIENT: a gradient fill rather than the last pattern.
+    gradient: bool,
     stage: Stage,
     pattern: HatchPattern,
     scale: f64,
@@ -23,11 +25,23 @@ pub struct Hatch {
 
 impl Default for Hatch {
     fn default() -> Self {
-        Self { stage: Stage::PickPoint, pattern: HatchPattern::Ansi31, scale: 1.0, angle: 0.0, created: 0 }
+        Self {
+            gradient: false,
+            stage: Stage::PickPoint,
+            pattern: HatchPattern::Ansi31,
+            scale: 1.0,
+            angle: 0.0,
+            created: 0,
+        }
     }
 }
 
 impl Hatch {
+    /// GRADIENT: HATCH with a gradient (the last one used, or blue to yellow).
+    pub fn gradient() -> Self {
+        Self { gradient: true, ..Self::default() }
+    }
+
     fn settings(&self) -> String {
         format!("Current pattern: {}  Scale: {:.4}  Angle: {:.0}", self.pattern.name(), self.scale, self.angle)
     }
@@ -56,6 +70,10 @@ pub(crate) fn closed_loop(g: &Geometry) -> Option<Vec<Vertex>> {
 impl Command for Hatch {
     fn start(&mut self, vars: &Vars) -> Option<String> {
         (self.pattern, self.scale, self.angle) = (vars.hatch_pattern, vars.hatch_scale, vars.hatch_angle);
+        if self.gradient && !matches!(self.pattern, HatchPattern::Gradient { .. }) {
+            self.pattern = HatchPattern::from_name("LINEAR").unwrap_or_default();
+            self.angle = 0.0;
+        }
         Some(self.settings())
     }
 
@@ -99,7 +117,8 @@ impl Command for Hatch {
                 }
             }
             (Stage::Pattern, Input::Text(t)) if t == "?" => {
-                let names: Vec<&str> = HatchPattern::ALL.iter().map(|p| p.name()).collect();
+                let gradients = oxidraft_model::hatch::GradientKind::ALL.map(|k| k.name());
+                let names: Vec<&str> = HatchPattern::ALL.iter().map(|p| p.name()).chain(gradients).collect();
                 ctx.messages.push(format!("Patterns: {}", names.join(", ")));
             }
             (Stage::Pattern, Input::Text(t)) => {

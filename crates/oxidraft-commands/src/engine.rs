@@ -14,6 +14,7 @@ use crate::{
     attdef::{AttDef, AttSync},
     attribute::AttDisp,
     attribute::EattEdit,
+    blend::{Blend, Boundary},
     block::DefineBlock,
     block::InsertBlock,
     block_tools::{AttEdit, AttEditGlobal, NCopy, SetByLayer},
@@ -653,6 +654,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: None,
     },
     CommandInfo {
+        name: "BOUNDARY",
+        aliases: &["BO", "BPOLY"],
+        description: "Draw closed polylines around an area picked inside",
+        make: Some(|| Box::new(Boundary::default())),
+    },
+    CommandInfo {
+        name: "BLEND",
+        aliases: &["BLENDCURVES"],
+        description: "Join two objects' ends with a smooth spline",
+        make: Some(|| Box::new(Blend::default())),
+    },
+    CommandInfo {
         name: "EXPORTPDF",
         aliases: &[],
         description: "Save the current layout, or all of them, as a PDF",
@@ -796,6 +809,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["H", "BH"],
         description: "Fill an enclosed area with a pattern",
         make: Some(|| Box::new(Hatch::default())),
+    },
+    CommandInfo {
+        name: "GRADIENT",
+        aliases: &["GD"],
+        description: "Fill an enclosed area with a gradient (Pattern: LINEAR, SPHERICAL, …)",
+        make: Some(|| Box::new(Hatch::gradient())),
     },
     CommandInfo {
         name: "HATCHEDIT",

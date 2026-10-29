@@ -12,6 +12,7 @@ mod arc;
 mod array;
 mod attdef;
 mod attribute;
+mod blend;
 mod block;
 mod block_tools;
 mod break_join;

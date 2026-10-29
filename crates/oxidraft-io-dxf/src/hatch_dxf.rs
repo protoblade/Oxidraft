@@ -3,7 +3,7 @@
 //! handles and owners) for HATCH data.
 
 use oxidraft_geom::{EPSILON, Point};
-use oxidraft_model::{Color, Geometry, HatchPattern, Lineweight, Vertex, linetype};
+use oxidraft_model::{Color, Geometry, HatchPattern, Lineweight, Vertex, hatch::GradientKind, linetype};
 
 use crate::{color_from_raw, eol, linetype_from_dxf, lineweight_from_dxf};
 
@@ -175,12 +175,23 @@ fn hatch_geometry(c: &mut Cursor, name: &str, solid: bool) -> Option<Geometry> {
         return None;
     }
     let (mut scale, mut angle) = (1.0, 0.0);
+    let (mut gradient, mut gradient_angle, mut colors, mut gradient_name) = (false, 0.0, Vec::new(), "LINEAR");
     while let Some(code) = c.peek() {
         match code {
             52 => angle = c.num(52).unwrap_or(0.0),
             41 => scale = c.num(41).unwrap_or(1.0),
+            450 => gradient = c.int(450) == Some(1),
+            460 => gradient_angle = c.num(460).unwrap_or(0.0).to_degrees(),
+            63 => colors.extend(c.int(63).map(|i| i.clamp(1, 255) as u8)),
+            470 => gradient_name = c.take(470).unwrap_or("LINEAR"),
             _ => c.at += 1,
         }
+    }
+    if gradient {
+        let kind = GradientKind::from_name(gradient_name).unwrap_or(GradientKind::Linear);
+        let (from, to) = (colors.first().copied().unwrap_or(5), colors.get(1).copied().unwrap_or(2));
+        let pattern = HatchPattern::Gradient { kind, from, to };
+        return Some(Geometry::Hatch { loops, pattern, scale: 1.0, angle: gradient_angle });
     }
     // Patterns Oxidraft doesn't have show as ANSI31 at their scale and angle.
     let pattern = if solid { HatchPattern::Solid } else { HatchPattern::from_name(name).unwrap_or_default() };
@@ -274,7 +285,9 @@ fn num(v: f64) -> String {
 /// patterns, the pattern lines scaled and rotated into drawing units.
 pub(crate) fn hatch_data(g: &Geometry) -> Vec<(i32, String)> {
     let Geometry::Hatch { loops, pattern, scale, angle } = g else { return Vec::new() };
-    let solid = *pattern == HatchPattern::Solid;
+    let solid = pattern.is_fill();
+    // A gradient is a solid fill with its colors after the seed points.
+    let name = if solid { "SOLID" } else { pattern.name() };
     let mut out: Vec<(i32, String)> = vec![
         (100, "AcDbHatch".into()),
         (10, num(0.0)),
@@ -283,7 +296,7 @@ pub(crate) fn hatch_data(g: &Geometry) -> Vec<(i32, String)> {
         (210, num(0.0)),
         (220, num(0.0)),
         (230, num(1.0)),
-        (2, pattern.name().into()),
+        (2, name.into()),
         (70, i32::from(solid).to_string()),
         (71, "0".into()),
         (91, loops.len().to_string()),
@@ -324,6 +337,23 @@ pub(crate) fn hatch_data(g: &Geometry) -> Vec<(i32, String)> {
         }
     }
     out.push((98, "0".into()));
+    if let HatchPattern::Gradient { kind, from, to } = *pattern {
+        out.extend([
+            (450, "1".into()),
+            (451, "0".into()),
+            (452, "0".into()),
+            (453, "2".into()),
+            (460, num(angle.to_radians())),
+            (461, num(0.0)),
+            (462, num(0.0)),
+        ]);
+        for (value, color) in [(0.0, from), (1.0, to)] {
+            let (r, g, b) = oxidraft_model::aci_rgb(color);
+            let rgb = (i64::from(r) << 16) | (i64::from(g) << 8) | i64::from(b);
+            out.extend([(463, num(value)), (63, color.to_string()), (421, rgb.to_string())]);
+        }
+        out.push((470, kind.name().into()));
+    }
     out
 }
 

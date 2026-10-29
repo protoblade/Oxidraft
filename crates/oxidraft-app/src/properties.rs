@@ -550,12 +550,17 @@ impl OxidraftApp {
                 let polys = hatch::polygons(loops);
                 let areas: Vec<f64> = polys.iter().map(|p| hatch::signed_area(p).abs()).collect();
                 let area = areas.iter().copied().fold(0.0, f64::max) * 2.0 - areas.iter().sum::<f64>();
-                vec![
+                let mut rows = vec![
                     ("Pattern", Value::Edit(pattern.name().to_string())),
                     ("Scale", Value::Number(*scale)),
                     ("Angle", Value::Angle(*angle)),
                     ("Area", Value::Text(fmt(area))),
-                ]
+                ];
+                if let HatchPattern::Gradient { from, to, .. } = pattern {
+                    rows.push(("Gradient color 1", Value::Number(f64::from(*from))));
+                    rows.push(("Gradient color 2", Value::Number(f64::from(*to))));
+                }
+                rows
             }
         };
         egui::Grid::new("props_geometry").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
@@ -703,6 +708,16 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
         ) if v > 0.0 => *scale = v,
         (Geometry::Dimension { rotation, .. }, "Rotation") => *rotation = v.rem_euclid(360.0),
         (Geometry::Leader { scale, .. } | Geometry::Hatch { scale, .. }, "Scale") if v > 0.0 => *scale = v,
+        (Geometry::Hatch { pattern: HatchPattern::Gradient { from, .. }, .. }, "Gradient color 1")
+            if (1.0..=255.0).contains(&v) =>
+        {
+            *from = v as u8;
+        }
+        (Geometry::Hatch { pattern: HatchPattern::Gradient { to, .. }, .. }, "Gradient color 2")
+            if (1.0..=255.0).contains(&v) =>
+        {
+            *to = v as u8;
+        }
         (Geometry::Hatch { angle, .. }, "Angle") => *angle = v.rem_euclid(360.0),
         (Geometry::Polyline { vertices, .. }, "Global width") if v >= 0.0 => {
             vertices.iter_mut().for_each(|x| *x = x.with_widths(v, v));
@@ -779,7 +794,17 @@ fn with_text_property(g: &Geometry, label: &str, s: &str) -> Option<Geometry> {
         ) => {
             *text = Some(s.to_string()).filter(|t| !t.is_empty());
         }
-        (Geometry::Hatch { pattern, .. }, "Pattern") => *pattern = HatchPattern::from_name(s)?,
+        // A gradient keeps its colors when its kind changes.
+        (Geometry::Hatch { pattern, .. }, "Pattern") => {
+            let colors = match *pattern {
+                HatchPattern::Gradient { from, to, .. } => Some((from, to)),
+                _ => None,
+            };
+            *pattern = match (HatchPattern::from_name(s)?, colors) {
+                (HatchPattern::Gradient { kind, .. }, Some((from, to))) => HatchPattern::Gradient { kind, from, to },
+                (p, _) => p,
+            };
+        }
         (Geometry::Viewport { on, .. }, "On") => *on = s == "Yes",
         (Geometry::AttributeDefinition { tag, .. }, "Tag") if !s.trim().is_empty() && !s.contains(' ') => {
             *tag = s.trim().to_uppercase();

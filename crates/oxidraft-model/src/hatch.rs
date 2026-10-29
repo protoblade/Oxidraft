@@ -20,6 +20,85 @@ pub enum HatchPattern {
     Line,
     /// Square grid.
     Net,
+    /// A gradient fill (GRADIENT) from one color to another.
+    Gradient {
+        kind: GradientKind,
+        from: u8,
+        to: u8,
+    },
+}
+
+/// AutoCAD's nine gradient patterns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GradientKind {
+    Linear,
+    Cylinder,
+    InvCylinder,
+    Spherical,
+    InvSpherical,
+    Hemispherical,
+    InvHemispherical,
+    Curved,
+    InvCurved,
+}
+
+impl GradientKind {
+    pub const ALL: [GradientKind; 9] = [
+        GradientKind::Linear,
+        GradientKind::Cylinder,
+        GradientKind::InvCylinder,
+        GradientKind::Spherical,
+        GradientKind::InvSpherical,
+        GradientKind::Hemispherical,
+        GradientKind::InvHemispherical,
+        GradientKind::Curved,
+        GradientKind::InvCurved,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            GradientKind::Linear => "LINEAR",
+            GradientKind::Cylinder => "CYLINDER",
+            GradientKind::InvCylinder => "INVCYLINDER",
+            GradientKind::Spherical => "SPHERICAL",
+            GradientKind::InvSpherical => "INVSPHERICAL",
+            GradientKind::Hemispherical => "HEMISPHERICAL",
+            GradientKind::InvHemispherical => "INVHEMISPHERICAL",
+            GradientKind::Curved => "CURVED",
+            GradientKind::InvCurved => "INVCURVED",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(name.trim()))
+    }
+
+    /// How far from the first color to the second `p` is, 0 to 1, in a
+    /// gradient across `bounds` turned `angle` degrees.
+    pub fn at(self, p: Point, bounds: (Point, Point), angle: f64) -> f64 {
+        let (lo, hi) = bounds;
+        let c = lo.midpoint(hi);
+        let u = (p - c).rotated_about(Point::ORIGIN, -angle);
+        let corners = [lo, Point::new(hi.x, lo.y), hi, Point::new(lo.x, hi.y)]
+            .map(|q| (q - c).rotated_about(Point::ORIGIN, -angle));
+        let half_w = corners.iter().map(|q| q.x.abs()).fold(1e-12, f64::max);
+        let half_h = corners.iter().map(|q| q.y.abs()).fold(1e-12, f64::max);
+        let s = ((u.x / half_w + 1.0) / 2.0).clamp(0.0, 1.0);
+        let reach = corners.iter().map(|q| q.length()).fold(1e-12, f64::max);
+        let from_below = Point::new(u.x, u.y + half_h).length() / Point::new(half_w, 2.0 * half_h).length().max(1e-12);
+        let t = match self {
+            GradientKind::Linear => s,
+            GradientKind::Cylinder => (2.0 * s - 1.0).abs(),
+            GradientKind::InvCylinder => 1.0 - (2.0 * s - 1.0).abs(),
+            GradientKind::Spherical => u.length() / reach,
+            GradientKind::InvSpherical => 1.0 - u.length() / reach,
+            GradientKind::Hemispherical => from_below,
+            GradientKind::InvHemispherical => 1.0 - from_below,
+            GradientKind::Curved => s * s,
+            GradientKind::InvCurved => 1.0 - (1.0 - s) * (1.0 - s),
+        };
+        t.clamp(0.0, 1.0)
+    }
 }
 
 /// Line spacing of the line patterns at scale 1 (1/8", as in acad.pat).
@@ -29,8 +108,14 @@ impl HatchPattern {
     pub const ALL: [HatchPattern; 5] =
         [HatchPattern::Solid, HatchPattern::Ansi31, HatchPattern::Ansi37, HatchPattern::Line, HatchPattern::Net];
 
+    /// Filled rather than drawn in lines.
+    pub fn is_fill(self) -> bool {
+        matches!(self, HatchPattern::Solid | HatchPattern::Gradient { .. })
+    }
+
     pub fn name(self) -> &'static str {
         match self {
+            HatchPattern::Gradient { kind, .. } => kind.name(),
             HatchPattern::Solid => "SOLID",
             HatchPattern::Ansi31 => "ANSI31",
             HatchPattern::Ansi37 => "ANSI37",
@@ -39,14 +124,18 @@ impl HatchPattern {
         }
     }
 
+    /// A pattern by name; a gradient's (LINEAR, SPHERICAL, …) blue to yellow.
     pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|p| p.name().eq_ignore_ascii_case(name.trim()))
+        Self::ALL
+            .into_iter()
+            .find(|p| p.name().eq_ignore_ascii_case(name.trim()))
+            .or_else(|| GradientKind::from_name(name).map(|kind| HatchPattern::Gradient { kind, from: 5, to: 2 }))
     }
 
     /// Line families as (angle in degrees, spacing at scale 1).
     pub fn families(self) -> &'static [(f64, f64)] {
         match self {
-            HatchPattern::Solid => &[],
+            HatchPattern::Solid | HatchPattern::Gradient { .. } => &[],
             HatchPattern::Ansi31 => &[(45.0, SPACING)],
             HatchPattern::Ansi37 => &[(45.0, SPACING), (135.0, SPACING)],
             HatchPattern::Line => &[(0.0, SPACING)],
@@ -173,6 +262,38 @@ pub fn triangles(polys: &[Vec<Point>]) -> Vec<[Point; 3]> {
     }
     let Ok(indices) = earcutr::earcut(&coords, &holes, 2) else { return Vec::new() };
     indices.as_chunks::<3>().0.iter().map(|&[a, b, c]| [points[a], points[b], points[c]]).collect()
+}
+
+/// A gradient's triangles, small enough to shade smoothly, each corner
+/// with how far it is from the first color to the second.
+pub fn gradient_triangles(polys: &[Vec<Point>], kind: GradientKind, angle: f64) -> Vec<[(Point, f64); 3]> {
+    let all: Vec<Point> = polys.iter().flatten().copied().collect();
+    let Some(first) = all.first() else { return Vec::new() };
+    let (lo, hi) = all.iter().fold((*first, *first), |(lo, hi), p| {
+        (Point::new(lo.x.min(p.x), lo.y.min(p.y)), Point::new(hi.x.max(p.x), hi.y.max(p.y)))
+    });
+    let fine = lo.distance(hi) / 24.0;
+    let mut out = Vec::new();
+    let mut stack: Vec<([Point; 3], u8)> = triangles(polys).into_iter().map(|t| (t, 0)).collect();
+    while let Some((t, depth)) = stack.pop() {
+        let longest = (0..3).max_by(|&a, &b| t[a].distance(t[(a + 1) % 3]).total_cmp(&t[b].distance(t[(b + 1) % 3])));
+        let i = longest.unwrap_or(0);
+        let (a, b, c) = (t[i], t[(i + 1) % 3], t[(i + 2) % 3]);
+        if a.distance(b) > fine && depth < 12 {
+            let m = a.midpoint(b);
+            stack.push(([a, m, c], depth + 1));
+            stack.push(([m, b, c], depth + 1));
+            continue;
+        }
+        out.push(t.map(|p| (p, kind.at(p, (lo, hi), angle))));
+    }
+    out
+}
+
+/// A color between `from` and `to`, `t` of the way.
+pub fn blend_rgb(from: [u8; 3], to: [u8; 3], t: f64) -> [u8; 3] {
+    let mix = |a: u8, b: u8| (f64::from(a) + (f64::from(b) - f64::from(a)) * t).round().clamp(0.0, 255.0) as u8;
+    [mix(from[0], to[0]), mix(from[1], to[1]), mix(from[2], to[2])]
 }
 
 #[cfg(test)]

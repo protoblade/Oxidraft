@@ -190,7 +190,8 @@ impl Command for HatchEdit {
             (Stage::Option, Input::Keyword(k)) => return self.option(k, ctx),
             (Stage::Option, Input::Enter) => self.stage = Stage::Pattern,
             (Stage::Pattern, Input::Text(t)) if t.trim() == "?" => {
-                let names: Vec<&str> = HatchPattern::ALL.iter().map(|p| p.name()).collect();
+                let gradients = oxidraft_model::hatch::GradientKind::ALL.map(|k| k.name());
+                let names: Vec<&str> = HatchPattern::ALL.iter().map(|p| p.name()).chain(gradients).collect();
                 ctx.messages.push(format!("Patterns: {}", names.join(", ")));
             }
             (Stage::Pattern, Input::Text(t)) => {
