@@ -1276,11 +1276,15 @@ impl OxidraftApp {
                     // The annotation scale (CANNOSCALE), and its two toggles.
                     let name = oxidraft_model::annoscale::scale_name(self.doc.anno_scale());
                     let menu = ui.menu_button(egui::RichText::new(name).color(theme::text_dim()), |ui| {
-                        for (name, s) in oxidraft_model::annoscale::SCALES {
+                        for (name, s) in self.scale_list() {
                             if ui.selectable_label(self.doc.anno_scale() == s, name).clicked() {
                                 self.set_anno_scale(s);
                                 ui.close();
                             }
+                        }
+                        if ui.button("Custom...").clicked() {
+                            self.open_scale_list();
+                            ui.close();
                         }
                         ui.separator();
                         let mut all = self.doc.anno_all_visible();

@@ -151,6 +151,28 @@ impl Command for AnnoUpdate {
     }
 }
 
+/// ANNORESET: an annotative object's scales share one position here, so
+/// there's nothing to put back; it says so.
+#[derive(Default)]
+pub struct AnnoReset;
+
+impl Command for AnnoReset {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Select annotative objects")
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let Input::Selection(s) = input else { return Ok(Step::Done) };
+        let n = s.ids.iter().filter(|id| ctx.doc.entity(**id).is_some_and(|e| e.annotative.is_some())).count();
+        ctx.messages.push(format!("{n} annotative object(s): every scale shares one position, so they're as reset."));
+        Ok(Step::Done)
+    }
+
+    fn wants_selection(&self) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use oxidraft_geom::Point;

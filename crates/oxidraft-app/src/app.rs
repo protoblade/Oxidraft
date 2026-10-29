@@ -129,6 +129,8 @@ pub struct OxidraftApp {
     pub(crate) point_style: Option<crate::drafting::PointStyle>,
     pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
     pub(crate) field_dialog: Option<crate::fields::FieldDialog>,
+    pub(crate) paste_special: Option<crate::paste_scales::PasteSpecial>,
+    pub(crate) scale_list_dialog: Option<crate::paste_scales::ScaleList>,
     /// ANNOAUTOSCALE: a new annotation scale is added to annotative objects.
     pub(crate) anno_autoscale: bool,
     /// TOOLPALETTES, while open.
@@ -315,6 +317,8 @@ impl OxidraftApp {
             point_style: None,
             tolerance_dialog: None,
             field_dialog: None,
+            paste_special: None,
+            scale_list_dialog: None,
             anno_autoscale: false,
             tool_palettes: None,
             design_center: None,
@@ -671,6 +675,9 @@ impl OxidraftApp {
             "TOLERANCE" | "TOL" => self.open_tolerance(),
             "FIELD" => self.open_field_dialog(false),
             "STATUS" => self.status(),
+            "PASTESPEC" | "PA" => self.open_paste_special(),
+            "SCALELISTEDIT" | "-SCALELISTEDIT" => self.open_scale_list(),
+            "FILTER" | "FI" => self.open_quick_select(),
             "ADCENTER" | "ADC" | "DC" => self.toggle_design_center(),
             "TOOLPALETTES" | "TP" => self.toggle_tool_palettes(),
             "TOOLPALETTESCLOSE" => self.tool_palettes = None,
@@ -1101,6 +1108,8 @@ impl eframe::App for OxidraftApp {
         self.tolerance_dialog(&ctx);
         self.text_editor(&ctx);
         self.field_dialog(&ctx);
+        self.paste_special_dialog(&ctx);
+        self.scale_list_dialog(&ctx);
         self.tool_palettes_window(&ctx);
         self.design_center(&ctx);
         self.styles_manager(&ctx);

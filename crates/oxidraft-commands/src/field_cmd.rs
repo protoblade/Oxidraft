@@ -21,6 +21,11 @@ impl Default for FieldText {
 }
 
 impl FieldText {
+    /// Any text, placed the same way (PASTESPEC's Text).
+    pub fn with_text(content: String) -> Self {
+        Self { code: Some(content), ..Self::default() }
+    }
+
     fn text(&self, code: &str, at: Point) -> Geometry {
         Geometry::Text {
             look: TextLook::of(&self.style),

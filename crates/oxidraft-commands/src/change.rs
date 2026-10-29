@@ -358,6 +358,73 @@ impl Command for Solid {
     }
 }
 
+/// TRACE: a solid line of a width, point after point, as a wide polyline.
+pub struct Trace {
+    width: Option<f64>,
+    points: Vec<Point>,
+    last_width: f64,
+}
+
+impl Default for Trace {
+    fn default() -> Self {
+        Self { width: None, points: Vec::new(), last_width: 0.05 }
+    }
+}
+
+impl Trace {
+    fn trace(&self, points: &[Point]) -> Geometry {
+        let w = self.width.unwrap_or(self.last_width);
+        let vertices = points.iter().map(|p| Vertex::at(*p).with_widths(w, w)).collect();
+        Geometry::Polyline { vertices, closed: false }
+    }
+}
+
+impl Command for Trace {
+    fn start(&mut self, vars: &crate::Vars) -> Option<String> {
+        if vars.pline_width > 0.0 {
+            self.last_width = vars.pline_width;
+        }
+        None
+    }
+
+    fn prompt(&self) -> Prompt {
+        match (self.width, self.points.len()) {
+            (None, _) => Prompt::new("Specify trace width").with_default(format!("{:.4}", self.last_width)),
+            (Some(_), 0) => Prompt::new("Specify start point"),
+            _ => Prompt::new("Specify next point"),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (self.width, input) {
+            (None, Input::Value(v)) if v >= 0.0 => self.width = Some(v),
+            (None, Input::Enter) => self.width = Some(self.last_width),
+            (Some(_), Input::Point(p)) => self.points.push(p),
+            (Some(_), Input::Enter) => {
+                if self.points.len() >= 2 {
+                    ctx.doc.add(self.trace(&self.points));
+                }
+                return Ok(Step::Done);
+            }
+            _ => return Err("Invalid input.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn preview(&self, cursor: Point) -> Vec<Geometry> {
+        if self.points.is_empty() {
+            return Vec::new();
+        }
+        let mut points = self.points.clone();
+        points.push(cursor);
+        vec![self.trace(&points)]
+    }
+
+    fn base_point(&self) -> Option<Point> {
+        self.points.last().copied()
+    }
+}
+
 /// TXT2MTXT: the selected single-line texts as one multiline text, top
 /// line first, at the top one's place and with its height.
 #[derive(Default)]
@@ -481,6 +548,17 @@ mod tests {
             })
             .collect();
         assert_eq!(texts, ["TOP LINE\\PLOWER"]);
+    }
+
+    #[test]
+    fn trace_is_a_wide_polyline() {
+        let mut d = Document::new();
+        let mut e = Engine::new();
+        run(&mut e, &mut d, &["trace", "2", "0,0", "10,0", "10,10", ""]);
+        let g = d.entities().next().unwrap().geometry.clone();
+        let Geometry::Polyline { vertices, closed: false } = g else { panic!("{g:?}") };
+        assert_eq!(vertices.len(), 3);
+        assert!(vertices.iter().all(|v| v.start_width == 2.0 && v.end_width == 2.0));
     }
 
     #[test]

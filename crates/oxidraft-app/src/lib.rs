@@ -26,6 +26,7 @@ mod layouts;
 mod manage;
 mod named_views;
 mod object_props;
+mod paste_scales;
 mod plot;
 mod plot_styles;
 mod properties;

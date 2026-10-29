@@ -265,6 +265,10 @@ fn vars() -> Vec<Var> {
             a.doc.set_units(u);
             Ok(())
         }),
+        var!("LAYOUTTAB", |a| flag(a.show_layout_tabs), |a, v| {
+            a.show_layout_tabs = parse_flag(v)?;
+            Ok(())
+        }),
         var!("LIMCHECK", |a| flag(a.doc.limits_check()), |a, v| {
             a.doc.set_limits_check(parse_flag(v)?);
             Ok(())

@@ -7,7 +7,7 @@ use oxidraft_model::Document;
 use crate::app::OxidraftApp;
 
 /// True if clipboard text is a DXF drawing rather than ordinary text.
-fn looks_like_dxf(text: &str) -> bool {
+pub(crate) fn looks_like_dxf(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with('0') && t.contains("SECTION") && t.contains("ENTITIES")
 }

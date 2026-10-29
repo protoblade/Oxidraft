@@ -26,6 +26,9 @@ pub struct Settings {
     pub words: Vec<String>,
     /// The tool palettes, once changed from the defaults (TOOLPALETTES).
     pub tool_palettes: Vec<crate::tool_palettes::ToolPalette>,
+    /// Scales added to AutoCAD's (SCALELISTEDIT), as drawing units per
+    /// paper unit.
+    pub scales: Vec<f64>,
 }
 
 /// Where a palette sits: docked at the left or right of the drawing
@@ -172,6 +175,7 @@ mod tests {
             aliases: vec![("QQ".into(), "CIRCLE".into())],
             words: vec!["Oxidraft".into()],
             tool_palettes: crate::tool_palettes::default_palettes(),
+            scales: vec![25.0],
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);

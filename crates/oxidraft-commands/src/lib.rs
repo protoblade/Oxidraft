@@ -35,7 +35,7 @@ mod ellipse;
 mod engine;
 mod erase;
 mod explode;
-mod field_cmd;
+pub mod field_cmd;
 mod fillet;
 mod grip;
 mod groups;

@@ -662,6 +662,36 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(crate::anno_cmd::ObjectScale::default())),
     },
     CommandInfo {
+        name: "ANNORESET",
+        aliases: &[],
+        description: "Reset annotative objects' scale positions (here they share one)",
+        make: Some(|| Box::new(crate::anno_cmd::AnnoReset)),
+    },
+    CommandInfo {
+        name: "TRACE",
+        aliases: &[],
+        description: "Draw a solid line of a width, point after point",
+        make: Some(|| Box::new(crate::change::Trace::default())),
+    },
+    CommandInfo {
+        name: "SCALELISTEDIT",
+        aliases: &["-SCALELISTEDIT"],
+        description: "Edit the list of scales",
+        make: None,
+    },
+    CommandInfo {
+        name: "PASTESPEC",
+        aliases: &["PA"],
+        description: "Paste the clipboard as objects, a block or text",
+        make: None,
+    },
+    CommandInfo {
+        name: "FILTER",
+        aliases: &["FI"],
+        description: "Select objects by type and properties (Quick Select)",
+        make: None,
+    },
+    CommandInfo {
         name: "ANNOUPDATE",
         aliases: &[],
         description: "Size annotative objects for the current annotation scale again",

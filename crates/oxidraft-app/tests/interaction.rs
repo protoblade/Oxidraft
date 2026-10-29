@@ -2624,3 +2624,20 @@ fn annotation_scale_from_the_status_bar() {
     let doc = h.state_mut().document_mut();
     assert!(matches!(doc.entity(text).unwrap().geometry, Geometry::Text { height, .. } if (height - 2.5).abs() < 1e-9));
 }
+
+#[test]
+fn scale_list_takes_scales_of_your_own() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["scalelistedit"]);
+    h.run_steps(2);
+    let field = h.get_by_role_and_label(Role::TextInput, "New scale").rect().center();
+    click(&mut h, field);
+    h.get_by_role_and_label(Role::TextInput, "New scale").type_text("1:75");
+    h.run_steps(1);
+    h.get_all_by_label("Add").last().unwrap().click();
+    h.run_steps(2);
+    assert!(h.query_by_label("1:75  (yours)").is_some());
+    type_all(&mut h, &["cannoscale", "1:75"]);
+    h.run_steps(1);
+    assert_eq!(h.state_mut().document_mut().anno_scale(), 75.0);
+}
