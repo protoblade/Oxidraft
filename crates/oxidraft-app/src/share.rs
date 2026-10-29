@@ -81,7 +81,7 @@ impl OxidraftApp {
     pub(crate) fn markup_import(&mut self) {
         let Some(file) = rfd::FileDialog::new()
             .set_title("Markup Import: the marked-up plot")
-            .add_filter("PDF or image", &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "bmp"])
+            .add_filter("PDF, DWFx or image", &["pdf", "dwfx", "png", "jpg", "jpeg", "tif", "tiff", "bmp"])
             .pick_file()
         else {
             return;
@@ -104,6 +104,26 @@ impl OxidraftApp {
             area => area,
         };
         let layout = settings.layout(&self.doc, space).ok_or("There's no sheet here to lay it over.")?;
+        // A DWFx markup: its lines and text, in red on layer MARKUP.
+        if file.extension().is_some_and(|e| e.eq_ignore_ascii_case("dwfx") || e.eq_ignore_ascii_case("xps")) {
+            let data = std::fs::read(file).map_err(|e| format!("Could not read {}: {e}", file.display()))?;
+            let objects = crate::dwf_in::read_dwfx(&data)?;
+            let origin = layout.window.min - layout.origin * (1.0 / layout.scale);
+            let placement =
+                oxidraft_model::Placement { position: origin, scale: 1.0 / layout.scale, rotation: 0.0, mirror: false };
+            self.engine.cancel(&mut self.doc);
+            self.doc.begin("MARKUP");
+            if self.doc.layer("MARKUP").is_none() {
+                self.doc.add_layer(Layer::new("MARKUP", 1));
+            }
+            let n = objects.len();
+            for (g, _) in objects {
+                self.doc.add_on_layer(placement.place(Point::ORIGIN, &g), "MARKUP", Color::ByLayer);
+            }
+            self.doc.commit();
+            self.engine.log(format!("{n} markup object(s) laid over the sheet on layer MARKUP."));
+            return Ok(());
+        }
         let pdf = oxidraft_raster::is_pdf(file);
         let info = oxidraft_raster::probe(file, 0)?;
         // The page over the whole sheet (an image's height as its shape has it).

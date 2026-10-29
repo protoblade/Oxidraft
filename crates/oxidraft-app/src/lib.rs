@@ -19,6 +19,7 @@ mod diminspect;
 mod drafting;
 mod drawing_units;
 pub mod drawings;
+mod dwf_in;
 mod etransmit;
 mod fields;
 mod files;

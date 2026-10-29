@@ -1132,6 +1132,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Fill linked tables from their spreadsheets again",
         make: None,
     },
+    CommandInfo { name: "DWFATTACH", aliases: &[], description: "Place a DWFx sheet as a block reference", make: None },
+    CommandInfo { name: "DWFCLIP", aliases: &[], description: "Clip an attached DWFx sheet (XCLIP)", make: None },
+    CommandInfo { name: "DWFADJUST", aliases: &[], description: "How an attached DWFx sheet shows", make: None },
+    CommandInfo { name: "DWFLAYERS", aliases: &[], description: "An attached DWFx sheet's layers", make: None },
+    CommandInfo { name: "DWFFORMAT", aliases: &[], description: "The DWF format written (DWFx)", make: None },
+    CommandInfo { name: "OPENDWFMARKUP", aliases: &[], description: "Lay a DWFx markup over its sheet", make: None },
     CommandInfo { name: "MSLIDE", aliases: &[], description: "Save the view as a slide (.sld)", make: None },
     CommandInfo { name: "VSLIDE", aliases: &[], description: "Show a slide (.sld) until REDRAW", make: None },
     CommandInfo {

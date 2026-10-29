@@ -3158,3 +3158,19 @@ fn data_linked_tables_place_and_update() {
     assert_eq!(cells[3], ["D2", "1000"]);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn dwfx_sheets_attach_as_blocks() {
+    let mut h = app_with_line();
+    let dir = std::env::temp_dir().join(format!("oxidraft-dwfattach-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dwfx = dir.join("Plan.dwfx");
+    assert_eq!(h.state_mut().export_to_with(&dwfx, false, oxidraft_plot::Plotter::Dwfx), Ok(1));
+    let before = h.state_mut().document_mut().len();
+    let n = h.state_mut().dwf_attach_file(&dwfx).unwrap();
+    assert!(n >= 2, "the two lines at least");
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.len(), before + 1);
+    assert!(doc.block("DWF-Plan").is_some_and(|b| b.entities.len() == n));
+    std::fs::remove_dir_all(&dir).ok();
+}

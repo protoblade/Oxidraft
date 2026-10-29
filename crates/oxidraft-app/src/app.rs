@@ -830,6 +830,13 @@ impl OxidraftApp {
             "DATALINKUPDATE" | "DLU" => {
                 self.data_link_update();
             }
+            "DWFATTACH" => self.dwf_attach(),
+            "DWFCLIP" => self.run("XCLIP"),
+            "DWFADJUST" | "DWFLAYERS" => self
+                .engine
+                .log("A DWFx sheet is attached as a block: LAYER and XCLIP work on it; its colors are its own."),
+            "DWFFORMAT" => self.engine.log("DWF files are written as DWFx (XPS compatible)."),
+            "OPENDWFMARKUP" => self.markup_import(),
             "MSLIDE" => self.make_slide(),
             "VSLIDE" => self.view_slide_file(),
             "DRAWINGRECOVERY" | "DRM" => self.recovery_open = true,

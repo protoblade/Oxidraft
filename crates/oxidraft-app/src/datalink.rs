@@ -45,7 +45,7 @@ pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
 }
 
 /// The files in a zip archive: name and contents.
-fn unzip(data: &[u8]) -> Vec<(String, Vec<u8>)> {
+pub(crate) fn unzip(data: &[u8]) -> Vec<(String, Vec<u8>)> {
     let u16_at = |i: usize| data.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
     let u32_at = |i: usize| data.get(i..i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
     // The central directory has the sizes, whatever the local headers say.
