@@ -386,7 +386,8 @@ impl OxidraftApp {
             if response.lost_focus() {
                 let (old, new) = (old.clone(), buffer.trim().to_string());
                 self.renaming_layer = None;
-                if new != old {
+                // Esc keeps the old name.
+                if new != old && !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     self.doc.begin("LAYER");
                     let result = self.doc.rename_layer(&old, &new);
                     self.doc.commit();

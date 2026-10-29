@@ -452,10 +452,12 @@ impl OxidraftApp {
                         ui.colored_label(theme::text_dim(), t);
                         None
                     }
-                    Value::Number(v) => self.number_field(ui, Id::unique(("prop", e.id, label)), v, false, width),
-                    Value::Angle(v) => self.number_field(ui, Id::unique(("prop", e.id, label)), v, true, width),
+                    Value::Number(v) => {
+                        self.number_field(ui, label, Id::unique(("prop", e.id, label)), v, false, width)
+                    }
+                    Value::Angle(v) => self.number_field(ui, label, Id::unique(("prop", e.id, label)), v, true, width),
                     Value::Edit(s) => {
-                        if let Some(new) = self.string_field(ui, Id::unique(("prop", e.id, label)), &s, width) {
+                        if let Some(new) = self.string_field(ui, label, Id::unique(("prop", e.id, label)), &s, width) {
                             match with_text_property(&e.geometry, label, &new) {
                                 Some(g) => self.edit([e.id], |x| x.geometry = g.clone()),
                                 None => self.engine.log(format!("Invalid value for {label}.")),
@@ -477,17 +479,19 @@ impl OxidraftApp {
     }
 
     /// An editable number that applies on Enter or when it loses focus.
-    fn number_field(&mut self, ui: &mut Ui, id: Id, value: f64, angle: bool, width: f32) -> Option<f64> {
+    fn number_field(&mut self, ui: &mut Ui, label: &str, id: Id, value: f64, angle: bool, width: f32) -> Option<f64> {
         let shown = if angle { format!("{value:.0}") } else { fmt(value) };
         let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or(shown);
         let response = ui.add(text_field(&mut text, id, width));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label));
         self.text_fields.push(id);
         if response.has_focus() {
             ui.data_mut(|d| d.insert_temp(id, text.clone()));
             return None;
         }
         ui.data_mut(|d| d.remove::<String>(id));
-        if response.lost_focus() {
+        // Esc leaves the field as it was.
+        if response.lost_focus() && !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             let v: f64 = text.trim().trim_end_matches('°').parse().ok()?;
             return ((v - value).abs() > 1e-12).then_some(v);
         }
@@ -495,16 +499,18 @@ impl OxidraftApp {
     }
 
     /// An editable string that applies on Enter or when it loses focus.
-    fn string_field(&mut self, ui: &mut Ui, id: Id, value: &str, width: f32) -> Option<String> {
+    fn string_field(&mut self, ui: &mut Ui, label: &str, id: Id, value: &str, width: f32) -> Option<String> {
         let mut text = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| value.to_string());
         let response = ui.add(text_field(&mut text, id, width));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label));
         self.text_fields.push(id);
         if response.has_focus() {
             ui.data_mut(|d| d.insert_temp(id, text.clone()));
             return None;
         }
         ui.data_mut(|d| d.remove::<String>(id));
-        (response.lost_focus() && text != value).then_some(text)
+        let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        (response.lost_focus() && !escaped && text != value).then_some(text)
     }
 
     /// Applies one undoable edit to several objects.

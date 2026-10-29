@@ -399,6 +399,25 @@ fn double_clicking_a_block_edits_its_attributes() {
     h.run_steps(2);
     let lines_before = h.state_mut().engine_mut().history().len();
 
+    // Esc while a value is being typed closes the editor, as Cancel.
+    let field = h.get_by_role_and_label(Role::TextInput, "KWNOM");
+    field.focus();
+    h.run_steps(1);
+    h.get_by_role_and_label(Role::TextInput, "KWNOM").type_text("77");
+    h.run_steps(1);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(Role::TextInput, "KWNOM").is_none(), "Esc closes the editor");
+    match &h.state_mut().document_mut().entity(block).unwrap().geometry {
+        Geometry::Insert { attributes, .. } => assert_eq!(attributes[0].value, "9", "nothing applied"),
+        g => panic!("{g:?}"),
+    }
+    // Half a second on, so the next two clicks are a double-click of their own.
+    h.run_steps(30);
+    click(&mut h, edge);
+    click(&mut h, edge);
+    h.run_steps(2);
+
     let field = h.get_by_role_and_label(Role::TextInput, "KWNOM");
     field.focus();
     h.run_steps(1);
@@ -877,4 +896,38 @@ fn properties_palette_lines_up_and_docks_at_either_side_or_floats() {
     drag(&mut h, t.center(), Pos2::new(5.0, 400.0));
     h.run_steps(3);
     assert!(title(&h).min.x < 100.0, "docked at the left again: {:?}", title(&h));
+}
+
+#[test]
+fn escape_closes_the_properties_palette_once_no_command_runs() {
+    let mut h = app_with_line();
+    let wall = screen(&h, 50.0, 0.0);
+    click(&mut h, wall);
+    h.state_mut().type_command("pr");
+    h.run_steps(3);
+    let open = |h: &Harness<'_, OxidraftApp>| h.query_by_label("PROPERTIES").is_some();
+    assert!(open(&h));
+    // Esc in a field leaves the value as it was, and the palette open.
+    let line = |h: &mut Harness<'_, OxidraftApp>| the_line(h);
+    let before = line(&mut h);
+    h.get_by_role_and_label(Role::TextInput, "Start X").focus();
+    h.run_steps(1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_role_and_label(Role::TextInput, "Start X").type_text("999");
+    h.run_steps(1);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert_eq!(line(&mut h), before);
+    assert!(open(&h), "the first Esc only leaves the field");
+    // A command running: Esc ends it, and the palette stays.
+    h.state_mut().type_command("l");
+    h.run_steps(1);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state_mut().engine_mut().is_active() && open(&h));
+    // Nothing running: Esc clears the selection and closes the palette.
+    click(&mut h, wall);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(!open(&h) && h.state_mut().engine_mut().selection().is_empty());
 }

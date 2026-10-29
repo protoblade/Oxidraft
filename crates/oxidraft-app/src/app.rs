@@ -120,6 +120,8 @@ pub struct OxidraftApp {
     pub(crate) text_fields: Vec<egui::Id>,
     /// Same, from the previous frame (used before this frame's widgets exist).
     pub(crate) prev_text_fields: Vec<egui::Id>,
+    /// The widget that had the keyboard at the end of the last frame.
+    pub(crate) last_focus: Option<egui::Id>,
 }
 
 impl OxidraftApp {
@@ -196,6 +198,7 @@ impl OxidraftApp {
             renaming_layer: None,
             text_fields: Vec::new(),
             prev_text_fields: Vec::new(),
+            last_focus: None,
         }
     }
 
@@ -455,9 +458,38 @@ impl OxidraftApp {
         Rect::from_min_max(screen.min, egui::pos2(screen.right(), bottom))
     }
 
+    /// Esc closes the topmost open dialog as its Cancel would: the
+    /// Enhanced Attribute Editor, Save Reference Edits, Options, Quick
+    /// Select or an Attach dialog. Returns true if it closed one.
+    fn close_dialog_on_escape(&mut self, ctx: &egui::Context) -> bool {
+        let open = self.attribute_editor.is_some()
+            || self.xref_edit_save.is_some()
+            || self.options.is_some()
+            || self.quick_select.is_some()
+            || self.attach_dialog.is_some()
+            || self.image_attach_dialog.is_some();
+        if !open || !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            return false;
+        }
+        if self.xref_edit_save.take().is_some() {
+            self.engine.log("Reference edits not saved; still editing.".to_string());
+        } else if self.attribute_editor.take().is_none()
+            && self.options.take().is_none()
+            && self.quick_select.take().is_none()
+            && self.attach_dialog.take().is_none()
+        {
+            self.image_attach_dialog = None;
+        }
+        true
+    }
+
     /// True while the keyboard belongs to a palette or dialog text field.
+    /// egui takes the keyboard from a field as soon as Esc is pressed, so
+    /// the field that had it last frame still counts: that Esc is its.
     pub(crate) fn editing_field(&self, ctx: &egui::Context) -> bool {
-        ctx.memory(|m| m.focused()).is_some_and(|f| self.prev_text_fields.contains(&f) || self.text_fields.contains(&f))
+        ctx.memory(|m| m.focused())
+            .or(self.last_focus)
+            .is_some_and(|f| self.prev_text_fields.contains(&f) || self.text_fields.contains(&f))
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
@@ -472,6 +504,11 @@ impl OxidraftApp {
         }
         if ctx.input_mut(|i| i.consume_key(cmd, Key::P)) {
             self.open_plot(false);
+            return;
+        }
+        // Esc is the open dialog's Cancel, even while one of its fields has
+        // the keyboard.
+        if self.close_dialog_on_escape(ctx) {
             return;
         }
         if self.editing_field(ctx) {
@@ -511,6 +548,11 @@ impl OxidraftApp {
         if esc {
             if !self.command_text.is_empty() {
                 self.command_text.clear();
+            }
+            // With no command to end, Esc also closes the Properties palette
+            // (along with the selection it showed).
+            if !self.engine.is_active() {
+                self.properties_open = false;
             }
             self.engine.cancel(&mut self.doc);
             self.suggestion = 0;
@@ -611,6 +653,7 @@ impl eframe::App for OxidraftApp {
         if self.handle_ui_requests(&ctx) {
             ctx.request_repaint();
         }
+        self.last_focus = ctx.memory(|m| m.focused());
     }
 }
 
