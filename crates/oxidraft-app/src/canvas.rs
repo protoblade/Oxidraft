@@ -503,6 +503,20 @@ impl OxidraftApp {
         let tolerance = self.pick_tolerance();
         let shift = ui.input(|i| i.modifiers.shift);
 
+        // Cmd- or Ctrl-click follows an object's hyperlink.
+        let follow = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+        if follow
+            && response.clicked()
+            && !self.engine.is_active()
+            && let Some(link) = snap::pick(&self.doc, c.raw, tolerance)
+                .and_then(|id| self.doc.entity(id))
+                .and_then(|e| e.hyperlink.clone())
+        {
+            let url = self.link_target(&link.url);
+            self.engine.log(format!("Opening {url}"));
+            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+            return;
+        }
         // While the Selection list is open, a click in the drawing closes it.
         if self.cycling.is_some() {
             if response.clicked() || response.drag_started() {
@@ -1180,8 +1194,33 @@ impl OxidraftApp {
         }
     }
 
+    /// Where a hyperlink goes: web addresses as they are, files relative
+    /// to the drawing's folder.
+    pub(crate) fn link_target(&self, url: &str) -> String {
+        if url.contains("://") || url.starts_with("mailto:") {
+            return url.to_string();
+        }
+        let path = std::path::Path::new(url);
+        let full = match (path.is_relative(), self.path.as_ref().and_then(|p| p.parent())) {
+            (true, Some(dir)) => dir.join(path),
+            _ => path.to_path_buf(),
+        };
+        format!("file://{}", full.display())
+    }
+
     /// Snap name, polar readout and dynamic input next to the cursor.
     fn draw_tooltips(&self, painter: &Painter, rect: Rect, c: &CursorState) {
+        // An object's hyperlink, under the cursor while idle.
+        if !self.engine.is_active()
+            && c.snap.is_none()
+            && let Some(link) = snap::pick(&self.doc, c.raw, self.pick_tolerance())
+                .and_then(|id| self.doc.entity(id))
+                .and_then(|e| e.hyperlink.as_ref())
+        {
+            let name = if link.description.is_empty() { &link.url } else { &link.description };
+            let follow = if cfg!(target_os = "macos") { "Cmd-click to follow" } else { "Ctrl-click to follow" };
+            tooltip(painter, c.screen + vec2(18.0, 18.0), &[format!("🔗 {name}"), follow.to_string()], None);
+        }
         if let Some(s) = c.snap {
             let at = self.view.to_screen(rect, s.point) + vec2(14.0, 14.0);
             tooltip(painter, at, &[s.kind.label().to_string()], None);

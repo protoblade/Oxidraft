@@ -17,7 +17,7 @@ use crate::{
     blend::{Blend, Boundary},
     block::DefineBlock,
     block::InsertBlock,
-    block_tools::{AttEdit, AttEditGlobal, NCopy, SetByLayer},
+    block_tools::{AttEdit, AttEditGlobal, HyperlinkCmd, NCopy, SetByLayer},
     break_join::Break,
     break_join::Join,
     calc::Cal,
@@ -701,6 +701,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &[],
         description: "Choose the isometric plane: Left, Top or Right (F5)",
         make: Some(|| Box::new(crate::views::IsoPlaneCmd::default())),
+    },
+    CommandInfo {
+        name: "HYPERLINK",
+        aliases: &["-HYPERLINK"],
+        description: "Link objects to a web page or file (Cmd/Ctrl-click to follow), or remove links",
+        make: Some(|| Box::new(HyperlinkCmd::default())),
     },
     CommandInfo {
         name: "EXPORTPDF",

@@ -88,9 +88,15 @@ pub fn read(bytes: &[u8]) -> Result<Opened, Error> {
         .read()
         .map_err(|e| format!("not a readable DWG file ({e})"))?;
     let version = Version::of(cad.version);
-    // Oxidraft keeps no extended data, and some trips up the DXF reader.
+    // Oxidraft keeps no other extended data than hyperlinks, and some trips
+    // up the DXF reader.
     for e in cad.entities_mut() {
-        e.common_mut().extended_data = Default::default();
+        let data = &mut e.common_mut().extended_data;
+        let link = data.get_record("PE_URL").cloned();
+        *data = Default::default();
+        if let Some(link) = link {
+            data.add_record(link);
+        }
     }
     let dxf = DxfWriter::new(&cad).with_version(DxfVersion::AC1032).write_to_vec().map_err(|e| e.to_string())?;
     let imported = oxidraft_io_dxf::read(&mut dxf.as_slice()).map_err(|e| e.to_string())?;
@@ -738,6 +744,25 @@ mod tests {
         };
         doc.set_properties(props.clone());
         let check = |back: &Document, how: &str| assert_eq!(back.properties(), &props, "{how}");
+        check(&oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
+    fn hyperlinks_survive() {
+        let mut doc = Document::new();
+        let id = doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });
+        let link = oxidraft_model::Hyperlink { url: "https://example.com/a".into(), description: "Spec".into() };
+        doc.update(id, |e| e.hyperlink = Some(Box::new(link.clone())));
+        let check = |back: &Document, how: &str| {
+            let got = back.entities().next().and_then(|e| e.hyperlink.clone());
+            assert_eq!(got.as_deref(), Some(&link), "{how}");
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
         check(&oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document, "DXF");
         for version in [Version::R2018, Version::R2000] {
             check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));

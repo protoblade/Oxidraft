@@ -1882,18 +1882,26 @@ impl Document {
                 layer.to_string()
             }
         };
-        let id = EntityId(self.next_id);
-        self.next_id += 1;
         let entity = Entity {
-            id,
+            id: EntityId(0),
             space: self.space,
             layer,
             color,
             linetype: linetype.to_string(),
             lineweight,
             transparency,
+            hyperlink: None,
             geometry,
         };
+        self.insert_entity(entity)
+    }
+
+    /// Adds `entity` as a new object (its id is given here), in the space
+    /// being drawn in.
+    fn insert_entity(&mut self, mut entity: Entity) -> EntityId {
+        let id = EntityId(self.next_id);
+        self.next_id += 1;
+        (entity.id, entity.space) = (id, self.space);
         // Something was brought to the front: new objects go above it, in
         // the same undo step.
         let over_top = self.top >= id.0 as f64;
@@ -2028,7 +2036,10 @@ impl Document {
     /// Adds an entity with the layer, color, linetype and lineweight of
     /// `like` (copies, offsets, pieces of a broken object).
     pub fn add_like(&mut self, geometry: Geometry, like: &Entity) -> EntityId {
-        self.add_with(geometry, &like.layer, like.color, &like.linetype, like.lineweight, like.transparency)
+        if self.layer(&like.layer).is_none() {
+            self.add_layer(Layer::new(like.layer.clone(), 7));
+        }
+        self.insert_entity(Entity { geometry, ..like.clone() })
     }
 
     /// Removes an entity. Returns false if it doesn't exist.

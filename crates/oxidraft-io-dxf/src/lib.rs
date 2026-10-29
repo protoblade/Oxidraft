@@ -745,6 +745,33 @@ pub fn needs_newer_version(doc: &Document) -> bool {
         || doc.all_entities().any(|e| e.transparency != oxidraft_model::Transparency::ByLayer)
 }
 
+/// An object's hyperlink as AutoCAD keeps it: PE_URL XDATA, the address
+/// then the description in braces.
+fn hyperlink_xdata(e: &oxidraft_model::Entity) -> Option<dxf::XData> {
+    let link = e.hyperlink.as_ref()?;
+    let items = vec![
+        dxf::XDataItem::Str(link.url.clone()),
+        dxf::XDataItem::ControlGroup(vec![dxf::XDataItem::Str(link.description.clone())]),
+    ];
+    Some(dxf::XData { application_name: "PE_URL".into(), items })
+}
+
+fn hyperlink_from(x_data: &[dxf::XData]) -> Option<Box<oxidraft_model::Hyperlink>> {
+    let x = x_data.iter().find(|x| x.application_name == "PE_URL")?;
+    let url = x.items.iter().find_map(|i| if let dxf::XDataItem::Str(s) = i { Some(s.clone()) } else { None })?;
+    let description = x
+        .items
+        .iter()
+        .find_map(|i| match i {
+            dxf::XDataItem::ControlGroup(g) => {
+                g.iter().find_map(|i| if let dxf::XDataItem::Str(s) = i { Some(s.clone()) } else { None })
+            }
+            _ => None,
+        })
+        .unwrap_or_default();
+    Some(Box::new(oxidraft_model::Hyperlink { url, description }))
+}
+
 /// The XDATA application a layer's transparency is kept under.
 const TRANSPARENCY_APP: &str = "AcCmTransparency";
 
@@ -904,6 +931,19 @@ fn build(doc: &Document) -> Built {
     drawing.header.insertion_base = to_dxf(doc.insbase());
     write_units(&mut drawing.header, doc.units());
     write_text_styles(&mut drawing, doc);
+    // The XDATA applications used: registered, as AutoCAD (and DWG) need.
+    let mut apps = Vec::new();
+    if doc.all_entities().any(|e| e.hyperlink.is_some()) {
+        apps.push("PE_URL");
+    }
+    if doc.layers().iter().any(|l| l.transparency > 0) {
+        apps.push(TRANSPARENCY_APP);
+    }
+    for name in apps {
+        if !drawing.app_ids().any(|a| a.name == name) {
+            drawing.add_app_id(dxf::tables::AppId { name: name.into(), ..Default::default() });
+        }
+    }
     let current = doc.current_props();
     drawing.header.current_entity_color = to_dxf_color(current.color);
     drawing.header.current_entity_line_type = linetype_to_dxf(&current.linetype);
@@ -1019,6 +1059,7 @@ fn build(doc: &Document) -> Built {
     for e in doc.space_in_draw_order(MODEL) {
         for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
             de.common.transparency = e.transparency.to_dxf();
+            de.common.x_data.extend(hyperlink_xdata(e));
             add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
             entities.push((de, &e.geometry, e.id));
         }
@@ -1032,6 +1073,7 @@ fn build(doc: &Document) -> Built {
         for e in doc.space_in_draw_order(layout.id) {
             for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
                 de.common.transparency = e.transparency.to_dxf();
+                de.common.x_data.extend(hyperlink_xdata(e));
                 if i == 0 {
                     de.common.is_in_paper_space = true;
                     add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
@@ -1685,6 +1727,9 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                     lineweight_from_dxf(e.common.lineweight_enum_value),
                     oxidraft_model::Transparency::from_dxf(e.common.transparency),
                 );
+                if let Some(link) = hyperlink_from(&e.common.x_data) {
+                    doc.update(id, |x| x.hyperlink = Some(link));
+                }
                 placed.push((e.common.handle.0, position as f64, id));
             }
             None => skipped += 1,
@@ -1716,6 +1761,9 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                         lineweight_from_dxf(e.common.lineweight_enum_value),
                         oxidraft_model::Transparency::from_dxf(e.common.transparency),
                     );
+                    if let Some(link) = hyperlink_from(&e.common.x_data) {
+                        doc.update(id, |x| x.hyperlink = Some(link));
+                    }
                     placed.push((e.common.handle.0, f64::from(u32::MAX), id));
                 }
                 None => skipped += 1,

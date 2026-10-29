@@ -807,6 +807,9 @@ impl OxidraftApp {
         if ctx.input_mut(|i| i.consume_key(cmd, Key::Num8)) {
             self.toggle_quickcalc();
         }
+        if ctx.input_mut(|i| i.consume_key(cmd, Key::K)) {
+            self.run("HYPERLINK");
+        }
         // The Plot dialog and its preview keep Esc and Enter to themselves.
         if self.plot_keys(ctx) {
             return;

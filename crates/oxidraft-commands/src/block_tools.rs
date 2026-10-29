@@ -155,6 +155,7 @@ impl NCopy {
             linetype: part.linetype,
             lineweight: part.lineweight,
             transparency: e.transparency,
+            hyperlink: None,
             geometry: part.geometry,
         })
     }
@@ -497,5 +498,111 @@ mod tests {
         run(&mut e, &mut d, &["setbylayer", "", ""]);
         let b = d.block("Tag").unwrap();
         assert!(b.entities.iter().all(|be| be.color == Color::ByLayer && be.lineweight == Lineweight::ByLayer));
+    }
+}
+
+#[derive(Clone, PartialEq)]
+enum LinkStage {
+    Option,
+    Select(bool),
+    Url(Vec<EntityId>),
+    Description(Vec<EntityId>, String),
+}
+
+/// HYPERLINK (-HYPERLINK, Ctrl+K): a web page or file linked to objects
+/// (Cmd- or Ctrl-click one to follow it), or Removed.
+pub struct HyperlinkCmd {
+    stage: LinkStage,
+}
+
+impl Default for HyperlinkCmd {
+    fn default() -> Self {
+        Self { stage: LinkStage::Option }
+    }
+}
+
+impl Command for HyperlinkCmd {
+    fn prompt(&self) -> Prompt {
+        match &self.stage {
+            LinkStage::Option => {
+                Prompt::new("Enter an option").with_keywords(&["Remove", "Insert"]).with_default("Insert")
+            }
+            LinkStage::Select(_) => Prompt::new("Select objects"),
+            LinkStage::Url(_) => Prompt::new("Enter hyperlink (a web address or a file)"),
+            LinkStage::Description(..) => Prompt::new("Enter description").with_default("none"),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (self.stage.clone(), input) {
+            (LinkStage::Option, Input::Keyword("Remove")) => self.stage = LinkStage::Select(true),
+            (LinkStage::Option, Input::Keyword(_) | Input::Enter) => self.stage = LinkStage::Select(false),
+            (LinkStage::Select(remove), Input::Selection(s)) => {
+                if s.ids.is_empty() {
+                    return Ok(Step::Done);
+                }
+                if remove {
+                    let mut n = 0;
+                    for id in &s.ids {
+                        ctx.doc.update(*id, |e| {
+                            n += usize::from(e.hyperlink.take().is_some());
+                        });
+                    }
+                    ctx.messages.push(format!("{n} hyperlink(s) removed."));
+                    return Ok(Step::Done);
+                }
+                self.stage = LinkStage::Url(s.ids);
+            }
+            (LinkStage::Url(ids), Input::Text(url)) if !url.trim().is_empty() => {
+                self.stage = LinkStage::Description(ids, url.trim().to_string());
+            }
+            (LinkStage::Description(ids, url), input @ (Input::Text(_) | Input::Enter)) => {
+                let description = if let Input::Text(t) = input { t } else { String::new() };
+                let link = oxidraft_model::Hyperlink { url, description };
+                for id in &ids {
+                    ctx.doc.update(*id, |e| e.hyperlink = Some(Box::new(link.clone())));
+                }
+                ctx.messages.push(format!("{} object(s) linked to {}.", ids.len(), link.url));
+                return Ok(Step::Done);
+            }
+            (_, Input::Enter) => return Ok(Step::Done),
+            _ => return Err("Invalid input.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn wants_selection(&self) -> bool {
+        matches!(self.stage, LinkStage::Select(_))
+    }
+
+    fn wants_text(&self) -> bool {
+        matches!(self.stage, LinkStage::Url(_) | LinkStage::Description(..))
+    }
+
+    fn text_with_spaces(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use crate::Engine;
+    use oxidraft_geom::Point;
+    use oxidraft_model::{Document, Geometry};
+
+    #[test]
+    fn hyperlinks_on_and_off() {
+        let (mut e, mut d) = (Engine::new(), Document::new());
+        d.add(Geometry::Line { start: Point::ORIGIN, end: Point::new(10.0, 0.0) });
+        e.dynamic_input = false;
+        for t in ["hyperlink", "", "all", "", "https://example.com/spec", "Spec sheet"] {
+            e.submit(t, &mut d, Point::ORIGIN, 0.5);
+        }
+        let link = d.entities().next().unwrap().hyperlink.clone().unwrap();
+        assert_eq!((link.url.as_str(), link.description.as_str()), ("https://example.com/spec", "Spec sheet"));
+        for t in ["-hyperlink", "r", "all", ""] {
+            e.submit(t, &mut d, Point::ORIGIN, 0.5);
+        }
+        assert!(d.entities().next().unwrap().hyperlink.is_none());
     }
 }

@@ -1480,7 +1480,16 @@ pub struct Entity {
     pub lineweight: Lineweight,
     /// How see-through it is.
     pub transparency: crate::linetype::Transparency,
+    /// A link to a web page or file (HYPERLINK).
+    pub hyperlink: Option<Box<Hyperlink>>,
     pub geometry: Geometry,
+}
+
+/// A hyperlink on an object: where it goes, and what it's called.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Hyperlink {
+    pub url: String,
+    pub description: String,
 }
 
 #[cfg(test)]
