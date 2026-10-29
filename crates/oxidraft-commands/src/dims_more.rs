@@ -342,11 +342,10 @@ impl Command for QDim {
     }
 }
 
-/// How far center lines reach past what they mark (CENTEREXE).
-const CENTER_EXTENSION: f64 = 3.5;
+use oxidraft_model::centermark::CENTER_EXTENSION;
 
 /// Lines in the CENTER linetype, grouped as one mark.
-fn add_center_lines(ctx: &mut Ctx, lines: &[(Point, Point)]) {
+fn add_center_lines(ctx: &mut Ctx, lines: &[(Point, Point)], description: &str) {
     let layer = ctx.doc.current_layer().to_string();
     let ids: Vec<_> = lines
         .iter()
@@ -354,7 +353,7 @@ fn add_center_lines(ctx: &mut Ctx, lines: &[(Point, Point)]) {
             ctx.doc.add_styled(Geometry::Line { start, end }, &layer, Color::ByLayer, "CENTER", Lineweight::ByLayer)
         })
         .collect();
-    let _ = ctx.doc.add_group("", "Center mark", ids);
+    let _ = ctx.doc.add_group("", description, ids);
 }
 
 /// CENTERMARK: a cross of center lines through each circle or arc picked.
@@ -378,7 +377,7 @@ impl Command for CenterMark {
                     (center - Point::new(reach, 0.0), center + Point::new(reach, 0.0)),
                     (center - Point::new(0.0, reach), center + Point::new(0.0, reach)),
                 ];
-                add_center_lines(ctx, &lines);
+                add_center_lines(ctx, &lines, oxidraft_model::centermark::CENTER_MARK);
                 Ok(Step::Continue)
             }
             Input::Enter => Ok(Step::Done),
@@ -426,7 +425,7 @@ impl Command for CenterLine {
                     return Err("The lines' midpoints meet.".into());
                 }
                 let u = (b - a) * (1.0 / len);
-                add_center_lines(ctx, &[(a - u * CENTER_EXTENSION, b + u * CENTER_EXTENSION)]);
+                add_center_lines(ctx, &[(a - u * CENTER_EXTENSION, b + u * CENTER_EXTENSION)], "Center line");
                 Ok(Step::Done)
             }
             Input::Enter => Ok(Step::Done),

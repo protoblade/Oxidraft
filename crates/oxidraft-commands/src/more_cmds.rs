@@ -833,3 +833,107 @@ impl Command for Aperture {
         Ok(Step::Done)
     }
 }
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum CenterAction {
+    Disassociate,
+    Reassociate,
+    Reset,
+}
+
+/// CENTERDISASSOCIATE, CENTERREASSOCIATE (then the circle or arc) and
+/// CENTERRESET: on center marks picked.
+pub struct CenterCmd {
+    action: CenterAction,
+    mark: Option<EntityId>,
+}
+
+impl CenterCmd {
+    pub fn new(action: CenterAction) -> Self {
+        Self { action, mark: None }
+    }
+}
+
+impl Command for CenterCmd {
+    fn prompt(&self) -> Prompt {
+        match (self.action, self.mark) {
+            (CenterAction::Reassociate, Some(_)) => Prompt::new("Select circle or arc"),
+            _ => Prompt::new("Select center mark"),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let at = match input {
+            Input::Pick { at, .. } => at,
+            Input::Enter => return Ok(Step::Done),
+            _ => return Err("Pick a center mark.".into()),
+        };
+        let id = ctx.pick(at).ok_or("No object found.")?;
+        match (self.action, self.mark) {
+            (CenterAction::Reassociate, Some(mark)) => {
+                if !ctx.doc.reassociate_center_mark(mark, id) {
+                    return Err("Select a circle or arc.".into());
+                }
+                return Ok(Step::Done);
+            }
+            (CenterAction::Reassociate, None) => {
+                if ctx.doc.group_of(id).is_none_or(|g| !g.description.starts_with("Center mark")) {
+                    return Err("Select a center mark.".into());
+                }
+                self.mark = Some(id);
+            }
+            (CenterAction::Disassociate, _) => {
+                if !ctx.doc.set_center_mark_follows(id, false) {
+                    return Err("Select a center mark.".into());
+                }
+                ctx.messages.push("The center mark no longer follows its circle.".into());
+            }
+            (CenterAction::Reset, _) => {
+                if !ctx.doc.reset_center_mark(id) {
+                    return Err("Select a center mark on a circle or arc.".into());
+                }
+            }
+        }
+        Ok(Step::Continue)
+    }
+
+    fn wants_pick(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+mod center_tests {
+    use crate::Engine;
+    use oxidraft_geom::Point;
+    use oxidraft_model::{Document, Geometry};
+
+    #[test]
+    fn center_marks_follow_reset_and_let_go() {
+        let (mut e, mut d) = (Engine::new(), Document::new());
+        e.dynamic_input = false;
+        let mut run = |e: &mut Engine, d: &mut Document, t: &str| e.submit(t, d, Point::ORIGIN, 0.5);
+        run(&mut e, &mut d, "c");
+        run(&mut e, &mut d, "0,0");
+        run(&mut e, &mut d, "10");
+        let circle = d.entities().next().unwrap().id;
+        run(&mut e, &mut d, "centermark");
+        e.click(Point::new(10.0, 0.0), Point::new(10.0, 0.0), false, &mut d, 0.5);
+        run(&mut e, &mut d, "");
+        let lines = |d: &Document| {
+            d.entities()
+                .filter_map(|x| match x.geometry {
+                    Geometry::Line { start, end } => Some((start, end)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lines(&d).len(), 2);
+        // MOVE the circle: the mark comes along.
+        e.set_selection(vec![circle]);
+        run(&mut e, &mut d, "m");
+        run(&mut e, &mut d, "0,0");
+        run(&mut e, &mut d, "20,0");
+        assert!(lines(&d).iter().all(|(s, t)| s.midpoint(*t).approx_eq(Point::new(20.0, 0.0))), "{:?}", lines(&d));
+    }
+}

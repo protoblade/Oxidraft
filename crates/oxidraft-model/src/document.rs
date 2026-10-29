@@ -2316,6 +2316,11 @@ impl Document {
 
     /// Ends the open transaction. Empty transactions leave no undo step.
     pub fn commit(&mut self) {
+        // Center marks follow their circles, in the same step.
+        let changed = self.changed_before();
+        if !changed.is_empty() {
+            self.follow_center_marks(&changed);
+        }
         // Dimensions follow the objects they measure, in the same step.
         if !self.dim_assoc.is_empty()
             && let Some(t) = &self.open
@@ -2342,6 +2347,19 @@ impl Document {
         if let Some(t) = self.open.take() {
             self.revert(&t);
         }
+    }
+
+    /// What the open transaction changed: (object, its geometry before).
+    pub(crate) fn changed_before(&self) -> Vec<(EntityId, Geometry)> {
+        self.open.as_ref().map_or_else(Vec::new, |t| {
+            t.changes
+                .iter()
+                .filter_map(|c| match c {
+                    Change::Entity { id, before: Some(b), after: Some(_) } => Some((*id, b.geometry.clone())),
+                    _ => None,
+                })
+                .collect()
+        })
     }
 
     /// The objects the open transaction added.

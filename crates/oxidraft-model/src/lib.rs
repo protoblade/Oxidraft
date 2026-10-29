@@ -6,6 +6,7 @@ pub mod annoscale;
 pub mod annotation;
 pub mod assoc_array;
 pub mod boundary;
+pub mod centermark;
 mod clip;
 pub mod dimassoc;
 mod document;

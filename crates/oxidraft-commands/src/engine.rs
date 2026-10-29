@@ -61,8 +61,8 @@ use crate::{
     measuregeom::{Base, MeasureGeom},
     mirror::Mirror,
     more_cmds::{
-        AddSelected, Aperture, Browser, ClassicLeader, Elev, Isolate, MInsert, MRedo, OnOff, TableExport, Url, UrlMode,
-        ViewGo, ViewRes, XBind, XPlode,
+        AddSelected, Aperture, Browser, CenterAction, CenterCmd, ClassicLeader, Elev, Isolate, MInsert, MRedo, OnOff,
+        TableExport, Url, UrlMode, ViewGo, ViewRes, XBind, XPlode,
     },
     move_copy::MoveCopy,
     mview::{Mview, VpClip, VpMax},
@@ -1122,6 +1122,24 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "GETENV", aliases: &[], description: "Oxidraft's environment settings", make: None },
     CommandInfo { name: "MSLIDE", aliases: &[], description: "Save the view as a slide (.sld)", make: None },
     CommandInfo { name: "VSLIDE", aliases: &[], description: "Show a slide (.sld) until REDRAW", make: None },
+    CommandInfo {
+        name: "CENTERDISASSOCIATE",
+        aliases: &[],
+        description: "Center marks that no longer follow their circles",
+        make: Some(|| Box::new(CenterCmd::new(CenterAction::Disassociate))),
+    },
+    CommandInfo {
+        name: "CENTERREASSOCIATE",
+        aliases: &[],
+        description: "A center mark onto a circle or arc, following it",
+        make: Some(|| Box::new(CenterCmd::new(CenterAction::Reassociate))),
+    },
+    CommandInfo {
+        name: "CENTERRESET",
+        aliases: &[],
+        description: "Center marks back to the standard extension past their circles",
+        make: Some(|| Box::new(CenterCmd::new(CenterAction::Reset))),
+    },
     CommandInfo { name: "CASCADE", aliases: &[], description: "Show the open drawings cascaded", make: None },
     CommandInfo { name: "TILE", aliases: &[], description: "Show the open drawings side by side", make: None },
     CommandInfo {
