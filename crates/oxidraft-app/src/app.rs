@@ -802,7 +802,7 @@ impl eframe::App for OxidraftApp {
         self.options_dialog(&ctx);
         self.page_setup_dialog(&ctx);
         self.move_or_copy_dialog(&ctx);
-        self.from_template_dialog(&ctx);
+        self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);
         self.block_close_dialog(&ctx);

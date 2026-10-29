@@ -260,7 +260,7 @@ impl OxidraftApp {
         }
     }
 
-    pub(crate) fn from_template_dialog(&mut self, ctx: &egui::Context) {
+    pub(crate) fn insert_layouts_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut d) = self.from_template.take() else { return };
         let names: Vec<String> = d.source.layouts().iter().map(|l| l.name.clone()).collect();
         let (mut open, mut ok, mut cancel) = (true, false, false);
