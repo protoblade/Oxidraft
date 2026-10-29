@@ -16,6 +16,9 @@ pub const LOOSE_CENTER_MARK: &str = "Center mark (not associative)";
 /// How far center lines reach past what they mark (CENTEREXE).
 pub const CENTER_EXTENSION: f64 = 3.5;
 
+/// A center mark's lines: each one's id, start and end.
+type MarkLines = Vec<(EntityId, Point, Point)>;
+
 /// A circle's or arc's center and radius.
 fn round(g: &Geometry) -> Option<(Point, f64)> {
     match g {
@@ -26,7 +29,7 @@ fn round(g: &Geometry) -> Option<(Point, f64)> {
 
 impl Document {
     /// The center mark groups and their lines: (group, [(id, start, end)]).
-    fn center_marks(&self, following: bool) -> Vec<(Group, Vec<(EntityId, Point, Point)>)> {
+    fn center_marks(&self, following: bool) -> Vec<(Group, MarkLines)> {
         let want = if following { CENTER_MARK } else { LOOSE_CENTER_MARK };
         self.groups()
             .into_iter()
