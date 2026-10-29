@@ -129,6 +129,11 @@ pub struct OxidraftApp {
     pub(crate) point_style: Option<crate::drafting::PointStyle>,
     pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
     pub(crate) field_dialog: Option<crate::fields::FieldDialog>,
+    /// STYLESMANAGER, the Plot Style Table Editor, and where plot style
+    /// tables are kept (else beside the settings).
+    pub(crate) styles_manager: Option<crate::plot_styles::StylesManager>,
+    pub(crate) pen_table_editor: Option<crate::plot_styles::PenTableEditor>,
+    pub(crate) plot_styles_dir: Option<PathBuf>,
     pub(crate) ucs_dialog: Option<crate::ucs_dialog::UcsDialog>,
     /// The last script run, for RSCRIPT.
     pub(crate) last_script: Option<String>,
@@ -304,6 +309,9 @@ impl OxidraftApp {
             point_style: None,
             tolerance_dialog: None,
             field_dialog: None,
+            styles_manager: None,
+            pen_table_editor: None,
+            plot_styles_dir: None,
             ucs_dialog: None,
             last_script: None,
             image_out: None,
@@ -392,6 +400,7 @@ impl OxidraftApp {
     /// user's configuration folder.
     pub fn keep_settings_in(&mut self, path: PathBuf) {
         self.settings_path = Some(path);
+        self.load_plot_styles();
     }
 
     /// Replaces the drawing and zooms to its extents.
@@ -653,6 +662,8 @@ impl OxidraftApp {
             "TOLERANCE" | "TOL" => self.open_tolerance(),
             "FIELD" => self.open_field_dialog(false),
             "STATUS" => self.status(),
+            "ETRANSMIT" => self.etransmit(),
+            "STYLESMANAGER" => self.open_styles_manager(),
             "UCSMAN" | "UC" => self.open_ucs_dialog(),
             "RSCRIPT" => self.rerun_script(),
             "PNGOUT" => self.image_out_command("PNG", &["png"]),
@@ -1071,6 +1082,8 @@ impl eframe::App for OxidraftApp {
         self.tolerance_dialog(&ctx);
         self.text_editor(&ctx);
         self.field_dialog(&ctx);
+        self.styles_manager(&ctx);
+        self.pen_table_editor(&ctx);
         self.ucs_dialog(&ctx);
         self.spell_dialog(&ctx);
         self.inspect_dialog(&ctx);

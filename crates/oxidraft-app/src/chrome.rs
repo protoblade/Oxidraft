@@ -840,6 +840,15 @@ impl OxidraftApp {
                     ui,
                     &tool(Icon::PageSetup, "Page Setup Manager", Some("PAGESETUP"), "Sets how a layout plots"),
                 );
+                self.small_tool(
+                    ui,
+                    &tool(
+                        Icon::PageSetup,
+                        "Plot Style Manager",
+                        Some("STYLESMANAGER"),
+                        "Plot style tables (.ctb): each color's pen, screening and lineweight",
+                    ),
+                );
             });
         });
         ribbon_panel(ui, "Export to DWF/PDF", |ui| {

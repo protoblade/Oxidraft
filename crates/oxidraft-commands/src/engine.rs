@@ -630,6 +630,18 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo { name: "RSCRIPT", aliases: &[], description: "Run the last script again", make: None },
     CommandInfo {
+        name: "ETRANSMIT",
+        aliases: &[],
+        description: "Copy the drawing and the files it attaches into one folder, to send",
+        make: None,
+    },
+    CommandInfo {
+        name: "STYLESMANAGER",
+        aliases: &[],
+        description: "Add, import, edit or delete plot style tables (.ctb)",
+        make: None,
+    },
+    CommandInfo {
         name: "UCS",
         aliases: &[],
         description: "Move or turn the user coordinate system, align it to an object or the view, or name it",

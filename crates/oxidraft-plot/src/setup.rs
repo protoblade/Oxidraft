@@ -77,23 +77,38 @@ pub const SCALES: &[(f64, f64)] = &[
     (10.0, 1.0),
 ];
 
-/// Pen assignments: plot in the objects' colors, in black, or in grays.
+/// Pen assignments: plot in the objects' colors, in black, in grays, or
+/// as a plot style table (.ctb) says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlotStyle {
     None,
     Monochrome,
     Grayscale,
+    /// A plot style table the app found, by its place among them
+    /// ([`crate::ctb::tables`]).
+    Table(u16),
+}
+
+fn gray([r, g, b]: [u8; 3]) -> u8 {
+    (0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b)).round() as u8
 }
 
 impl PlotStyle {
     pub const ALL: [PlotStyle; 3] = [PlotStyle::None, PlotStyle::Monochrome, PlotStyle::Grayscale];
 
+    /// The built-in ones and the tables found.
+    pub fn all() -> Vec<PlotStyle> {
+        let tables = crate::ctb::tables().len().min(usize::from(u16::MAX)) as u16;
+        PlotStyle::ALL.into_iter().chain((0..tables).map(PlotStyle::Table)).collect()
+    }
+
     /// The name AutoCAD gives the plot style table.
-    pub fn name(self) -> &'static str {
+    pub fn name(self) -> String {
         match self {
-            PlotStyle::None => "None",
-            PlotStyle::Monochrome => "monochrome.ctb",
-            PlotStyle::Grayscale => "grayscale.ctb",
+            PlotStyle::None => "None".into(),
+            PlotStyle::Monochrome => "monochrome.ctb".into(),
+            PlotStyle::Grayscale => "grayscale.ctb".into(),
+            PlotStyle::Table(i) => crate::ctb::with_table(usize::from(i), |t| t.name.clone()).unwrap_or_default(),
         }
     }
 
@@ -105,11 +120,29 @@ impl PlotStyle {
             PlotStyle::None => [r, g, b],
             PlotStyle::Monochrome => [0, 0, 0],
             PlotStyle::Grayscale => {
-                let y = (0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b)).round() as u8;
                 // Light colors would wash out: keep grays at most 80% light.
-                let y = y.min(204);
+                let y = gray([r, g, b]).min(204);
                 [y, y, y]
             }
+            PlotStyle::Table(i) => crate::ctb::with_table(usize::from(i), |t| {
+                let pen = t.pen(aci);
+                let mut c = pen.color.unwrap_or([r, g, b]);
+                if pen.grayscale {
+                    c = [gray(c); 3];
+                }
+                // Screening: that much of the color, the rest white.
+                let k = f64::from(pen.screen.min(100)) / 100.0;
+                c.map(|v| (f64::from(v) * k + 255.0 * (1.0 - k)).round() as u8)
+            })
+            .unwrap_or([r, g, b]),
+        }
+    }
+
+    /// The lineweight a table gives color `aci`, in millimeters.
+    pub fn lineweight(self, aci: u8) -> Option<f64> {
+        match self {
+            PlotStyle::Table(i) => crate::ctb::with_table(usize::from(i), |t| t.pen(aci).lineweight).flatten(),
+            _ => None,
         }
     }
 }

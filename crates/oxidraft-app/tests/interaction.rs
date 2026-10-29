@@ -2431,3 +2431,87 @@ fn pngout_saves_the_drawing_area() {
     assert!(image.width() > 100 && image.height() > 100);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn plot_style_tables_are_added_and_edited() {
+    let mut h = app_with_line();
+    let dir = std::env::temp_dir().join(format!("oxidraft-styles-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    h.state_mut().keep_plot_styles_in(dir.clone());
+    type_all(&mut h, &["stylesmanager"]);
+    h.run_steps(2);
+    let field = h.get_by_role_and_label(Role::TextInput, "New table name").rect().center();
+    click(&mut h, field);
+    h.get_by_role_and_label(Role::TextInput, "New table name").type_text("pens");
+    h.run_steps(1);
+    let add = h.get_by_label("Add").rect().center();
+    click(&mut h, add);
+    h.run_steps(2);
+    // The editor: color 1 plotted black, then saved.
+    h.get_by_label("Use object color").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Black").is_some(), "a color of its own to set");
+    let save = h.get_by_label("Save & Close").rect().center();
+    click(&mut h, save);
+    h.run_steps(2);
+    let table = oxidraft_plot::ctb::PenTable::read("pens.ctb", &std::fs::read(dir.join("pens.ctb")).unwrap()).unwrap();
+    assert_eq!(table.pens[0].color, Some([0, 0, 0]));
+    let styles: Vec<String> = oxidraft_plot::PlotStyle::all().into_iter().map(|s| s.name()).collect();
+    assert!(styles.contains(&"pens.ctb".to_string()), "{styles:?}");
+    assert_eq!(oxidraft_plot::PlotStyle::Table(0).rgb(1), [0, 0, 0]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn etransmit_gathers_the_drawing_and_its_files() {
+    use oxidraft_model::{ImageDef, Xref, XrefStatus};
+    let dir = std::env::temp_dir().join(format!("oxidraft-etransmit-{}", std::process::id()));
+    let (source, dest) = (dir.join("project"), dir.join("out"));
+    std::fs::create_dir_all(source.join("refs")).unwrap();
+    std::fs::write(source.join("refs/site.png"), [0u8; 4]).unwrap();
+    oxidraft_io_dxf::save_file(&Document::new(), source.join("refs/base.dxf")).unwrap();
+    let mut h = app_with_line();
+    let doc = h.state_mut().document_mut();
+    doc.define_block(oxidraft_model::Block { name: "base".into(), base: Point::ORIGIN, entities: Vec::new() });
+    doc.set_xref(Xref {
+        name: "base".into(),
+        path: source.join("refs/base.dxf").display().to_string(),
+        overlay: false,
+        status: XrefStatus::Loaded,
+    });
+    doc.set_image_def(ImageDef {
+        name: "site".into(),
+        path: source.join("refs/site.png").display().to_string(),
+        page: None,
+        width: 2.0,
+        height: 2.0,
+        status: XrefStatus::Loaded,
+    });
+    doc.add(Geometry::Image {
+        image: "site".into(),
+        origin: Point::ORIGIN,
+        u: Point::new(10.0, 0.0),
+        v: Point::new(0.0, 10.0),
+        clip: Vec::new(),
+        adjust: Default::default(),
+    });
+    doc.set_image_def(ImageDef {
+        name: "gone".into(),
+        path: "/nowhere/gone.png".into(),
+        page: None,
+        width: 2.0,
+        height: 2.0,
+        status: XrefStatus::Loaded,
+    });
+    let n = h.state_mut().transmit_to(&dest).unwrap();
+    assert_eq!(n, 3, "the drawing, the xref and the image");
+    for f in ["Drawing1.dxf", "base.dxf", "site.png", "Drawing1.txt"] {
+        assert!(dest.join(f).exists(), "{f}");
+    }
+    let copy = oxidraft_io_dxf::load_file(dest.join("Drawing1.dxf")).unwrap().document;
+    assert_eq!(copy.xref("base").map(|x| x.path.as_str()), Some("base.dxf"));
+    assert_eq!(copy.image_def("site").map(|d| d.path.as_str()), Some("site.png"));
+    let report = std::fs::read_to_string(dest.join("Drawing1.txt")).unwrap();
+    assert!(report.contains("Not found, left out:") && report.contains("gone.png"), "{report}");
+    std::fs::remove_dir_all(&dir).ok();
+}

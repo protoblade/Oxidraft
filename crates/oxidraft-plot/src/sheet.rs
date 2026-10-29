@@ -240,7 +240,12 @@ impl<'a> Plotter<'a> {
 
     fn styled(&mut self, s: &Styled) {
         let color = self.settings.style.rgb(s.color);
-        let width = if self.settings.lineweights { s.lineweight.mm().unwrap_or(0.25) } else { 0.0 };
+        // A plot style table's lineweight for the color, else the object's.
+        let width = match self.settings.style.lineweight(s.color) {
+            Some(w) => w,
+            None if self.settings.lineweights => s.lineweight.mm().unwrap_or(0.25),
+            None => 0.0,
+        };
         let g = &s.geometry;
         match g {
             // Unloaded images don't plot; frames do with IMAGEFRAME (PDFFRAME) 1.

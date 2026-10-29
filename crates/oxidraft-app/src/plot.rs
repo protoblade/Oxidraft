@@ -493,7 +493,7 @@ impl OxidraftApp {
                                 .selected_text(s.style.name())
                                 .width(ui.available_width())
                                 .show_ui(ui, |ui| {
-                                    for style in PlotStyle::ALL {
+                                    for style in PlotStyle::all() {
                                         ui.selectable_value(&mut s.style, style, style.name());
                                     }
                                 });

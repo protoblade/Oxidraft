@@ -1,6 +1,7 @@
 //! Plotting: the page setup AutoCAD's Plot dialog makes, the drawing laid
 //! out on the sheet as strokes, fills and text, and that sheet as PDF.
 
+pub mod ctb;
 pub mod font;
 pub mod pdf;
 pub mod setup;
