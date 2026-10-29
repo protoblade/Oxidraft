@@ -138,7 +138,15 @@ impl<'a> Plotter<'a> {
             if self.through.is_none() {
                 self.viewport(&e.geometry);
             }
-            for s in doc.expanded_styled(e) {
+            // Annotative objects: at a viewport's scale through it, 1:1 on
+            // a sheet, at the current annotation scale in model space.
+            let scale = match &self.through {
+                Some(t) => Some(1.0 / t.k),
+                None if e.space != MODEL => Some(1.0),
+                None => None,
+            };
+            let Some(e) = doc.shown_at(e, scale) else { continue };
+            for s in doc.expanded_styled(&e) {
                 self.styled(&s);
             }
         }
@@ -503,6 +511,61 @@ mod tests {
         let mono = PlotSettings { style: PlotStyle::Monochrome, lineweights: false, ..settings(window) };
         let Item::Stroke { width, color, .. } = &render(&doc, MODEL, &mono).unwrap().items[0] else { panic!() };
         assert_eq!((*width, *color), (0.0, [0, 0, 0]));
+    }
+
+    #[test]
+    fn annotative_text_plots_at_each_viewports_scale() {
+        let mut doc = Document::new();
+        let text = doc.add(Geometry::Text {
+            look: Default::default(),
+            position: Point::new(500.0, 0.0),
+            height: 2.5,
+            rotation: 0.0,
+            width: 0.0,
+            attach: oxidraft_model::Attach::BottomLeft,
+            content: "ROOM".into(),
+        });
+        doc.set_annotative(text, true);
+        doc.set_anno_scale(10.0, true);
+        let paper = oxidraft_model::Paper { width: 297.0, height: 210.0, millimeters: true, ..Default::default() };
+        let space = doc.add_layout(oxidraft_model::layout::Layout { id: 0, name: "L".into(), tab_order: 1, paper });
+        doc.set_space(space);
+        // A 1:10 viewport: the text 2.5 mm tall on paper.
+        doc.add(Geometry::Viewport {
+            center: Point::new(150.0, 100.0),
+            width: 100.0,
+            height: 50.0,
+            view_center: Point::new(500.0, 0.0),
+            view_height: 500.0,
+            twist: 0.0,
+            frozen: Vec::new(),
+            locked: false,
+            on: true,
+            clip: Vec::new(),
+        });
+        doc.set_space(MODEL);
+        let settings = PlotSettings { area: PlotArea::Layout, ..PlotSettings::default() };
+        let size = |doc: &Document| {
+            let sheet = render(doc, space, &settings).unwrap();
+            let Some(Item::Clipped { items, .. }) = sheet.items.iter().find(|i| matches!(i, Item::Clipped { .. }))
+            else {
+                return None;
+            };
+            items.iter().find_map(|i| if let Item::Text { size, .. } = i { Some(*size) } else { None })
+        };
+        let at_10 = size(&doc).expect("the text, through the viewport");
+        // Sized for 1:1 in model space now: the 1:10 viewport still shows it 1:10.
+        doc.set_anno_scale(1.0, true);
+        let at_1 = size(&doc).unwrap();
+        assert!((at_10 - at_1).abs() < 1e-9, "{at_10} {at_1}");
+        // Not supporting the viewport's scale, and ANNOALLVISIBLE off: hidden.
+        doc.update(text, |e| {
+            if let Some(a) = e.annotative.as_mut() {
+                a.scales = vec![1.0];
+            }
+        });
+        doc.set_anno_all_visible(false);
+        assert_eq!(size(&doc), None);
     }
 
     #[test]

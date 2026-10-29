@@ -819,7 +819,16 @@ impl OxidraftApp {
         let mut patterns: HashMap<String, Option<Vec<f64>>> = HashMap::new();
         let px_per_unit = self.doc.ltscale() * self.sheet_scale.unwrap_or(self.view.scale);
         let refedit = self.doc.refedit();
+        // Annotative objects: at a viewport's scale through it, 1:1 on a
+        // sheet, at the current annotation scale in model space.
+        let anno = match self.sheet_scale {
+            Some(sheet) if space == MODEL => Some(sheet / self.view.scale),
+            _ if space != MODEL => Some(1.0),
+            _ => None,
+        };
         for e in self.doc.space_in_draw_order(space) {
+            let Some(e) = self.doc.shown_at(e, anno) else { continue };
+            let e = e.as_ref();
             if !self.shows_layer(&e.layer) || !on_screen(&self.doc.entity_bounds(e), &view) {
                 continue;
             }

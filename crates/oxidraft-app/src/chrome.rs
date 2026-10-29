@@ -1273,7 +1273,28 @@ impl OxidraftApp {
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     self.update_badge(ui);
-                    ui.label(egui::RichText::new("1:1").color(theme::text_dim()));
+                    // The annotation scale (CANNOSCALE), and its two toggles.
+                    let name = oxidraft_model::annoscale::scale_name(self.doc.anno_scale());
+                    let menu = ui.menu_button(egui::RichText::new(name).color(theme::text_dim()), |ui| {
+                        for (name, s) in oxidraft_model::annoscale::SCALES {
+                            if ui.selectable_label(self.doc.anno_scale() == s, name).clicked() {
+                                self.set_anno_scale(s);
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        let mut all = self.doc.anno_all_visible();
+                        if ui.checkbox(&mut all, "Show annotative objects at every scale").changed() {
+                            self.doc.set_anno_all_visible(all);
+                        }
+                        ui.checkbox(
+                            &mut self.anno_autoscale,
+                            "Add scales to annotative objects when the scale changes",
+                        );
+                    });
+                    menu.response
+                        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Annotation Scale"));
+                    menu.response.on_hover_text("Annotation scale (CANNOSCALE): annotative objects are sized for it");
                     ui.add_space(6.0);
                     let mut cycling = self.selection_cycling;
                     if status_toggle(

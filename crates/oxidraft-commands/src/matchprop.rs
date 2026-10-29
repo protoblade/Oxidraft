@@ -4,7 +4,7 @@ use crate::{Command, Ctx, Input, Prompt, Step};
 
 enum Stage {
     Source,
-    Destination(Entity),
+    Destination(Box<Entity>),
 }
 
 /// MATCHPROP: copies the layer, color, linetype and lineweight of one
@@ -35,7 +35,7 @@ impl Command for MatchProp {
                     return Ok(Step::Continue);
                 };
                 ctx.messages.push("Current active settings:  Color  Layer  Ltype  Lineweight".into());
-                self.stage = Stage::Destination(e.clone());
+                self.stage = Stage::Destination(Box::new(e.clone()));
                 Ok(Step::Continue)
             }
             (Stage::Destination(source), Input::Pick { at, .. }) => {

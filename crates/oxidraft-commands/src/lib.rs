@@ -7,6 +7,7 @@
 //! command line, and wraps each command run in one undo transaction.
 
 mod align;
+mod anno_cmd;
 mod annotate;
 mod arc;
 mod array;

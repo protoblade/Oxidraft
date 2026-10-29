@@ -1485,7 +1485,17 @@ pub struct Entity {
     pub transparency: crate::linetype::Transparency,
     /// A link to a web page or file (HYPERLINK).
     pub hyperlink: Option<Box<Hyperlink>>,
+    /// The annotation scales it supports, when it's annotative.
+    pub annotative: Option<Box<Annotative>>,
     pub geometry: Geometry,
+}
+
+/// An annotative object's scales (drawing units per paper unit), and the
+/// one its geometry is sized for now.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Annotative {
+    pub scales: Vec<f64>,
+    pub shown: f64,
 }
 
 /// A hyperlink on an object: where it goes, and what it's called.

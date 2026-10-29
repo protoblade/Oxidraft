@@ -351,6 +351,42 @@ impl OxidraftApp {
                 None => {}
             }
             ui.end_row();
+
+            // Annotative: sized for the annotation scale.
+            if !none && selected.iter().all(|e| e.geometry.can_be_annotative()) {
+                label_cell(ui, "Annotative");
+                let common_anno = common(selected.iter().map(|e| e.annotative.is_some()));
+                let shown = common_anno.map_or(VARIES, |a| if a { "Yes" } else { "No" });
+                let mut chosen = None;
+                let r = egui::ComboBox::from_id_salt("props_annotative").width(width).selected_text(shown).show_ui(
+                    ui,
+                    |ui| {
+                        for (v, name) in [(true, "Yes"), (false, "No")] {
+                            if ui.selectable_label(common_anno == Some(v), name).clicked() {
+                                chosen = Some(v);
+                            }
+                        }
+                    },
+                );
+                r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Annotative"));
+                if let Some(on) = chosen {
+                    self.doc.begin("PROPERTIES");
+                    for e in selected.iter() {
+                        self.doc.set_annotative(e.id, on);
+                    }
+                    self.doc.commit();
+                }
+                ui.end_row();
+                if let [e] = selected
+                    && let Some(a) = &e.annotative
+                {
+                    label_cell(ui, "Annotative scale");
+                    let names: Vec<String> =
+                        a.scales.iter().map(|s| oxidraft_model::annoscale::scale_name(*s)).collect();
+                    ui.label(names.join(", "));
+                    ui.end_row();
+                }
+            }
         });
     }
 

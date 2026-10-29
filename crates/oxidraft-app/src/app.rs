@@ -129,6 +129,8 @@ pub struct OxidraftApp {
     pub(crate) point_style: Option<crate::drafting::PointStyle>,
     pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
     pub(crate) field_dialog: Option<crate::fields::FieldDialog>,
+    /// ANNOAUTOSCALE: a new annotation scale is added to annotative objects.
+    pub(crate) anno_autoscale: bool,
     /// TOOLPALETTES, while open.
     pub(crate) tool_palettes: Option<crate::tool_palettes::ToolPalettesWindow>,
     /// ADCENTER: DesignCenter, while it's open.
@@ -313,6 +315,7 @@ impl OxidraftApp {
             point_style: None,
             tolerance_dialog: None,
             field_dialog: None,
+            anno_autoscale: false,
             tool_palettes: None,
             design_center: None,
             styles_manager: None,

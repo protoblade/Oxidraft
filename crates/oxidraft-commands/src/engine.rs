@@ -656,6 +656,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: None,
     },
     CommandInfo {
+        name: "OBJECTSCALE",
+        aliases: &["-OBJECTSCALE"],
+        description: "Add annotation scales to annotative objects, or delete them",
+        make: Some(|| Box::new(crate::anno_cmd::ObjectScale::default())),
+    },
+    CommandInfo {
+        name: "ANNOUPDATE",
+        aliases: &[],
+        description: "Size annotative objects for the current annotation scale again",
+        make: Some(|| Box::new(crate::anno_cmd::AnnoUpdate)),
+    },
+    CommandInfo {
         name: "UCS",
         aliases: &[],
         description: "Move or turn the user coordinate system, align it to an object or the view, or name it",

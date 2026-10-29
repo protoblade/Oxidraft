@@ -98,7 +98,7 @@ pub fn read(bytes: &[u8]) -> Result<Opened, Error> {
             .records()
             .iter()
             .filter(|r| {
-                r.application_name == "PE_URL"
+                ["PE_URL", "OXIDRAFT_ANNO"].contains(&r.application_name.as_str())
                     || dimension && ["ACAD", "OXIDRAFT_DIM"].contains(&r.application_name.as_str())
             })
             .cloned()
@@ -925,6 +925,38 @@ mod tests {
         let mut ours = Vec::new();
         oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
         check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
+    fn annotation_scales_survive() {
+        let mut doc = Document::new();
+        let text = doc.add(Geometry::Text {
+            look: Default::default(),
+            position: Point::new(0.0, 0.0),
+            height: 2.5,
+            rotation: 0.0,
+            width: 0.0,
+            attach: Default::default(),
+            content: "ROOM".into(),
+        });
+        doc.set_annotative(text, true);
+        doc.set_anno_scale(50.0, true);
+        doc.set_anno_all_visible(false);
+        let check = |back: &Document, how: &str| {
+            let e = back.entities().next().unwrap();
+            let a = e.annotative.as_deref().unwrap_or_else(|| panic!("{how}: not annotative"));
+            assert_eq!((a.shown, a.scales.clone()), (50.0, vec![1.0, 50.0]), "{how}");
+            assert!(matches!(e.geometry, Geometry::Text { height, .. } if (height - 125.0).abs() < 1e-9), "{how}");
+            assert_eq!((back.anno_scale(), back.anno_all_visible()), (50.0, false), "{how}");
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        let back = oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document;
+        assert!(back.entities().next().unwrap().annotative.is_some(), "Oxidraft's DXF");
         check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
         for version in [Version::R2018, Version::R2000] {
             check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));

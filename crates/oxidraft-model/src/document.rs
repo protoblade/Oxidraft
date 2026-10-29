@@ -327,7 +327,7 @@ pub struct Document {
     open: Option<Transaction>,
     undo_stack: Vec<Transaction>,
     redo_stack: Vec<Transaction>,
-    revision: u64,
+    pub(crate) revision: u64,
     /// Linetypes the drawing defines, by upper-case name, besides the standard ones.
     linetypes: BTreeMap<String, Linetype>,
     /// LTSCALE: global scale of linetype patterns.
@@ -343,6 +343,9 @@ pub struct Document {
     ucs: crate::ucs::Ucs,
     ucs_previous: Vec<crate::ucs::Ucs>,
     named_ucs: Vec<crate::ucs::NamedUcs>,
+    /// CANNOSCALE: drawing units per paper unit; ANNOALLVISIBLE.
+    pub(crate) anno_scale: f64,
+    pub(crate) anno_all_visible: bool,
     /// LIMITS: LIMMIN and LIMMAX, and LIMCHECK (no points outside them).
     limits: (Point, Point),
     limits_check: bool,
@@ -490,6 +493,8 @@ impl Document {
             ucs: crate::ucs::WORLD,
             ucs_previous: Vec::new(),
             named_ucs: Vec::new(),
+            anno_scale: 1.0,
+            anno_all_visible: true,
             limits: (Point::ORIGIN, Point::new(420.0, 297.0)),
             limits_check: false,
             fill: true,
@@ -2052,6 +2057,7 @@ impl Document {
             }
         };
         let entity = Entity {
+            annotative: None,
             id: EntityId(0),
             space: self.space,
             layer,

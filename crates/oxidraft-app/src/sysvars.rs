@@ -113,6 +113,14 @@ fn vars() -> Vec<Var> {
             a.doc.set_units(u);
             Ok(())
         }),
+        var!("ANNOALLVISIBLE", |a| flag(a.doc.anno_all_visible()), |a, v| {
+            a.doc.set_anno_all_visible(parse_flag(v)?);
+            Ok(())
+        }),
+        var!("ANNOAUTOSCALE", |a| if a.anno_autoscale { "4".into() } else { "-4".into() }, |a, v| {
+            a.anno_autoscale = parse_int(v, -4, 4)? > 0;
+            Ok(())
+        }),
         var!(
             "AUNITS",
             |a| ANGLE_TYPES.iter().position(|t| *t == a.doc.units().angle).unwrap_or(0).to_string(),
@@ -127,6 +135,11 @@ fn vars() -> Vec<Var> {
             let mut u = a.doc.units();
             u.angle_precision = parse_int(v, 0, 8)? as u8;
             a.doc.set_units(u);
+            Ok(())
+        }),
+        var!("CANNOSCALE", |a| oxidraft_model::annoscale::scale_name(a.doc.anno_scale()), |a, v| {
+            let s = oxidraft_model::annoscale::parse_scale(v).ok_or("Requires a scale like 1:50.")?;
+            a.set_anno_scale(s);
             Ok(())
         }),
         var!("CECOLOR", |a| color_text(a.doc.current_props().color), |a, v| {
@@ -386,6 +399,18 @@ pub(crate) fn find(name: &str) -> Option<&'static str> {
 }
 
 impl OxidraftApp {
+    /// CANNOSCALE: the annotation scale, annotative objects sized for it
+    /// (an undoable step).
+    pub fn set_anno_scale(&mut self, scale: f64) {
+        self.doc.begin("CANNOSCALE");
+        let n = self.doc.set_anno_scale(scale, self.anno_autoscale);
+        self.doc.commit();
+        if n > 0 {
+            self.engine
+                .log(format!("{n} annotative object(s) sized for {}.", oxidraft_model::annoscale::scale_name(scale)));
+        }
+    }
+
     /// SETVAR, or a variable typed on its own: asks for its new value.
     pub(crate) fn setvar(&mut self, name: Option<&'static str>) {
         let values =

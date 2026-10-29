@@ -802,6 +802,29 @@ fn hyperlink_xdata(e: &oxidraft_model::Entity) -> Option<dxf::XData> {
     Some(dxf::XData { application_name: "PE_URL".into(), items })
 }
 
+/// The XDATA application keeping an annotative object's scales.
+const ANNO_APP: &str = "OXIDRAFT_ANNO";
+
+/// An annotative object's scales as XDATA: the one it's sized for, then
+/// all it supports.
+fn anno_xdata(e: &oxidraft_model::Entity) -> Option<dxf::XData> {
+    let a = e.annotative.as_ref()?;
+    let items = std::iter::once(a.shown).chain(a.scales.iter().copied()).map(dxf::XDataItem::Real).collect();
+    Some(dxf::XData { application_name: ANNO_APP.into(), items })
+}
+
+fn anno_from(x_data: &[dxf::XData]) -> Option<Box<oxidraft_model::Annotative>> {
+    let x = x_data.iter().find(|x| x.application_name == ANNO_APP)?;
+    let values: Vec<f64> = x
+        .items
+        .iter()
+        .filter_map(|i| if let dxf::XDataItem::Real(v) = i { Some(*v) } else { None })
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .collect();
+    let (shown, scales) = values.split_first()?;
+    (!scales.is_empty()).then(|| Box::new(oxidraft_model::Annotative { scales: scales.to_vec(), shown: *shown }))
+}
+
 fn hyperlink_from(x_data: &[dxf::XData]) -> Option<Box<oxidraft_model::Hyperlink>> {
     let x = x_data.iter().find(|x| x.application_name == "PE_URL")?;
     let url = x.items.iter().find_map(|i| if let dxf::XDataItem::Str(s) = i { Some(s.clone()) } else { None })?;
@@ -845,6 +868,8 @@ pub fn settings_of(doc: &Document) -> Vec<(&'static str, f64)> {
         ("WIPEOUTFRAME", f64::from(doc.wipeout_frame())),
         // acadrust's DXF leaves $LIMCHECK out.
         ("LIMCHECK", if doc.limits_check() { 1.0 } else { 0.0 }),
+        ("CANNOSCALE", doc.anno_scale()),
+        ("ANNOALLVISIBLE", if doc.anno_all_visible() { 1.0 } else { 0.0 }),
     ]
 }
 
@@ -929,6 +954,9 @@ fn read_settings(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
                     "PDFFRAME" => doc.set_picture_frame(true, v as u8),
                     "WIPEOUTFRAME" => doc.set_wipeout_frame(v as u8),
                     "LIMCHECK" => doc.set_limits_check(v != 0.0),
+                    // The objects were saved sized for it already.
+                    "CANNOSCALE" if v > 0.0 => doc.load_anno_scale(v),
+                    "ANNOALLVISIBLE" => doc.set_anno_all_visible(v != 0.0),
                     _ => {}
                 }
             }
@@ -1000,6 +1028,9 @@ fn build(doc: &Document) -> Built {
     }
     if doc.layers().iter().any(|l| l.transparency > 0) {
         apps.push(TRANSPARENCY_APP);
+    }
+    if doc.all_entities().any(|e| e.annotative.is_some()) {
+        apps.push(ANNO_APP);
     }
     let dims: Vec<_> = doc.all_entities().flat_map(|e| dim_xdata::xdata(&e.geometry)).collect();
     for x in &dims {
@@ -1129,6 +1160,7 @@ fn build(doc: &Document) -> Built {
             de.common.transparency = e.transparency.to_dxf();
             de.common.x_data.extend(hyperlink_xdata(e));
             de.common.x_data.extend(dim_xdata::xdata(&e.geometry));
+            de.common.x_data.extend(anno_xdata(e));
             add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
             entities.push((de, &e.geometry, e.id));
         }
@@ -1144,6 +1176,7 @@ fn build(doc: &Document) -> Built {
                 de.common.transparency = e.transparency.to_dxf();
                 de.common.x_data.extend(hyperlink_xdata(e));
                 de.common.x_data.extend(dim_xdata::xdata(&e.geometry));
+                de.common.x_data.extend(anno_xdata(e));
                 if i == 0 {
                     de.common.is_in_paper_space = true;
                     add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
@@ -1809,6 +1842,9 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                 if let Some(link) = hyperlink_from(&e.common.x_data) {
                     doc.update(id, |x| x.hyperlink = Some(link));
                 }
+                if let Some(a) = anno_from(&e.common.x_data) {
+                    doc.update(id, |x| x.annotative = Some(a));
+                }
                 placed.push((e.common.handle.0, position as f64, id));
             }
             None => skipped += 1,
@@ -1845,6 +1881,9 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                     );
                     if let Some(link) = hyperlink_from(&e.common.x_data) {
                         doc.update(id, |x| x.hyperlink = Some(link));
+                    }
+                    if let Some(a) = anno_from(&e.common.x_data) {
+                        doc.update(id, |x| x.annotative = Some(a));
                     }
                     placed.push((e.common.handle.0, f64::from(u32::MAX), id));
                 }

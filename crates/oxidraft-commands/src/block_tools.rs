@@ -148,6 +148,7 @@ impl NCopy {
             d(&a.geometry).total_cmp(&d(&b.geometry))
         })?;
         Some(Entity {
+            annotative: None,
             id,
             space: e.space,
             layer: part.layer,

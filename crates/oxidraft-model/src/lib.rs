@@ -2,6 +2,7 @@
 //! transactions. Every edit goes through [`Document`] so UNDO works for every
 //! command without the command knowing about it.
 
+pub mod annoscale;
 pub mod annotation;
 pub mod boundary;
 mod clip;
@@ -29,7 +30,7 @@ pub use document::{
     NamedView, Styled, check_name, sanitize_name,
 };
 pub use entity::{
-    Attribute, Color, Entity, EntityId, FAR, Geometry, Hyperlink, Placement, Vertex, XClip, constant_width,
+    Annotative, Attribute, Color, Entity, EntityId, FAR, Geometry, Hyperlink, Placement, Vertex, XClip, constant_width,
     viewport_corners,
 };
 pub use hatch::HatchPattern;
