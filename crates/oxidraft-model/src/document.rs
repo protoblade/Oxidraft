@@ -194,6 +194,10 @@ enum Change {
         before: Option<Linetype>,
         after: Option<Linetype>,
     },
+    Groups {
+        before: Vec<Group>,
+        after: Vec<Group>,
+    },
     /// REFEDIT's session: started, its working set changed, or ended.
     RefEdit {
         before: Option<Box<RefEdit>>,
@@ -254,6 +258,23 @@ pub struct Document {
     /// WIPEOUTFRAME: wipeouts' frames shown and plotted (1), shown but
     /// not plotted (2), or neither (0).
     wipeout_frame: u8,
+    /// Groups (GROUP), by name.
+    groups: Vec<Group>,
+}
+
+/// A group (GROUP): objects picked together. Unnamed groups are called
+/// *A1, *A2, …
+#[derive(Debug, Clone, PartialEq)]
+pub struct Group {
+    pub name: String,
+    pub description: String,
+    pub members: Vec<EntityId>,
+}
+
+impl Group {
+    pub fn is_unnamed(&self) -> bool {
+        self.name.starts_with('*')
+    }
 }
 
 /// A view saved by name (VIEW): what's shown, `height` tall and `width`
@@ -299,6 +320,7 @@ impl Document {
             space: crate::layout::MODEL,
             views: Vec::new(),
             wipeout_frame: 1,
+            groups: Vec::new(),
         }
     }
 
@@ -350,6 +372,55 @@ impl Document {
         after.push(layout);
         self.set_layouts(after);
         id
+    }
+
+    /// The groups, their members that still exist.
+    pub fn groups(&self) -> Vec<Group> {
+        self.groups
+            .iter()
+            .map(|g| Group {
+                members: g.members.iter().copied().filter(|id| self.entities.contains_key(id)).collect(),
+                ..g.clone()
+            })
+            .filter(|g| !g.members.is_empty())
+            .collect()
+    }
+
+    /// The group `id` is in, if any.
+    pub fn group_of(&self, id: EntityId) -> Option<Group> {
+        self.groups().into_iter().find(|g| g.members.contains(&id))
+    }
+
+    /// Makes a group of `members`, called `name`, or unnamed (*A1, …)
+    /// if `name` is empty. Returns its name.
+    pub fn add_group(&mut self, name: &str, description: &str, members: Vec<EntityId>) -> Result<String, String> {
+        let name = if name.trim().is_empty() {
+            (1..).map(|n| format!("*A{n}")).find(|n| !self.groups.iter().any(|g| &g.name == n)).unwrap_or_default()
+        } else {
+            check_name(name)?;
+            if self.groups.iter().any(|g| g.name.eq_ignore_ascii_case(name.trim())) {
+                return Err(format!("A group named \"{}\" already exists.", name.trim()));
+            }
+            name.trim().to_string()
+        };
+        let mut after = self.groups.clone();
+        after.push(Group { name: name.clone(), description: description.into(), members });
+        self.set_groups(after);
+        Ok(name)
+    }
+
+    /// Replaces the groups (ungrouping, editing a group).
+    pub fn set_groups(&mut self, groups: Vec<Group>) {
+        let before = std::mem::replace(&mut self.groups, groups.clone());
+        if before != groups {
+            self.record(Change::Groups { before, after: groups });
+        }
+    }
+
+    /// The groups as kept, with members that may have been erased (for
+    /// undoable edits that keep them).
+    pub fn all_groups(&self) -> &[Group] {
+        &self.groups
     }
 
     /// WIPEOUTFRAME.
@@ -1386,6 +1457,7 @@ impl Document {
                     Change::Layouts { .. } => "Layout",
                     Change::Views { .. } => "View",
                     Change::Linetype { .. } => "Linetype",
+                    Change::Groups { .. } => "Group",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -1438,6 +1510,7 @@ impl Document {
                 self.refedit = if forward { after } else { before }.as_deref().cloned()
             }
             Change::Views { before, after } => self.views = if forward { after } else { before }.clone(),
+            Change::Groups { before, after } => self.groups = if forward { after } else { before }.clone(),
             Change::Linetype { key, before, after } => {
                 match if forward { after } else { before } {
                     Some(l) => self.linetypes.insert(key.clone(), l.clone()),

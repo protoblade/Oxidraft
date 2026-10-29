@@ -9,6 +9,7 @@ use acadrust::{CadDocument, DwgReadOptions, DwgReader, DwgWriter, DxfReader, Dxf
 use oxidraft_io_dxf::Imported;
 use oxidraft_model::Document;
 
+mod groups;
 mod layouts;
 
 pub type Error = String;
@@ -98,9 +99,10 @@ pub fn read(bytes: &[u8]) -> Result<Opened, Error> {
 /// The drawing as acadrust holds it, layouts and all, ready to write.
 fn cad(doc: &Document) -> Result<CadDocument, Error> {
     let mut dxf = Vec::new();
-    oxidraft_io_dxf::write(doc, &mut dxf).map_err(|e| e.to_string())?;
+    let handles = oxidraft_io_dxf::write_with_handles(doc, &mut dxf).map_err(|e| e.to_string())?;
     let mut cad = DxfReader::from_reader(Cursor::new(dxf)).and_then(|r| r.read()).map_err(|e| e.to_string())?;
     layouts::finish(&mut cad, doc);
+    groups::finish(&mut cad, doc, &handles);
     Ok(cad)
 }
 
@@ -433,6 +435,32 @@ mod tests {
             assert!(center.approx_eq(Point::new(200.0, 150.0)) && (*width - 300.0).abs() < 1e-9, "{how}");
             assert!(view_center.approx_eq(Point::new(50.0, 25.0)) && (*view_height - 100.0).abs() < 1e-9, "{how}");
             assert_eq!((frozen.as_slice(), *locked), (["Notes".to_string()].as_slice(), true), "{how}");
+        };
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+        let dxf = write_dxf(&doc).unwrap();
+        check(&oxidraft_io_dxf::read(&mut dxf.as_slice()).unwrap().document, "DXF");
+    }
+
+    #[test]
+    fn groups_survive() {
+        let mut doc = Document::new();
+        let a = doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });
+        let b = doc.add(Geometry::Line { start: Point::new(0.0, 5.0), end: Point::new(10.0, 5.0) });
+        let c = doc.add(Geometry::Circle { center: Point::new(20.0, 0.0), radius: 2.0 });
+        doc.add(Geometry::Circle { center: Point::new(40.0, 0.0), radius: 2.0 });
+        doc.add_group("Walls", "the outer walls", vec![a, b]).unwrap();
+        doc.add_group("", "", vec![c]).unwrap();
+        let check = |back: &Document, how: &str| {
+            let mut groups = back.groups();
+            groups.sort_by(|x, y| x.name.cmp(&y.name));
+            let summary: Vec<(String, usize)> = groups.iter().map(|g| (g.name.clone(), g.members.len())).collect();
+            assert_eq!(summary.len(), 2, "{how}: {summary:?}");
+            assert!(summary.contains(&("Walls".into(), 2)), "{how}: {summary:?}");
+            assert!(summary.iter().any(|(n, m)| n.starts_with('*') && *m == 1), "{how}: {summary:?}");
+            let walls = groups.iter().find(|g| g.name == "Walls").unwrap();
+            assert_eq!(walls.description, "the outer walls", "{how}");
         };
         for version in [Version::R2018, Version::R2000] {
             check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));

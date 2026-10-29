@@ -33,6 +33,7 @@ use crate::{
     explode::Explode,
     fillet::Fillet,
     grip::GripStretch,
+    groups::{GroupCommand, GroupEdit, Ungroup},
     hatch::Hatch,
     inquiry::Area,
     inquiry::Dist,
@@ -347,6 +348,24 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["DBA"],
         description: "Add linear dimensions from the same baseline",
         make: Some(|| Box::new(DimChain::baseline())),
+    },
+    CommandInfo {
+        name: "GROUP",
+        aliases: &["G"],
+        description: "Make the selected objects a group, picked together",
+        make: Some(|| Box::new(GroupCommand::default())),
+    },
+    CommandInfo {
+        name: "UNGROUP",
+        aliases: &["UNG"],
+        description: "Take a group apart",
+        make: Some(|| Box::new(Ungroup::default())),
+    },
+    CommandInfo {
+        name: "GROUPEDIT",
+        aliases: &[],
+        description: "Add objects to a group, remove them, or rename it",
+        make: Some(|| Box::new(GroupEdit::default())),
     },
     CommandInfo {
         name: "ALIGN",
@@ -1510,7 +1529,7 @@ impl Engine {
                 self.previous.iter().copied().filter(|id| all.contains(id)).collect()
             }
         };
-        self.add_to_selection(found, self.removing);
+        self.add_to_selection(doc, found, self.removing);
         self.end_single_selection(doc, cursor, tolerance);
     }
 
@@ -1527,7 +1546,7 @@ impl Engine {
                 if !self.removing {
                     self.selection_windows.push(b);
                 }
-                self.add_to_selection(ids, self.removing);
+                self.add_to_selection(doc, ids, self.removing);
                 self.end_single_selection(doc, p, tolerance);
             }
             Some(Gathering::Polygon { points, .. } | Gathering::Fence { points }) => points.push(p),
@@ -1548,7 +1567,7 @@ impl Engine {
             Some(Gathering::Fence { points }) if points.len() >= 2 => snap::fence_select(doc, &points),
             _ => return,
         };
-        self.add_to_selection(ids, self.removing);
+        self.add_to_selection(doc, ids, self.removing);
         self.end_single_selection(doc, cursor, tolerance);
     }
 
@@ -1561,7 +1580,7 @@ impl Engine {
         self.window_start = None;
         let ids = snap::fence_select(doc, &path);
         let at = path.last().copied().unwrap_or(Point::ORIGIN);
-        self.add_to_selection(ids, shift != self.removing);
+        self.add_to_selection(doc, ids, shift != self.removing);
         self.end_single_selection(doc, at, tolerance);
     }
 
@@ -1573,7 +1592,7 @@ impl Engine {
             if !shift {
                 self.selection_windows.push(Aabb::from_points(first, p));
             }
-            self.add_to_selection(ids, shift);
+            self.add_to_selection(doc, ids, shift);
             self.end_single_selection(doc, p, tolerance);
             return;
         }
@@ -1581,7 +1600,7 @@ impl Engine {
             return;
         }
         match snap::pick(doc, p, tolerance) {
-            Some(id) => self.add_to_selection(vec![id], shift),
+            Some(id) => self.add_to_selection(doc, vec![id], shift),
             None => self.window_start = Some(p),
         }
         self.end_single_selection(doc, p, tolerance);
@@ -1601,7 +1620,7 @@ impl Engine {
         if !shift {
             self.selection_lassos.push(ring);
         }
-        self.add_to_selection(ids, shift);
+        self.add_to_selection(doc, ids, shift);
         self.end_single_selection(doc, at, tolerance);
     }
 
@@ -1619,7 +1638,7 @@ impl Engine {
             return;
         }
         self.window_start = None;
-        self.add_to_selection(vec![id], shift != self.removing);
+        self.add_to_selection(doc, vec![id], shift != self.removing);
         self.end_single_selection(doc, at, tolerance);
     }
 
@@ -1633,8 +1652,18 @@ impl Engine {
     }
 
     /// Shift+pick removes from the selection, as in AutoCAD.
-    fn add_to_selection(&mut self, ids: Vec<EntityId>, remove: bool) {
+    fn add_to_selection(&mut self, doc: &Document, ids: Vec<EntityId>, remove: bool) {
         let count = ids.len();
+        // Group selection (PICKSTYLE 1): a group's objects come together.
+        let ids = if self.vars.group_select {
+            let mut all = ids.clone();
+            for g in doc.groups().into_iter().filter(|g| g.members.iter().any(|m| ids.contains(m))) {
+                all.extend(g.members.into_iter().filter(|m| !ids.contains(m)));
+            }
+            all
+        } else {
+            ids
+        };
         if !remove {
             self.added.push(ids.clone());
         }

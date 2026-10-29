@@ -48,6 +48,10 @@ pub(crate) struct RawLayouts {
     /// Each WIPEOUT's handle and boundary, in file order (the dxf crate
     /// reads their boundaries' y wrongly).
     pub wipeouts: Vec<(u64, Vec<Point>)>,
+    /// GROUP objects: (handle, description, member handles); and every
+    /// dictionary's (name, handle) entries, by its handle, to name them.
+    pub groups: Vec<(u64, String, Vec<u64>)>,
+    pub dictionaries: HashMap<u64, Vec<(String, u64)>>,
 }
 
 fn paper(plot: &[(i32, &str)]) -> Paper {
@@ -158,6 +162,31 @@ pub(crate) fn read(dxf: &[u8]) -> RawLayouts {
                 if let (Some(h), Some(name)) = (handle, body.iter().find(|p| p.0 == 2)) {
                     out.records.insert(h, name.1.to_ascii_uppercase());
                 }
+            }
+            "GROUP" if section == "OBJECTS" => {
+                let hex = |s: &str| u64::from_str_radix(s, 16).unwrap_or(0);
+                let handle = body.iter().find(|p| p.0 == 5).map_or(0, |p| hex(p.1));
+                let description = body.iter().find(|p| p.0 == 300).map_or(String::new(), |p| p.1.to_string());
+                let members = body.iter().filter(|p| p.0 == 340).map(|p| hex(p.1)).collect();
+                out.groups.push((handle, description, members));
+            }
+            "DICTIONARY" if section == "OBJECTS" => {
+                let hex = |s: &str| u64::from_str_radix(s, 16).unwrap_or(0);
+                let handle = body.iter().find(|p| p.0 == 5).map_or(0, |p| hex(p.1));
+                let mut entries = Vec::new();
+                let mut name: Option<&str> = None;
+                for &(code, value) in body {
+                    match code {
+                        3 => name = Some(value),
+                        350 | 360 => {
+                            if let Some(n) = name.take() {
+                                entries.push((n.to_string(), hex(value)));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                out.dictionaries.insert(handle, entries);
             }
             "LAYOUT" if section == "OBJECTS" => {
                 let marker = |name: &str| body.iter().position(|p| p.0 == 100 && p.1 == name);

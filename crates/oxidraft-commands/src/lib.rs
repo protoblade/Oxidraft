@@ -28,6 +28,7 @@ mod erase;
 mod explode;
 mod fillet;
 mod grip;
+mod groups;
 mod hatch;
 mod input;
 mod inquiry;
@@ -236,6 +237,9 @@ pub struct Vars {
     /// UCSICON and NAVBAR: the UCS icon and the navigation bar show.
     pub ucs_icon: bool,
     pub nav_bar: bool,
+    /// PICKSTYLE: picking one object of a group picks the group
+    /// (Ctrl+Shift+A turns it off and on).
+    pub group_select: bool,
 }
 
 impl Default for Vars {
@@ -271,6 +275,7 @@ impl Default for Vars {
             view_aspect: 1.5,
             ucs_icon: true,
             nav_bar: true,
+            group_select: true,
         }
     }
 }

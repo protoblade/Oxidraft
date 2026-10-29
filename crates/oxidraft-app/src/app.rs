@@ -699,6 +699,10 @@ impl OxidraftApp {
         {
             *mode = Some(mode.unwrap_or(crate::canvas::LassoMode::Window).next());
         }
+        // Ctrl+Shift+A: group selection on or off.
+        if ctx.input_mut(|i| i.consume_key(Modifiers::CTRL | Modifiers::SHIFT, Key::A)) {
+            self.toggle_group_selection();
+        }
         // Ctrl+R: the next model viewport is current.
         if ctx.input_mut(|i| i.consume_key(Modifiers::CTRL, Key::R)) {
             self.next_pane();

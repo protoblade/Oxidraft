@@ -736,11 +736,42 @@ impl OxidraftApp {
                 );
             });
         });
+        ribbon_panel(ui, "Groups", |ui| {
+            self.large_tool(ui, &tool(Icon::Group, "Group", Some("GROUP"), "Makes the selected objects a group (G)"));
+            ui.vertical(|ui| {
+                self.small_tool(ui, &tool(Icon::Ungroup, "Ungroup", Some("UNGROUP"), "Takes a group apart"));
+                self.small_tool(
+                    ui,
+                    &tool(
+                        Icon::Properties,
+                        "Group Edit",
+                        Some("GROUPEDIT"),
+                        "Adds objects to a group, removes them, or renames it",
+                    ),
+                );
+                let on = self.engine.vars.group_select;
+                let label = if on { "Selection On" } else { "Selection Off" };
+                let response = paint_small(ui, &tool(Icon::Group, label, None, ""), true);
+                if response
+                    .on_hover_text("Group Selection: picking one object picks its group (Ctrl+Shift+A)")
+                    .clicked()
+                {
+                    self.toggle_group_selection();
+                }
+            });
+        });
         ribbon_panel(ui, "Utilities", |ui| {
             for t in UTILITIES_LARGE {
                 self.large_tool(ui, t);
             }
         });
+    }
+
+    /// Ctrl+Shift+A (PICKSTYLE): picking an object of a group picks it all, or not.
+    pub(crate) fn toggle_group_selection(&mut self) {
+        self.engine.vars.group_select = !self.engine.vars.group_select;
+        let on = self.engine.vars.group_select;
+        self.engine.log(format!("<Group {}>", if on { "on" } else { "off" }));
     }
 
     /// The Block Editor's panel: save the block, close the editor.

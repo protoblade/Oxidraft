@@ -104,6 +104,8 @@ pub enum Icon {
     Compare,
     CompareExit,
     Count,
+    Group,
+    Ungroup,
 }
 
 /// Accent colors used inside icons, as in AutoCAD's icon set.
@@ -463,6 +465,26 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
             pen.line(&[(0.7, 0.12), (0.62, 0.88)], c);
             pen.line(&[(0.15, 0.36), (0.88, 0.36)], blue);
             pen.line(&[(0.12, 0.64), (0.85, 0.64)], blue);
+        }
+        // Two shapes in a dashed box; ungrouped, the box broken.
+        Icon::Group | Icon::Ungroup => {
+            pen.circle((0.36, 0.42), 0.16, c);
+            pen.closed(&[(0.5, 0.5), (0.8, 0.5), (0.8, 0.78), (0.5, 0.78)], c);
+            let sides = [
+                ((0.08, 0.12), (0.92, 0.12)),
+                ((0.92, 0.12), (0.92, 0.9)),
+                ((0.92, 0.9), (0.08, 0.9)),
+                ((0.08, 0.9), (0.08, 0.12)),
+            ];
+            for (k, (a, b)) in sides.iter().enumerate() {
+                if icon == Icon::Ungroup && k % 2 == 1 {
+                    continue;
+                }
+                for t in [0.0, 0.35, 0.7] {
+                    let at = |f: f32| (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f);
+                    pen.line(&[at(t), at(t + 0.2)], blue);
+                }
+            }
         }
         Icon::Leader => {
             pen.arrow((0.55, 0.45), (0.12, 0.88), c);

@@ -511,7 +511,9 @@ pub fn to_drawing(doc: &Document) -> Drawing {
 /// What [`build`] makes: the drawing, the AcDbHatch data of each hatch
 /// placeholder, and each ATTRIB's layer and color in the order they're in
 /// the file.
-type Built = (Drawing, Vec<Vec<(i32, String)>>, Vec<(String, Color)>);
+/// What `build` makes: the drawing, the hatches and attribute styles to
+/// put in afterwards, and the handles each object was written with.
+type Built = (Drawing, Vec<Vec<(i32, String)>>, Vec<(String, Color)>, HashMap<EntityId, Vec<u64>>);
 
 /// Adds an INSERT's attributes, noting their styles for `fix_attributes`.
 fn add_attributes(drawing: &mut Drawing, de: &mut DxfEntity, g: &Geometry, styles: &mut Vec<(String, Color)>) {
@@ -625,12 +627,14 @@ fn build(doc: &Document) -> Built {
     }
     // Objects are written in draw order, which is the order AutoCAD draws
     // them in when there's no SORTENTSTABLE.
-    let mut entities: Vec<(DxfEntity, &Geometry)> = Vec::new();
+    let mut entities: Vec<(DxfEntity, &Geometry, EntityId)> = Vec::new();
     let (mut styles, mut block_styles) = (Vec::new(), Vec::new());
+    // Where objects in *Paper_SpaceN blocks went: (block, index, object).
+    let mut in_blocks: Vec<(String, usize, EntityId)> = Vec::new();
     for e in doc.space_in_draw_order(MODEL) {
         for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
             add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
-            entities.push((de, &e.geometry));
+            entities.push((de, &e.geometry, e.id));
         }
     }
     // Layouts, as AutoCAD keeps them: the first one's objects in ENTITIES,
@@ -644,12 +648,13 @@ fn build(doc: &Document) -> Built {
                 if i == 0 {
                     de.common.is_in_paper_space = true;
                     add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
-                    entities.push((de, &e.geometry));
+                    entities.push((de, &e.geometry, e.id));
                 } else {
                     add_attributes(&mut drawing, &mut de, &e.geometry, &mut block_styles);
                     if is_clipped(&de, &e.geometry) {
                         block_clips.push((name.clone(), in_block.len(), &e.geometry));
                     }
+                    in_blocks.push((name.clone(), in_block.len(), e.id));
                     in_block.push(de);
                 }
             }
@@ -670,9 +675,18 @@ fn build(doc: &Document) -> Built {
             e.common.extension_data_groups.push(group);
         }
     }
-    for (e, g) in entities {
+    let mut handles: HashMap<EntityId, Vec<u64>> = HashMap::new();
+    for (name, index, id) in in_blocks {
+        let handle =
+            drawing.blocks().find(|b| b.name == name).and_then(|b| b.entities.get(index)).map(|e| e.common.handle);
+        if let Some(h) = handle {
+            handles.entry(id).or_default().push(h.0);
+        }
+    }
+    for (e, g, id) in entities {
         let clipped = is_clipped(&e, g);
         let handle = drawing.add_entity(e).common.handle;
+        handles.entry(id).or_default().push(handle.0);
         if clipped
             && let Some(group) = clip_filter(&mut drawing, doc, handle, g)
             && let Some(added) = drawing.entities_mut().find(|x| x.common.handle == handle)
@@ -682,7 +696,7 @@ fn build(doc: &Document) -> Built {
     }
     // The ATTRIBs in the BLOCKS section come before those in ENTITIES.
     block_styles.extend(styles);
-    (drawing, ex.hatches, block_styles)
+    (drawing, ex.hatches, block_styles, handles)
 }
 
 fn is_clipped(de: &DxfEntity, g: &Geometry) -> bool {
@@ -1312,6 +1326,24 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         doc.set_space(MODEL);
     }
     let by_handle = placed.iter().all(|p| p.0 != 0);
+    // Groups: the ACAD_GROUP dictionary names them; members by handle.
+    let ids_by_handle: HashMap<u64, EntityId> = placed.iter().map(|(h, _, id)| (*h, *id)).collect();
+    let group_dict = raw.layouts.dictionaries.values().flatten().find(|(n, _)| n == "ACAD_GROUP").map(|(_, h)| *h);
+    let names: HashMap<u64, String> = group_dict
+        .and_then(|d| raw.layouts.dictionaries.get(&d))
+        .map(|entries| entries.iter().map(|(n, h)| (*h, n.clone())).collect())
+        .unwrap_or_default();
+    let mut groups: Vec<oxidraft_model::Group> = Vec::new();
+    for (handle, description, members) in &raw.layouts.groups {
+        let mut ids: Vec<EntityId> = members.iter().filter_map(|h| ids_by_handle.get(h).copied()).collect();
+        ids.dedup();
+        if ids.is_empty() {
+            continue;
+        }
+        let name = names.get(handle).cloned().unwrap_or_else(|| format!("*A{}", groups.len() + 1));
+        groups.push(oxidraft_model::Group { name, description: description.clone(), members: ids });
+    }
+    doc.set_groups(groups);
     let mut order: Vec<(f64, EntityId)> = placed
         .iter()
         .map(|&(handle, position, id)| {
@@ -1393,8 +1425,14 @@ fn attribute_styles(dxf: &[u8]) -> Option<Vec<(String, Color)>> {
 }
 
 pub fn write<W: Write>(doc: &Document, writer: &mut W) -> Result<(), Error> {
+    write_with_handles(doc, writer).map(|_| ())
+}
+
+/// Like [`write`], returning the handles each object was written with
+/// (some objects are written as several entities).
+pub fn write_with_handles<W: Write>(doc: &Document, writer: &mut W) -> Result<HashMap<EntityId, Vec<u64>>, Error> {
     let mut buf = Vec::new();
-    let (drawing, hatches, styles) = build(doc);
+    let (drawing, hatches, styles, handles) = build(doc);
     drawing.save(&mut buf)?;
     // Layer flags: 1 frozen, 4 locked; 16 from an xref, 32 that xref found.
     let layers: Vec<(String, i16, i16)> = doc
@@ -1408,7 +1446,8 @@ pub fn write<W: Write>(doc: &Document, writer: &mut W) -> Result<(), Error> {
     let fixed = fix_tables(&fix_attributes(&buf, &styles), &layers);
     let fixed = underlay_dxf::rename_type(&fixed, "UNDERLAYDEFINITION", "PDFDEFINITION");
     let fixed = clip_dxf::drop_unused_planes(&fixed);
-    writer.write_all(&hatch_dxf::insert_hatches(&fixed, &hatches)).map_err(Error::IoError)
+    writer.write_all(&hatch_dxf::insert_hatches(&fixed, &hatches)).map_err(Error::IoError)?;
+    Ok(handles)
 }
 
 /// The line ending of a code or value line.
