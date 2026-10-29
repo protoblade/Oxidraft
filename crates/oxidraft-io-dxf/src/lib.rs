@@ -25,6 +25,7 @@ mod dim_xdata;
 mod hatch_dxf;
 mod layout_dxf;
 mod leader_xdata;
+mod table_xdata;
 mod underlay_dxf;
 
 pub type Error = dxf::DxfError;
@@ -1077,8 +1078,8 @@ fn build(doc: &Document) -> Built {
     if doc.all_entities().any(|e| e.array.is_some()) {
         apps.push(array_xdata::APP);
     }
-    if doc.all_entities().any(|e| matches!(e.geometry, Geometry::Leader { .. })) {
-        apps.extend([leader_xdata::APP, leader_xdata::PART_APP]);
+    if doc.all_entities().any(|e| matches!(e.geometry, Geometry::Leader { .. } | Geometry::Table { .. })) {
+        apps.extend([leader_xdata::APP, leader_xdata::PART_APP, table_xdata::APP]);
     }
     let dims: Vec<_> = doc.all_entities().flat_map(|e| dim_xdata::xdata(&e.geometry)).collect();
     for x in &dims {
@@ -1294,8 +1295,10 @@ fn build(doc: &Document) -> Built {
 fn written(ex: &mut Exporter, doc: &Document, e: &oxidraft_model::Entity) -> Vec<(DxfEntity, Option<Geometry>)> {
     let mut out: Vec<(DxfEntity, Option<Geometry>)> =
         ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight).into_iter().map(|de| (de, None)).collect();
-    let Some(leader) = leader_xdata::xdata(&e.geometry) else { return out };
-    for g in doc.leader_inserts(&e.geometry) {
+    let Some(leader) = leader_xdata::xdata(&e.geometry).or_else(|| table_xdata::xdata(&e.geometry)) else {
+        return out;
+    };
+    for g in doc.leader_inserts(&e.geometry).into_iter().chain(doc.table_inserts(&e.geometry)) {
         for de in ex.entity(&g, &e.layer, e.color, &e.linetype, e.lineweight) {
             out.push((de, Some(g.clone())));
         }
@@ -1912,6 +1915,9 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                     dim_xdata::read(&e.common.x_data, doc.dim_style(), extra);
                 }
                 leader_xdata::read(&e.common.x_data, &mut g);
+                if let Some(table) = table_xdata::read(&e.common.x_data) {
+                    g = table;
+                }
                 let (color, linetype) = (from_dxf_color(&e.common.color), linetype_from_dxf(&e.common.line_type_name));
                 let id = doc.add_with(
                     g,
@@ -1957,6 +1963,9 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                         dim_xdata::read(&e.common.x_data, doc.dim_style(), extra);
                     }
                     leader_xdata::read(&e.common.x_data, &mut g);
+                    if let Some(table) = table_xdata::read(&e.common.x_data) {
+                        g = table;
+                    }
                     let id = doc.add_with(
                         g,
                         &e.common.layer,
@@ -2753,7 +2762,7 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_named_views_and_tables_as_lines_and_text() {
+    fn roundtrip_named_views_and_tables() {
         let mut doc = Document::new();
         let view = oxidraft_model::NamedView {
             name: "Kitchen".into(),
@@ -2776,10 +2785,11 @@ mod tests {
         });
         let wipeout = wipeout.expect("the wipeout came back");
         assert!(wipeout.len() == 3 && wipeout.iter().zip(&triangle).all(|(a, b)| a.distance(*b) < 1e-6), "{wipeout:?}");
-        // Three rows: four lines across, three down; and the title.
-        let lines = back.entities().filter(|e| matches!(e.geometry, Geometry::Line { .. })).count();
-        let texts = back.entities().filter(|e| matches!(e.geometry, Geometry::Text { .. })).count();
-        assert_eq!((lines, texts), (7, 1));
+        // The table comes back whole; other programs read its seven lines
+        // (three rows: four across, three down) and its title.
+        assert_eq!(back.entities().filter(|e| matches!(e.geometry, Geometry::Table { .. })).count(), 1);
+        let text = String::from_utf8_lossy(&buf);
+        assert_eq!((text.matches("\nLINE\r").count(), text.matches("\nMTEXT\r").count()), (7, 1));
     }
 
     #[test]

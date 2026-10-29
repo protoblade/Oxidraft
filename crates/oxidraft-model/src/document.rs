@@ -216,6 +216,8 @@ pub(crate) struct LayerTable {
 
 /// One edit, recorded with what it replaced so it can be undone.
 #[derive(Debug, Clone)]
+// An object's change is the largest by far, and the commonest.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Change {
     /// `before` is `None` for an add, `after` is `None` for a removal.
     Entity {
@@ -1605,6 +1607,7 @@ impl Document {
         let primitives = || crate::annotation::with_dim_style(self.dim_style, || g.primitives());
         if let Some(mut parts) = crate::annotation::with_leader_style(self.leader_style, primitives) {
             parts.extend(self.leader_inserts(g));
+            parts.extend(self.table_inserts(g));
             for part in &parts {
                 self.expand_into(part, layer, style, by_block, depth + 1, out);
             }

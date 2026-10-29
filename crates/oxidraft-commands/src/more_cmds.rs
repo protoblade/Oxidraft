@@ -937,3 +937,144 @@ mod center_tests {
         assert!(lines(&d).iter().all(|(s, t)| s.midpoint(*t).approx_eq(Point::new(20.0, 0.0))), "{:?}", lines(&d));
     }
 }
+
+/// The table cell at `at`: (table, row, column).
+fn table_cell(ctx: &Ctx, at: Point) -> Option<(EntityId, usize, usize)> {
+    let space = ctx.doc.space();
+    ctx.doc.entities().filter(|e| e.space == space && ctx.doc.is_selectable(e)).find_map(|e| {
+        let Geometry::Table { position, rotation, widths, heights, .. } = &e.geometry else { return None };
+        let grid = oxidraft_model::table::Grid { position: *position, rotation: *rotation, widths, heights };
+        let (r, c) = grid.cell_at(at)?;
+        Some((e.id, r, c))
+    })
+}
+
+/// A cell's format changed by `f`.
+fn change_cell(
+    ctx: &mut Ctx,
+    (id, r, c): (EntityId, usize, usize),
+    f: impl FnOnce(&mut oxidraft_model::table::CellFormat),
+) {
+    ctx.doc.update(id, |e| {
+        if let Geometry::Table { formats, .. } = &mut e.geometry {
+            let mut format = oxidraft_model::table::cell_format(formats, r, c);
+            f(&mut format);
+            *formats = oxidraft_model::table::with_cell_format(formats, r, c, format);
+        }
+    });
+}
+
+/// MATCHCELL: a cell's text height and alignment onto the cells picked.
+#[derive(Default)]
+pub struct MatchCell {
+    source: Option<oxidraft_model::table::CellFormat>,
+}
+
+impl Command for MatchCell {
+    fn prompt(&self) -> Prompt {
+        if self.source.is_none() { Prompt::new("Select source cell") } else { Prompt::new("Select destination cell") }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let at = match input {
+            Input::Pick { at, .. } | Input::Point(at) => at,
+            Input::Enter => return Ok(Step::Done),
+            _ => return Err("Pick a table cell.".into()),
+        };
+        let cell = table_cell(ctx, at).ok_or("Pick a table cell.")?;
+        match &self.source {
+            None => {
+                let Some(Geometry::Table { formats, .. }) = ctx.doc.entity(cell.0).map(|e| &e.geometry) else {
+                    return Err("Pick a table cell.".into());
+                };
+                self.source = Some(oxidraft_model::table::cell_format(formats, cell.1, cell.2));
+            }
+            Some(source) => {
+                let (height, attach) = (source.height, source.attach);
+                change_cell(ctx, cell, |f| {
+                    f.height = height;
+                    f.attach = attach;
+                });
+            }
+        }
+        Ok(Step::Continue)
+    }
+
+    fn wants_pick(&self) -> bool {
+        true
+    }
+}
+
+/// TINSERT: a block shown in a table cell, fitted to it, in place of text.
+#[derive(Default)]
+pub struct TInsert {
+    cell: Option<(EntityId, usize, usize)>,
+}
+
+impl Command for TInsert {
+    fn prompt(&self) -> Prompt {
+        if self.cell.is_none() { Prompt::new("Select table cell") } else { Prompt::new("Enter block name") }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (self.cell, input) {
+            (None, Input::Pick { at, .. } | Input::Point(at)) => {
+                self.cell = Some(table_cell(ctx, at).ok_or("Pick a table cell.")?);
+            }
+            (Some(cell), Input::Text(t)) => {
+                let name = ctx
+                    .doc
+                    .block(t.trim())
+                    .map(|b| b.name.clone())
+                    .ok_or_else(|| format!("Block \"{}\" not found.", t.trim()))?;
+                change_cell(ctx, cell, |f| f.block = Some(name));
+                return Ok(Step::Done);
+            }
+            (_, Input::Enter) => return Ok(Step::Done),
+            _ => return Err("Pick a table cell, then name the block.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn wants_pick(&self) -> bool {
+        self.cell.is_none()
+    }
+
+    fn wants_text(&self) -> bool {
+        self.cell.is_some()
+    }
+}
+
+#[cfg(test)]
+mod cell_cmd_tests {
+    use crate::Engine;
+    use oxidraft_geom::Point;
+    use oxidraft_model::{Block, BlockEntity, Color, Document, Geometry, table::cell_format};
+
+    #[test]
+    fn matchcell_and_tinsert() {
+        let (mut e, mut d) = (Engine::new(), Document::new());
+        e.dynamic_input = false;
+        let dot = BlockEntity::new("0", Color::ByBlock, Geometry::Circle { center: Point::ORIGIN, radius: 1.0 });
+        d.define_block(Block { name: "DOT".into(), base: Point::ORIGIN, entities: vec![dot] });
+        let mut t = oxidraft_model::table::new_table(Point::new(0.0, 40.0), 2, 2, 20.0, 10.0, 2.5);
+        if let Geometry::Table { formats, .. } = &mut t {
+            formats.push(((2, 0), oxidraft_model::table::CellFormat { height: Some(4.0), ..Default::default() }));
+        }
+        let id = d.add(t);
+        let pick = |e: &mut Engine, d: &mut Document, x: f64, y: f64| {
+            e.click(Point::new(x, y), Point::new(x, y), false, d, 0.5)
+        };
+        // Row 2 is 15..25 below 40; row 3 25..35. Column 0 is 0..20.
+        e.submit("matchcell", &mut d, Point::ORIGIN, 0.5);
+        pick(&mut e, &mut d, 10.0, 15.0);
+        pick(&mut e, &mut d, 30.0, 5.0);
+        e.submit("", &mut d, Point::ORIGIN, 0.5);
+        e.submit("tinsert", &mut d, Point::ORIGIN, 0.5);
+        pick(&mut e, &mut d, 10.0, 5.0);
+        e.submit("DOT", &mut d, Point::ORIGIN, 0.5);
+        let Some(Geometry::Table { formats, .. }) = d.entity(id).map(|x| &x.geometry) else { panic!() };
+        assert_eq!(cell_format(formats, 3, 1).height, Some(4.0));
+        assert_eq!(cell_format(formats, 3, 0).block.as_deref(), Some("DOT"));
+    }
+}

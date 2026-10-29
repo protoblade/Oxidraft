@@ -100,7 +100,7 @@ pub fn read(bytes: &[u8]) -> Result<Opened, Error> {
             .records()
             .iter()
             .filter(|r| {
-                ["PE_URL", "OXIDRAFT_ANNO", "OXIDRAFT_ARRAY", "OXIDRAFT_MLEADER", "OXIDRAFT_PART"]
+                ["PE_URL", "OXIDRAFT_ANNO", "OXIDRAFT_ARRAY", "OXIDRAFT_MLEADER", "OXIDRAFT_PART", "OXIDRAFT_TABLE"]
                     .contains(&r.application_name.as_str())
                     || dimension && ["ACAD", "OXIDRAFT_DIM"].contains(&r.application_name.as_str())
             })
@@ -1096,6 +1096,37 @@ mod tests {
             let e = back.entities().find(|e| e.geometry == tags).unwrap();
             let drawn = back.expanded(e);
             assert!(drawn.iter().any(|g| matches!(g, Geometry::Text { content, .. } if content == "9")), "{how}");
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
+    fn tables_survive_whole_with_cell_formats_and_blocks() {
+        use oxidraft_model::table::{CellFormat, new_table};
+        let mut doc = Document::new();
+        let tag = doc.tag_block(oxidraft_model::annotation::TagShape::Circle);
+        let Geometry::Table { position, rotation, widths, heights, mut cells, text_height, .. } =
+            new_table(Point::new(0.0, 100.0), 2, 2, 20.0, 10.0, 2.5)
+        else {
+            unreachable!()
+        };
+        cells[0][0] = "Doors".into();
+        cells[2][0] = "D1, \"oak\"".into();
+        let formats = vec![
+            ((2, 0), CellFormat { attach: Some(oxidraft_model::Attach::MiddleLeft), height: Some(3.0), block: None }),
+            ((2, 1), CellFormat { block: Some(tag), ..Default::default() }),
+        ];
+        let table = Geometry::Table { position, rotation, widths, heights, cells, text_height, formats };
+        doc.add(table.clone());
+        let check = |back: &Document, how: &str| {
+            let got: Vec<&Geometry> = back.entities().map(|e| &e.geometry).collect();
+            assert_eq!(got, [&table], "{how}");
         };
         let mut ours = Vec::new();
         oxidraft_io_dxf::write(&doc, &mut ours).unwrap();

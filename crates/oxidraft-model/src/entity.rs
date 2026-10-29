@@ -303,6 +303,9 @@ pub enum Geometry {
         heights: Vec<f64>,
         cells: Vec<Vec<String>>,
         text_height: f64,
+        /// Cells formatted their own way (MATCHCELL) or holding a block
+        /// (TINSERT), by (row, column).
+        formats: Vec<((usize, usize), crate::table::CellFormat)>,
     },
 }
 
@@ -941,7 +944,7 @@ impl Geometry {
             }
             // It turns and scales, but stays upright text in rows: mirrored,
             // what was its upper-right corner becomes its upper-left.
-            Geometry::Table { position, rotation, widths, heights, cells, text_height } => {
+            Geometry::Table { position, rotation, widths, heights, cells, text_height, formats } => {
                 let grid = crate::table::Grid { position: *position, rotation: *rotation, widths, heights };
                 let [upper_left, upper_right, ..] = grid.corners();
                 let (from, to) = if flips { (f(upper_right), f(upper_left)) } else { (f(upper_left), f(upper_right)) };
@@ -952,6 +955,12 @@ impl Geometry {
                     heights: heights.iter().map(|h| h * length_factor).collect(),
                     cells: cells.clone(),
                     text_height: text_height * length_factor,
+                    formats: formats
+                        .iter()
+                        .map(|(at, f)| {
+                            (*at, crate::table::CellFormat { height: f.height.map(|h| h * length_factor), ..f.clone() })
+                        })
+                        .collect(),
                 }
             }
             // Its frame moves and scales; the view through it stays.
