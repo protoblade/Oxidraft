@@ -672,6 +672,13 @@ fn main() {
     h.run_steps(3);
     hover(&mut h, Point::new(40.0, 25.0));
     save(&mut h, &dir, "34-viewport");
+    // Back on the sheet, the viewport's properties: its scale among them.
+    h.state_mut().type_command("ps");
+    h.run_steps(3);
+    click(&mut h, Point::new(10.0, 135.0));
+    h.state_mut().type_command("pr");
+    h.run_steps(4);
+    save(&mut h, &dir, "35-viewport-properties");
 
     // AutoComplete on the command line.
     let mut h = harness();

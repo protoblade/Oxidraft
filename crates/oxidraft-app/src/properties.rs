@@ -31,6 +31,37 @@ enum Value {
     Angle(f64),
     /// Editable text (contents, overrides, pattern names).
     Edit(String),
+    /// One of a list, as a dropdown.
+    Choice(&'static [&'static str], String),
+}
+
+const YES_NO: &[&str] = &["Yes", "No"];
+
+/// Viewport scales as AutoCAD lists them (paper : model), metric and
+/// imperial-friendly.
+const SCALES: &[&str] = &[
+    "1:1", "1:2", "1:4", "1:5", "1:8", "1:10", "1:16", "1:20", "1:25", "1:30", "1:40", "1:50", "1:100", "1:200",
+    "1:250", "1:500", "1:1000", "1:2000", "1:5000", "1:10000", "2:1", "4:1", "5:1", "8:1", "10:1", "100:1", "Custom",
+];
+
+/// Model units per paper unit for a scale such as "1:50".
+fn scale_ratio(scale: &str) -> Option<f64> {
+    let (paper, model) = scale.split_once(':')?;
+    let (paper, model) = (paper.trim().parse::<f64>().ok()?, model.trim().parse::<f64>().ok()?);
+    (paper > 0.0 && model > 0.0).then(|| model / paper)
+}
+
+/// The standard scale a viewport's ratio is, or "Custom".
+fn scale_name(ratio: f64) -> &'static str {
+    SCALES
+        .iter()
+        .find(|s| scale_ratio(s).is_some_and(|r| (r - ratio).abs() <= ratio * 1e-6))
+        .copied()
+        .unwrap_or("Custom")
+}
+
+fn yes_no(on: bool) -> Value {
+    Value::Choice(YES_NO, if on { "Yes" } else { "No" }.into())
 }
 
 impl OxidraftApp {
@@ -381,17 +412,27 @@ impl OxidraftApp {
                 ("Rotation", Value::Angle(Point::ORIGIN.angle_to(*u))),
                 ("Clipped", Value::Text(if clip.len() >= 3 { "Yes" } else { "No" }.into())),
             ],
-            Geometry::Viewport { center, width, height, view_center, view_height, locked, on, .. } => vec![
-                ("Center X", Value::Text(fmt(center.x))),
-                ("Center Y", Value::Text(fmt(center.y))),
-                ("Width", Value::Text(fmt(*width))),
-                ("Height", Value::Text(fmt(*height))),
-                ("On", Value::Text(if *on { "Yes" } else { "No" }.into())),
-                ("Display locked", Value::Text(if *locked { "Yes" } else { "No" }.into())),
-                ("Standard scale", Value::Text(format!("1:{}", fmt(view_height / height.max(1e-12))))),
-                ("View center X", Value::Text(fmt(view_center.x))),
-                ("View center Y", Value::Text(fmt(view_center.y))),
-            ],
+            Geometry::Viewport { center, width, height, view_center, view_height, locked, on, .. } => {
+                // A locked viewport's scale can't change.
+                let ratio = view_height / height.max(1e-12);
+                let (standard, custom) = if *locked {
+                    (Value::Text(scale_name(ratio).into()), Value::Text(fmt(1.0 / ratio)))
+                } else {
+                    (Value::Choice(SCALES, scale_name(ratio).into()), Value::Number(1.0 / ratio))
+                };
+                vec![
+                    ("Center X", Value::Number(center.x)),
+                    ("Center Y", Value::Number(center.y)),
+                    ("Width", Value::Number(*width)),
+                    ("Height", Value::Number(*height)),
+                    ("On", yes_no(*on)),
+                    ("Display locked", yes_no(*locked)),
+                    ("Standard scale", standard),
+                    ("Custom scale", custom),
+                    ("View center X", Value::Text(fmt(view_center.x))),
+                    ("View center Y", Value::Text(fmt(view_center.y))),
+                ]
+            }
             Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => vec![
                 ("Basepoint X", Value::Number(base.x)),
                 ("Basepoint Y", Value::Number(base.y)),
@@ -467,6 +508,24 @@ impl OxidraftApp {
                         self.number_field(ui, label, Id::unique(("prop", e.id, label)), v, false, width)
                     }
                     Value::Angle(v) => self.number_field(ui, label, Id::unique(("prop", e.id, label)), v, true, width),
+                    Value::Choice(options, current) => {
+                        let mut picked = None;
+                        let shown = egui::ComboBox::from_id_salt(("prop", e.id, label))
+                            .width(width)
+                            .selected_text(current.as_str())
+                            .show_ui(ui, |ui| {
+                                for &o in options {
+                                    if ui.selectable_label(o == current, o).clicked() && o != current {
+                                        picked = Some(o);
+                                    }
+                                }
+                            });
+                        shown.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, label));
+                        if let Some(g) = picked.and_then(|o| with_text_property(&e.geometry, label, o)) {
+                            self.edit([e.id], |x| x.geometry = g.clone());
+                        }
+                        None
+                    }
                     Value::Edit(s) => {
                         if let Some(new) = self.string_field(ui, label, Id::unique(("prop", e.id, label)), &s, width) {
                             match with_text_property(&e.geometry, label, &new) {
@@ -584,6 +643,22 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
             let (o, turn) = (*origin, v - Point::ORIGIN.angle_to(*u));
             return Some(g.rotated(o, turn));
         }
+        (Geometry::Viewport { center, .. }, "Center X" | "Center Y") => {
+            let c = *center;
+            let to = if label == "Center X" { Point::new(v, c.y) } else { Point::new(c.x, v) };
+            return Some(g.translated(to - c));
+        }
+        (Geometry::Viewport { center, height, .. }, "Width") if v > 0.0 => {
+            let (c, h) = (*center, *height);
+            return Some(g.reframed(c, v, h));
+        }
+        (Geometry::Viewport { center, width, .. }, "Height") if v > 0.0 => {
+            let (c, w) = (*center, *width);
+            return Some(g.reframed(c, w, v));
+        }
+        (Geometry::Viewport { height, view_height, locked: false, .. }, "Custom scale") if v > 0.0 => {
+            *view_height = *height / v;
+        }
         (Geometry::Xline { base, .. } | Geometry::Ray { base, .. }, "Basepoint X") => base.x = v,
         (Geometry::Xline { base, .. } | Geometry::Ray { base, .. }, "Basepoint Y") => base.y = v,
         (Geometry::Xline { direction, .. } | Geometry::Ray { direction, .. }, "Angle") => {
@@ -613,6 +688,11 @@ fn with_text_property(g: &Geometry, label: &str, s: &str) -> Option<Geometry> {
             *text = Some(s.to_string()).filter(|t| !t.is_empty());
         }
         (Geometry::Hatch { pattern, .. }, "Pattern") => *pattern = HatchPattern::from_name(s)?,
+        (Geometry::Viewport { on, .. }, "On") => *on = s == "Yes",
+        (Geometry::Viewport { locked, .. }, "Display locked") => *locked = s == "Yes",
+        (Geometry::Viewport { height, view_height, locked: false, .. }, "Standard scale") => {
+            *view_height = *height * scale_ratio(s)?;
+        }
         _ => return None,
     }
     Some(g)
@@ -694,6 +774,43 @@ mod tests {
             scale: 1.0,
         };
         assert!(matches!(with_text_property(&dim, "Text override", ""), Some(Geometry::Dimension { text: None, .. })));
+    }
+
+    #[test]
+    fn edits_viewport_properties() {
+        let vp = Geometry::Viewport {
+            center: Point::new(100.0, 50.0),
+            width: 200.0,
+            height: 100.0,
+            view_center: Point::new(1000.0, 500.0),
+            view_height: 5000.0,
+            twist: 0.0,
+            frozen: Vec::new(),
+            locked: false,
+            on: true,
+        };
+        let get = |g: Option<Geometry>| match g {
+            Some(Geometry::Viewport { center, width, height, view_center, view_height, locked, on, .. }) => {
+                (center, width, height, view_center, view_height, locked, on)
+            }
+            g => panic!("{g:?}"),
+        };
+        assert_eq!(scale_name(50.0), "1:50");
+        assert_eq!(scale_name(33.0), "Custom");
+        // A standard scale keeps the view's center.
+        let (_, _, _, c, h, ..) = get(with_text_property(&vp, "Standard scale", "1:100"));
+        assert_eq!((c, h), (Point::new(1000.0, 500.0), 10_000.0));
+        assert_eq!(get(with_property(&vp, "Custom scale", 0.1)).4, 1000.0);
+        // Wider: more shows at the same scale.
+        let (_, w, _, c, h, ..) = get(with_property(&vp, "Width", 300.0));
+        assert_eq!((w, c, h), (300.0, Point::new(1000.0, 500.0), 5000.0));
+        let (_, _, ht, _, h, ..) = get(with_property(&vp, "Height", 50.0));
+        assert_eq!((ht, h), (50.0, 2500.0));
+        // Locked: the scale stays.
+        let locked = with_text_property(&vp, "Display locked", "Yes").unwrap();
+        assert!(get(Some(locked.clone())).5);
+        assert_eq!(with_text_property(&locked, "Standard scale", "1:100"), None);
+        assert!(!get(with_text_property(&vp, "On", "No")).6);
     }
 
     #[test]

@@ -924,6 +924,20 @@ impl Geometry {
         }
     }
 
+    /// A viewport with a new frame, showing model space at the same scale
+    /// and in the same place on the sheet: more or less of it shows.
+    pub fn reframed(&self, center: Point, width: f64, height: f64) -> Geometry {
+        let mut g = self.clone();
+        if let Geometry::Viewport { center: c, width: w, height: h, view_center, view_height, .. } = &mut g {
+            // Model units per paper unit.
+            let n = if *h > 0.0 { *view_height / *h } else { 1.0 };
+            *view_center = *view_center + (center - *c) * n;
+            *view_height = height * n;
+            (*c, *w, *h) = (center, width, height);
+        }
+        g
+    }
+
     /// The shape after dragging grip `index` to `to` (grip STRETCH).
     pub fn with_grip_moved(&self, index: usize, to: Point) -> Geometry {
         match (self, index) {
@@ -994,17 +1008,11 @@ impl Geometry {
             }
             (Geometry::Hatch { .. }, _) => self.translated(to - self.bounds().center()),
             (Geometry::Viewport { center, .. }, 0) => self.translated(to - *center),
-            // A corner: the opposite one stays.
+            // A corner: the opposite one stays, and so does the scale.
             (Geometry::Viewport { center, width, height, .. }, i) => {
                 let corners = viewport_corners(*center, *width, *height);
                 let fixed = corners[(i + 1) % 4];
-                let mut g = self.clone();
-                if let Geometry::Viewport { center, width, height, .. } = &mut g {
-                    *center = fixed.midpoint(to);
-                    *width = (to.x - fixed.x).abs();
-                    *height = (to.y - fixed.y).abs();
-                }
-                g
+                self.reframed(fixed.midpoint(to), (to.x - fixed.x).abs(), (to.y - fixed.y).abs())
             }
             (Geometry::Ellipse(e), 0) => self.translated(to - e.center),
             (Geometry::Ellipse(e), 1 | 3) => Geometry::Ellipse(e.with_axes(e.center.distance(to), e.b())),
@@ -1127,6 +1135,31 @@ mod tests {
     fn square() -> Geometry {
         let p = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
         Geometry::Polyline { vertices: p.iter().map(|&(x, y)| Vertex::at(Point::new(x, y))).collect(), closed: true }
+    }
+
+    #[test]
+    fn a_viewport_resized_by_a_corner_keeps_its_scale_and_the_model_in_place() {
+        let vp = Geometry::Viewport {
+            center: Point::new(50.0, 50.0),
+            width: 100.0,
+            height: 100.0,
+            view_center: Point::new(500.0, 500.0),
+            view_height: 1000.0,
+            twist: 0.0,
+            frozen: Vec::new(),
+            locked: false,
+            on: true,
+        };
+        // The upper-right corner (grip 3) out to 200, 150; the lower-left stays.
+        let Geometry::Viewport { center, width, height, view_center, view_height, .. } =
+            vp.with_grip_moved(3, Point::new(200.0, 150.0))
+        else {
+            panic!()
+        };
+        assert_eq!((center, width, height), (Point::new(100.0, 75.0), 200.0, 150.0));
+        // Still 1:10, and model 0,0 is still at the sheet's 0,0.
+        assert_eq!(view_height, 1500.0);
+        assert_eq!(view_center, Point::new(1000.0, 750.0));
     }
 
     #[test]
