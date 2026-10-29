@@ -573,6 +573,21 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Clip a block reference or xref to a rectangle, polygon or polyline",
         make: Some(|| Box::new(XClipCommand::default())),
     },
+    // Handled by the app, which owns the dialogs and palettes.
+    CommandInfo {
+        name: "BEDIT",
+        aliases: &["BE"],
+        description: "Edit a block definition in the Block Editor",
+        make: None,
+    },
+    CommandInfo { name: "BSAVE", aliases: &[], description: "Save the block in the Block Editor", make: None },
+    CommandInfo { name: "BCLOSE", aliases: &[], description: "Close the Block Editor", make: None },
+    CommandInfo {
+        name: "BLOCKSPALETTE",
+        aliases: &[],
+        description: "Open the Blocks palette: insert blocks from this drawing or a library",
+        make: None,
+    },
     CommandInfo {
         name: "REFEDIT",
         aliases: &[],
@@ -808,6 +823,14 @@ impl Engine {
             Err(e) => self.log(e),
         }
         doc.commit();
+    }
+
+    /// The Blocks palette: INSERT with block `name` chosen, its preview on
+    /// the cursor until the insertion point is picked.
+    pub fn insert_block(&mut self, name: &str, doc: &mut Document) {
+        self.vars.insert_name = Some(name.to_string());
+        self.run("INSERT", doc);
+        self.feed(Input::Enter, doc, Point::ORIGIN, 0.0);
     }
 
     /// The Edit Reference panel's buttons: REFCLOSE's "Save" or

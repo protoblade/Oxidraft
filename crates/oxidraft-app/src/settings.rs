@@ -11,13 +11,15 @@ use serde::{Deserialize, Serialize};
 use crate::app::OxidraftApp;
 use crate::theme::{self, Background, ColorTheme};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub color_theme: ColorTheme,
     pub background: Background,
     /// Where the Properties palette sits.
     pub properties_dock: Dock,
+    /// The Blocks palette's library folder.
+    pub block_library: Option<PathBuf>,
 }
 
 /// Where a palette sits: docked at the left or right of the drawing
@@ -69,7 +71,11 @@ impl OxidraftApp {
     /// Uses `settings` from now on: restyles the app and keeps them for
     /// next time, when they're kept at all.
     pub fn apply_settings(&mut self, ctx: &egui::Context, settings: Settings) {
-        theme::set(ctx, settings.color_theme, settings.background);
+        // Restyle only when the look itself changes.
+        let look = |s: &Settings| (s.color_theme, s.background);
+        if look(&settings) != look(&self.settings) {
+            theme::set(ctx, settings.color_theme, settings.background);
+        }
         self.engine.vars.color_theme = u8::from(settings.color_theme == ColorTheme::Light);
         if settings != self.settings
             && let Some(path) = &self.settings_path
@@ -81,7 +87,7 @@ impl OxidraftApp {
     }
 
     pub(crate) fn open_options(&mut self) {
-        self.options = Some(OptionsDialog { settings: self.settings });
+        self.options = Some(OptionsDialog { settings: self.settings.clone() });
     }
 
     /// OPTIONS: the color theme of the ribbon and palettes, and the
@@ -135,7 +141,7 @@ impl OxidraftApp {
                 });
             });
         if ok || apply {
-            self.apply_settings(ctx, d.settings);
+            self.apply_settings(ctx, d.settings.clone());
         }
         if open && !ok && !cancel {
             self.options = Some(d);
@@ -151,8 +157,12 @@ mod tests {
     fn settings_round_trip_and_default_when_missing() {
         let path = std::env::temp_dir().join(format!("oxidraft-settings-{}/settings.json", std::process::id()));
         assert_eq!(Settings::load(&path), Settings::default());
-        let s =
-            Settings { color_theme: ColorTheme::Light, background: Background::White, properties_dock: Dock::Right };
+        let s = Settings {
+            color_theme: ColorTheme::Light,
+            background: Background::White,
+            properties_dock: Dock::Right,
+            block_library: Some("/blocks".into()),
+        };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
         // Unknown or missing fields fall back to the defaults.

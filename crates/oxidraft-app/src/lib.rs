@@ -2,6 +2,7 @@
 
 mod app;
 mod attedit;
+mod blocks;
 mod canvas;
 mod chrome;
 mod clipboard;

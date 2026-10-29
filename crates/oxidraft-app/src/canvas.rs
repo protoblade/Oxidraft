@@ -123,10 +123,14 @@ impl OxidraftApp {
             }
             ui.ctx().set_cursor_icon(icon);
         }
+        let label = match self.doc.refedit().filter(|r| r.editor) {
+            Some(r) => format!("[-][Top][2D Wireframe]   Block Editor - {}", r.block),
+            None => "[-][Top][2D Wireframe]".into(),
+        };
         painter.text(
             rect.left_top() + vec2(8.0, 6.0),
             Align2::LEFT_TOP,
-            "[-][Top][2D Wireframe]",
+            label,
             FontId::proportional(12.0),
             theme::label(),
         );
@@ -340,7 +344,14 @@ impl OxidraftApp {
             && let Some(id) = snap::pick(&self.doc, c.raw, tolerance)
             && !self.edit_attributes(id)
         {
-            self.properties_open = true;
+            // A block (not an xref) opens in Edit Block Definition, as in AutoCAD.
+            match self.doc.entity(id).map(|e| &e.geometry) {
+                Some(Geometry::Insert { block, .. }) if self.doc.xref(block).is_none() => {
+                    let block = block.clone();
+                    self.open_block_edit_dialog(Some(block));
+                }
+                _ => self.properties_open = true,
+            }
         }
     }
 
@@ -426,6 +437,10 @@ impl OxidraftApp {
             // REFEDIT: the reference being edited shows as its working set,
             // and the rest of the drawing fades (XFADECTL).
             if refedit.is_some_and(|r| r.reference == e.id) {
+                continue;
+            }
+            // The Block Editor shows the block alone.
+            if refedit.is_some_and(|r| r.editor && !r.in_working_set(e.id)) {
                 continue;
             }
             let faded = refedit.is_some_and(|r| !r.in_working_set(e.id));

@@ -27,6 +27,10 @@ pub struct RefEdit {
     /// The objects outside the working set now: the drawing's own, less
     /// those REFSET added, plus those it removed.
     pub outside: BTreeSet<EntityId>,
+    /// The block editor (BEDIT): the block is edited on its own, the rest
+    /// of the drawing hidden, and `reference` is a temporary one at the
+    /// origin, gone when the editor closes.
+    pub editor: bool,
 }
 
 impl RefEdit {
@@ -84,8 +88,40 @@ impl Document {
             self.add_styled(placement.place(def.base, &be.geometry), &be.layer, be.color, &be.linetype, be.lineweight);
         }
         let outside = host.clone();
-        self.set_refedit(Some(RefEdit { reference, block: def.name, placement, host, outside }));
+        self.set_refedit(Some(RefEdit { reference, block: def.name, placement, host, outside, editor: false }));
         Ok(def.entities.len())
+    }
+
+    /// BEDIT: opens block `name` in the block editor, its base point at the
+    /// origin.
+    pub fn begin_block_edit(&mut self, name: &str) -> Result<usize, String> {
+        if self.refedit().is_some() {
+            return Err("** A reference is already being edited; end it with REFCLOSE **".into());
+        }
+        let Some(def) = self.block(name).cloned() else { return Err(format!("Block \"{name}\" isn't defined.")) };
+        if self.xref(&def.name).is_some() || crate::is_dependent(&def.name) {
+            return Err(format!("\"{}\" is an external reference; edit it with REFEDIT.", def.name));
+        }
+        let reference = self.add(Geometry::Insert {
+            block: def.name,
+            placement: Placement::at(Point::ORIGIN),
+            attributes: Vec::new(),
+            clip: None,
+        });
+        let n = self.begin_refedit(reference)?;
+        if let Some(r) = self.refedit().cloned() {
+            self.set_refedit(Some(RefEdit { editor: true, ..r }));
+        }
+        Ok(n)
+    }
+
+    /// BSAVE: redefines the block from the working set, and goes on editing.
+    pub fn save_block_edit(&mut self) {
+        let Some(r) = self.refedit().cloned() else { return };
+        if let Some(def) = self.block(&r.block) {
+            let block = Block { name: def.name.clone(), base: def.base, entities: self.refedit_contents() };
+            self.define_block(block);
+        }
     }
 
     /// REFSET: moves objects into the working set (`add`) or out of it.
@@ -144,6 +180,9 @@ impl Document {
             self.remove(id);
         }
         self.set_refedit(None);
+        if r.editor {
+            self.remove(r.reference);
+        }
         Some(r)
     }
 
@@ -311,6 +350,46 @@ mod tests {
         assert!(approx(&d.block("B").unwrap().entities, &original));
         assert!(d.entity(other).is_some() && d.refedit().is_none());
         assert_eq!(d.entities().count(), 3);
+    }
+
+    #[test]
+    fn block_editor_edits_a_block_at_the_origin_and_hides_the_rest() {
+        let mut d = Document::new();
+        block(&mut d);
+        let other = d.add(Geometry::Line { start: Point::new(50.0, 0.0), end: Point::new(60.0, 0.0) });
+        let reference = d.add(Geometry::Insert {
+            block: "B".into(),
+            placement: Placement { position: Point::new(10.0, 5.0), scale: 2.0, rotation: 30.0, mirror: false },
+            attributes: Vec::new(),
+            clip: None,
+        });
+        d.begin("BEDIT");
+        assert_eq!(d.begin_block_edit("B"), Ok(3));
+        d.commit();
+        let r = d.refedit().unwrap().clone();
+        assert!(r.editor && r.reference != reference);
+        // The base point (1, 1) is at the origin.
+        let line =
+            d.entities().find(|e| r.in_working_set(e.id) && matches!(e.geometry, Geometry::Line { .. })).unwrap();
+        assert!(matches!(line.geometry, Geometry::Line { start, .. } if start.approx_eq(Point::new(-1.0, -1.0))));
+        assert!(!d.is_selectable(d.entity(other).unwrap()));
+        // A line drawn from the origin goes into the block from its base point.
+        d.add(Geometry::Line { start: Point::ORIGIN, end: Point::new(3.0, 0.0) });
+        d.begin("BSAVE");
+        d.save_block_edit();
+        d.commit();
+        assert_eq!(d.block("B").unwrap().entities.len(), 4);
+        assert!(d.refedit().is_some(), "still editing");
+        d.begin("BCLOSE");
+        d.close_refedit(false);
+        d.commit();
+        assert_eq!(d.block("B").unwrap().entities.len(), 4, "saved before closing");
+        assert!(d.refedit().is_none() && d.entity(r.reference).is_none(), "the temporary reference is gone");
+        assert_eq!(d.entities().count(), 2);
+        let saved = d.block("B").unwrap().entities.iter().any(|e| {
+            matches!(e.geometry, Geometry::Line { start, end } if start.approx_eq(Point::new(1.0, 1.0)) && end.approx_eq(Point::new(4.0, 1.0)))
+        });
+        assert!(saved);
     }
 
     #[test]

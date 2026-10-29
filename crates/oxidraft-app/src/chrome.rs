@@ -94,6 +94,16 @@ const MODIFY_MORE: &[Tool] = &[
     tool(Icon::Lengthen, "Lengthen", Some("LENGTHEN"), "Changes the length of an object (LEN)"),
     tool(Icon::EditPolyline, "Edit Polyline", Some("PEDIT"), "Closes, opens, joins or reverses polylines (PE)"),
 ];
+const BLOCK_INSERT: Tool = tool(
+    Icon::InsertBlock,
+    "Insert",
+    Some("BLOCKSPALETTE"),
+    "Inserts a block from this drawing or a library (the Blocks palette); INSERT (I) asks for its name",
+);
+const BLOCK_SMALL: &[Tool] = &[
+    tool(Icon::CreateBlock, "Create", Some("BLOCK"), "Creates a block from objects (B)"),
+    tool(Icon::EditReference, "Edit", Some("BEDIT"), "Edits a block definition in the Block Editor (BE)"),
+];
 const LAYER_TOOLS: &[Tool] = &[
     tool(Icon::LayerIsolate, "", Some("LAYISO"), "Isolate: locks every layer but those of the selected objects"),
     tool(Icon::LayerUnisolate, "", Some("LAYUNISO"), "Unisolate: puts back the layers Isolate changed"),
@@ -206,8 +216,11 @@ impl OxidraftApp {
         egui::Panel::top("ribbon").frame(body).exact_size(98.0).show_separator_line(false).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-                // While a reference is edited in place, its panel leads every tab.
-                if self.doc.refedit().is_some() {
+                // While a reference is edited in place (or a block in the
+                // Block Editor), its panel leads every tab.
+                if self.in_block_editor() {
+                    self.block_editor_panel(ui);
+                } else if self.doc.refedit().is_some() {
                     self.edit_reference_panel(ui);
                 }
                 if self.ribbon_tab == 0 {
@@ -232,8 +245,12 @@ impl OxidraftApp {
 
     fn insert_tab(&mut self, ui: &mut Ui) {
         ribbon_panel(ui, "Block", |ui| {
-            self.large_tool(ui, &tool(Icon::InsertBlock, "Insert", Some("INSERT"), "Inserts a block reference (I)"));
-            self.large_tool(ui, &tool(Icon::CreateBlock, "Create", Some("BLOCK"), "Creates a block from objects (B)"));
+            self.large_tool(ui, &BLOCK_INSERT);
+            ui.vertical(|ui| {
+                for t in BLOCK_SMALL {
+                    self.small_tool(ui, t);
+                }
+            });
         });
         ribbon_panel(ui, "Reference", |ui| {
             self.large_tool(
@@ -382,12 +399,11 @@ impl OxidraftApp {
             });
         });
         ribbon_panel(ui, "Block", |ui| {
-            self.large_tool(ui, &tool(Icon::InsertBlock, "Insert", Some("INSERT"), "Inserts a block reference (I)"));
+            self.large_tool(ui, &BLOCK_INSERT);
             ui.vertical(|ui| {
-                self.small_tool(
-                    ui,
-                    &tool(Icon::CreateBlock, "Create", Some("BLOCK"), "Creates a block from objects (B)"),
-                );
+                for t in BLOCK_SMALL {
+                    self.small_tool(ui, t);
+                }
             });
         });
         ribbon_panel(ui, "Properties", |ui| {
@@ -410,6 +426,23 @@ impl OxidraftApp {
         ribbon_panel(ui, "Utilities", |ui| {
             for t in UTILITIES_LARGE {
                 self.large_tool(ui, t);
+            }
+        });
+    }
+
+    /// The Block Editor's panel: save the block, close the editor.
+    fn block_editor_panel(&mut self, ui: &mut Ui) {
+        let name = self.doc.refedit().map(|r| r.block.clone()).unwrap_or_default();
+        ribbon_panel(ui, &format!("Block Editor - {name}"), |ui| {
+            let save = tool(Icon::SaveReference, "Save\nBlock", None, "Saves the block definition (BSAVE)");
+            let close = tool(Icon::DiscardReference, "Close Block\nEditor", None, "Closes the Block Editor (BCLOSE)");
+            for (t, command) in [(save, "BSAVE"), (close, "BCLOSE")] {
+                let response = paint_large(ui, &t, true);
+                let label = t.label.replace('\n', " ");
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+                if response.on_hover_text(t.tip).clicked() {
+                    self.run(command);
+                }
             }
         });
     }

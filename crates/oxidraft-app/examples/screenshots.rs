@@ -556,6 +556,60 @@ fn main() {
     h.run_steps(3);
     save(&mut h, &dir, "30-draw-slideout");
 
+    // The Blocks palette with three blocks, then one open in the Block Editor.
+    let with_blocks = |h: &mut Harness<'_, OxidraftApp>| {
+        let doc = h.state_mut().document_mut();
+        let door = vec![
+            BlockEntity::new("0", Color::ByLayer, Geometry::Line { start: Point::ORIGIN, end: Point::new(0.0, 9.0) }),
+            BlockEntity::new(
+                "0",
+                Color::ByLayer,
+                Geometry::Arc { center: Point::ORIGIN, radius: 9.0, start_angle: 0.0, end_angle: 90.0 },
+            ),
+        ];
+        doc.define_block(Block { name: "DOOR".into(), base: Point::ORIGIN, entities: door });
+        let column = vec![
+            BlockEntity::new("0", Color::Index(1), Geometry::Circle { center: Point::ORIGIN, radius: 3.0 }),
+            BlockEntity::new(
+                "0",
+                Color::Index(1),
+                Geometry::Line { start: Point::new(-3.0, 0.0), end: Point::new(3.0, 0.0) },
+            ),
+            BlockEntity::new(
+                "0",
+                Color::Index(1),
+                Geometry::Line { start: Point::new(0.0, -3.0), end: Point::new(0.0, 3.0) },
+            ),
+        ];
+        doc.define_block(Block { name: "COLUMN".into(), base: Point::ORIGIN, entities: column });
+        let desk = (0..4)
+            .map(|i| {
+                let (x, y) = (f64::from(i % 2) * 14.0, f64::from(i / 2) * 9.0);
+                let v = |dx: f64, dy: f64| Vertex::at(Point::new(x + dx, y + dy));
+                BlockEntity::new(
+                    "0",
+                    Color::Index(4),
+                    Geometry::Polyline {
+                        vertices: vec![v(0.0, 0.0), v(12.0, 0.0), v(12.0, 7.0), v(0.0, 7.0)],
+                        closed: true,
+                    },
+                )
+            })
+            .collect();
+        doc.define_block(Block { name: "DESKS".into(), base: Point::ORIGIN, entities: desk });
+    };
+    let mut h = harness();
+    with_blocks(&mut h);
+    h.state_mut().type_command("blockspalette");
+    h.run_steps(3);
+    save(&mut h, &dir, "31-blocks-palette");
+    let mut h = harness();
+    with_blocks(&mut h);
+    h.state_mut().open_block_editor("DESKS");
+    h.run_steps(3);
+    hover(&mut h, Point::new(10.0, 4.0));
+    save(&mut h, &dir, "32-block-editor");
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");

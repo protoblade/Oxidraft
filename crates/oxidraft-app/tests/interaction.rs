@@ -931,3 +931,102 @@ fn escape_closes_the_properties_palette_once_no_command_runs() {
     h.run_steps(2);
     assert!(!open(&h) && h.state_mut().engine_mut().selection().is_empty());
 }
+
+/// A drawing with block B (a 10-unit line from its base point) placed at
+/// (100, 0) scaled 2, beside the test lines.
+fn app_with_block() -> (Harness<'static, OxidraftApp>, oxidraft_model::EntityId) {
+    use oxidraft_model::{Block, BlockEntity, Color, Placement};
+    let mut h = app_with_line();
+    let doc = h.state_mut().document_mut();
+    let line = Geometry::Line { start: Point::ORIGIN, end: Point::new(10.0, 0.0) };
+    doc.define_block(Block {
+        name: "B".into(),
+        base: Point::ORIGIN,
+        entities: vec![BlockEntity::new("0", Color::ByLayer, line)],
+    });
+    let placement = Placement { position: Point::new(100.0, 30.0), scale: 2.0, rotation: 0.0, mirror: false };
+    let reference = doc.add(Geometry::Insert { block: "B".into(), placement, attributes: Vec::new(), clip: None });
+    h.run_steps(2);
+    (h, reference)
+}
+
+#[test]
+fn block_editor_edits_a_block_and_asks_before_closing_with_changes() {
+    let (mut h, reference) = app_with_block();
+    h.state_mut().type_command("be");
+    h.run_steps(2);
+    assert!(h.query_by_label("Edit Block Definition").is_some());
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().in_block_editor());
+    // Its base point is at the origin; draw a line up from it.
+    for input in ["l", "0,0", "0,5", ""] {
+        h.state_mut().type_command(input);
+        h.run_steps(1);
+    }
+    // SAVE waits for the editor to close.
+    h.state_mut().type_command("save");
+    h.run_steps(1);
+    assert!(h.state_mut().engine_mut().history().iter().any(|l| l.contains("Close the Block Editor first")));
+    h.get_by_label("Close Block Editor").click();
+    h.run_steps(2);
+    h.get_by_label("Save the changes to B").click();
+    h.run_steps(3);
+    assert!(!h.state().in_block_editor());
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.block("B").map(|b| b.entities.len()), Some(2));
+    assert!(doc.entity(reference).is_some());
+    assert_eq!(doc.entities().count(), 3, "the two test lines and the reference, nothing left over");
+}
+
+#[test]
+fn blocks_palette_inserts_from_the_drawing_and_from_a_library() {
+    use oxidraft_model::{Block, BlockEntity, Color, Layer};
+    let (mut h, _) = app_with_block();
+    h.state_mut().type_command("blockspalette");
+    h.run_steps(3);
+    // This drawing's block: click it, then place it.
+    h.get_by_label("B").click();
+    h.run_steps(2);
+    assert!(h.state_mut().engine_mut().is_active(), "INSERT asks where");
+    let at = screen(&h, 40.0, 40.0);
+    click(&mut h, at);
+    h.run_steps(1);
+    let count = |h: &mut Harness<'_, OxidraftApp>, name: &str| {
+        h.state_mut()
+            .document_mut()
+            .entities()
+            .filter(|e| matches!(&e.geometry, Geometry::Insert { block, .. } if block == name))
+            .count()
+    };
+    assert_eq!(count(&mut h, "B"), 2);
+
+    // A library drawing in a folder, with a TREE block on its own layer.
+    let dir = std::env::temp_dir().join(format!("oxidraft-blocklib-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut lib = Document::new();
+    lib.add_layer(Layer::new("Trees", 3));
+    let circle = Geometry::Circle { center: Point::ORIGIN, radius: 2.0 };
+    lib.define_block(Block {
+        name: "TREE".into(),
+        base: Point::ORIGIN,
+        entities: vec![BlockEntity::new("Trees", Color::ByLayer, circle)],
+    });
+    lib.add(Geometry::Line { start: Point::ORIGIN, end: Point::new(5.0, 5.0) });
+    let file = dir.join("landscape.dxf");
+    oxidraft_io_dxf::save_file(&lib, &file).unwrap();
+    let ctx = h.ctx.clone();
+    h.state_mut().open_library_drawing(dir.clone(), file, &ctx);
+    h.run_steps(3);
+    assert!(h.query_by_label("landscape (whole drawing)").is_some());
+    h.get_by_label("TREE").click();
+    h.run_steps(2);
+    assert!(h.state_mut().engine_mut().is_active(), "{:?}", h.state_mut().engine_mut().history());
+    // Beside the palette, which covers the middle of the drawing.
+    let at = screen(&h, 125.0, 50.0);
+    click(&mut h, at);
+    h.run_steps(1);
+    assert_eq!(count(&mut h, "TREE"), 1);
+    assert!(h.state_mut().document_mut().layer("Trees").is_some(), "its layer came along");
+    std::fs::remove_dir_all(&dir).ok();
+}

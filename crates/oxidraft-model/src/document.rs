@@ -565,7 +565,13 @@ impl Document {
     /// The extents of a block's contents in its own coordinates, ignoring
     /// layers that are off.
     pub fn block_extents(&self, name: &str) -> Option<Aabb> {
-        let def = self.block(name)?;
+        self.block_contents(name).iter().map(|s| s.geometry.bounds()).reduce(Aabb::union)
+    }
+
+    /// A block's contents in its own coordinates, nested blocks expanded,
+    /// as a reference on layer 0 would draw them (for previews).
+    pub fn block_contents(&self, name: &str) -> Vec<Styled> {
+        let Some(def) = self.block(name) else { return Vec::new() };
         let g = Geometry::Insert {
             block: def.name.clone(),
             placement: crate::Placement::at(def.base),
@@ -573,15 +579,9 @@ impl Document {
             clip: None,
         };
         let mut out = Vec::new();
-        self.expand_into(
-            &g,
-            "0",
-            (Color::ByLayer, linetype::BYLAYER, Lineweight::ByLayer),
-            &Inherited::default(),
-            0,
-            &mut out,
-        );
-        out.iter().map(|s| s.geometry.bounds()).reduce(Aabb::union)
+        let style = (Color::ByLayer, linetype::BYLAYER, Lineweight::ByLayer);
+        self.expand_into(&g, "0", style, &Inherited::default(), 0, &mut out);
+        out
     }
 
     /// The frame drawn around a clipped reference (XCLIPFRAME 2: on screen

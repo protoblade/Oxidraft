@@ -8,6 +8,7 @@ mod clip;
 mod document;
 mod entity;
 pub mod hatch;
+mod library;
 pub mod linetype;
 mod palette;
 mod refedit;

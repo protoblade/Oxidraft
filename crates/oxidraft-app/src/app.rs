@@ -52,6 +52,16 @@ pub struct OxidraftApp {
     pub(crate) options: Option<crate::settings::OptionsDialog>,
     /// REFCLOSE's Save for an xref, waiting to be confirmed.
     pub(crate) xref_edit_save: Option<crate::xref::XrefEditSave>,
+    /// The Edit Block Definition dialog (its selected block), the block
+    /// editor's view to go back to and the drawing's revision when last
+    /// saved, the "Changes Not Saved" question, the Blocks palette, and the
+    /// library drawings it has read.
+    pub(crate) block_edit_dialog: Option<String>,
+    pub(crate) block_editor_view: Option<crate::view::View>,
+    pub(crate) block_editor_saved: u64,
+    pub(crate) block_close_prompt: bool,
+    pub(crate) blocks_palette: Option<crate::blocks::BlocksPalette>,
+    pub(crate) library_drawings: crate::blocks::LibraryDrawings,
     /// Images and PDF pages: their pixels as read so far, the reader, and
     /// a count that changes whenever pictures come or go.
     pub(crate) rasters: std::collections::HashMap<String, crate::underlay::Raster>,
@@ -156,6 +166,12 @@ impl OxidraftApp {
             xref_selected: None,
             nested_xrefs: Default::default(),
             xref_edit_save: None,
+            block_edit_dialog: None,
+            block_editor_view: None,
+            block_editor_saved: 0,
+            block_close_prompt: false,
+            blocks_palette: None,
+            library_drawings: Default::default(),
             settings: Default::default(),
             settings_path: None,
             options: None,
@@ -330,6 +346,10 @@ impl OxidraftApp {
     pub(crate) fn save(&mut self, save_as: bool) {
         self.engine.cancel(&mut self.doc);
         // The working set would be saved as part of the drawing.
+        if self.in_block_editor() {
+            self.engine.log("** Close the Block Editor first (BCLOSE) **".to_string());
+            return;
+        }
         if self.doc.refedit().is_some() {
             self.engine.log("** Save or discard the reference edits first (REFCLOSE) **".to_string());
             return;
@@ -397,6 +417,10 @@ impl OxidraftApp {
             "PREVIEW" | "PRE" => self.open_plot(true),
             "QSELECT" => self.open_quick_select(),
             "OPTIONS" | "OP" => self.open_options(),
+            "BEDIT" | "BE" => self.open_block_edit_dialog(None),
+            "BSAVE" => self.save_block(),
+            "BCLOSE" => self.close_block_editor(None),
+            "BLOCKSPALETTE" => self.open_blocks_palette(),
             "PROPERTIES" | "PR" | "PROPS" | "MO" | "CH" => self.properties_open = true,
             _ => return false,
         }
@@ -435,7 +459,7 @@ impl OxidraftApp {
                 UiRequest::SaveXrefEdit => self.prepare_xref_edit_save(),
                 UiRequest::ColorTheme(n) => {
                     let color_theme = if n == 1 { ColorTheme::Light } else { ColorTheme::Dark };
-                    self.apply_settings(ctx, crate::settings::Settings { color_theme, ..self.settings });
+                    self.apply_settings(ctx, crate::settings::Settings { color_theme, ..self.settings.clone() });
                 }
                 UiRequest::PlotWindow(window) => {
                     if let Some(d) = &mut self.plot {
@@ -463,6 +487,8 @@ impl OxidraftApp {
     /// Select or an Attach dialog. Returns true if it closed one.
     fn close_dialog_on_escape(&mut self, ctx: &egui::Context) -> bool {
         let open = self.attribute_editor.is_some()
+            || self.block_edit_dialog.is_some()
+            || self.block_close_prompt
             || self.xref_edit_save.is_some()
             || self.options.is_some()
             || self.quick_select.is_some()
@@ -473,7 +499,9 @@ impl OxidraftApp {
         }
         if self.xref_edit_save.take().is_some() {
             self.engine.log("Reference edits not saved; still editing.".to_string());
-        } else if self.attribute_editor.take().is_none()
+        } else if !std::mem::take(&mut self.block_close_prompt)
+            && self.block_edit_dialog.take().is_none()
+            && self.attribute_editor.take().is_none()
             && self.options.take().is_none()
             && self.quick_select.take().is_none()
             && self.attach_dialog.take().is_none()
@@ -646,6 +674,9 @@ impl eframe::App for OxidraftApp {
         self.xref_palette(&ctx);
         self.xref_edit_save_dialog(&ctx);
         self.options_dialog(&ctx);
+        self.block_edit_dialog(&ctx);
+        self.block_close_dialog(&ctx);
+        self.blocks_palette(&ctx);
         self.update_window(&ctx);
         self.command_line(&ctx);
         self.publish_copied(&ctx);

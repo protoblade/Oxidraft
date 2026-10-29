@@ -110,7 +110,7 @@ impl OxidraftApp {
     }
 
     pub(crate) fn set_properties_dock(&mut self, ctx: &egui::Context, dock: Dock) {
-        self.apply_settings(ctx, Settings { properties_dock: dock, ..self.settings });
+        self.apply_settings(ctx, Settings { properties_dock: dock, ..self.settings.clone() });
     }
 
     fn properties_body(&mut self, ui: &mut Ui) {
