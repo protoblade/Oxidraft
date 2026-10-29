@@ -223,7 +223,9 @@ impl OxidraftApp {
             });
 
         // Space acts as Enter, as in AutoCAD, except while typing text that contains spaces.
-        let space = !self.engine.accepts_spaces() && self.command_text.ends_with(' ');
+        let space = !self.engine.accepts_spaces()
+            && !crate::lisp::open_paren(&self.command_text)
+            && self.command_text.ends_with(' ');
         if space {
             self.command_text.pop();
         }

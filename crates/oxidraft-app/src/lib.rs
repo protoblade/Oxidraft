@@ -32,6 +32,7 @@ mod layer_states;
 mod layer_walk;
 mod layers;
 mod layouts;
+mod lisp;
 mod manage;
 mod more_app;
 mod named_views;

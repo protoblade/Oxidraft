@@ -133,6 +133,8 @@ pub struct OxidraftApp {
     pub(crate) plot_stamp: bool,
     /// FONTMAP's font mapping file.
     pub(crate) font_map: String,
+    /// AutoLISP: what APPLOAD and the command line defined.
+    pub(crate) lisp: crate::lisp::Lisp,
     /// VSLIDE's slide, shown until REDRAW.
     pub(crate) slide: Option<oxidraft_plot::slide::Slide>,
     /// DATALINK's file, and the newest object before its table was placed.
@@ -363,6 +365,7 @@ impl OxidraftApp {
             log_file: None,
             plot_stamp: false,
             font_map: String::new(),
+            lisp: Default::default(),
             slide: None,
             pending_data_link: None,
             qv_layouts: false,
@@ -850,6 +853,7 @@ impl OxidraftApp {
             "DWFFORMAT" => self.engine.log("DWF files are written as DWFx (XPS compatible)."),
             "OPENDWFMARKUP" => self.markup_import(),
             "MSLIDE" => self.make_slide(),
+            "APPLOAD" => self.appload(),
             "VSLIDE" => self.view_slide_file(),
             "DRAWINGRECOVERY" | "DRM" => self.recovery_open = true,
             "DRAWINGRECOVERYHIDE" => self.recovery_open = false,
@@ -968,7 +972,11 @@ impl OxidraftApp {
     pub(crate) fn submit(&mut self) {
         let mut text = std::mem::take(&mut self.command_text);
         self.recall = None;
+        if self.lisp_typed(&text) || self.lisp_command(&text) {
+            return;
+        }
         if !self.engine.is_active() {
+            text = text.trim().trim_start_matches(['_', '.']).to_string();
             // AutoComplete: Enter accepts the highlighted suggestion.
             // The user's own aliases first; then AutoComplete's pick.
             let expanded = self.engine.expand_alias(&text);

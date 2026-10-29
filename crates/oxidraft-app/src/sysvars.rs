@@ -468,11 +468,22 @@ impl OxidraftApp {
 
     /// Sets a variable to what was typed.
     pub(crate) fn set_var(&mut self, name: &str, value: &str) {
-        let Some(var) = vars().into_iter().find(|v| v.name.eq_ignore_ascii_case(name)) else { return };
-        let Some(set) = var.set else { return };
-        if let Err(e) = set(self, value) {
+        if let Err(e) = self.try_set_var(name, value) {
             self.engine.log(e);
         }
+    }
+
+    /// A variable's value, as SETVAR shows it.
+    pub(crate) fn get_var(&self, name: &str) -> Option<String> {
+        vars().into_iter().find(|v| v.name.eq_ignore_ascii_case(name.trim())).map(|v| (v.get)(self))
+    }
+
+    pub(crate) fn try_set_var(&mut self, name: &str, value: &str) -> Result<(), String> {
+        let Some(var) = vars().into_iter().find(|v| v.name.eq_ignore_ascii_case(name.trim())) else {
+            return Err(format!("Unknown variable name: {}", name.to_uppercase()));
+        };
+        let Some(set) = var.set else { return Err(format!("{} is read only.", var.name)) };
+        set(self, value)
     }
 }
 

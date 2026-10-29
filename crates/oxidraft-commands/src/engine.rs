@@ -1150,6 +1150,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "DGNCLIP", aliases: &[], description: "Clip an attached DGN file (XCLIP)", make: None },
     CommandInfo { name: "DGNADJUST", aliases: &[], description: "How an attached DGN file shows", make: None },
     CommandInfo { name: "MSLIDE", aliases: &[], description: "Save the view as a slide (.sld)", make: None },
+    CommandInfo { name: "APPLOAD", aliases: &["AP"], description: "Load an AutoLISP file (.lsp)", make: None },
     CommandInfo { name: "VSLIDE", aliases: &[], description: "Show a slide (.sld) until REDRAW", make: None },
     CommandInfo {
         name: "CENTERDISASSOCIATE",
@@ -2679,6 +2680,11 @@ impl Engine {
         }
     }
 
+    /// Whether `name` is a command's name or alias.
+    pub fn knows(name: &str) -> bool {
+        find(name.trim()).is_some()
+    }
+
     /// Commands whose name or alias starts with `prefix`, best match first (AutoComplete).
     pub fn suggest(prefix: &str) -> Vec<&'static CommandInfo> {
         let p = prefix.trim().to_ascii_uppercase();
@@ -2713,6 +2719,13 @@ impl Engine {
         oxidraft_model::units::set_current(doc.units());
         oxidraft_model::ucs::set_current(doc.ucs());
         let text = text.trim();
+        // "_" (the English name) and "." (the built-in command), as scripts,
+        // menus and LISP write them: the same thing here.
+        let text = match &self.active {
+            None => text.trim_start_matches(['_', '.']),
+            Some(a) if !a.cmd.wants_text() => text.strip_prefix('_').unwrap_or(text),
+            Some(_) => text,
+        };
         if !text.is_empty() {
             self.typed.push(text.to_string());
             if self.active.is_some() {

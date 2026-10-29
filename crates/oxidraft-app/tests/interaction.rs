@@ -3196,3 +3196,58 @@ fn dgn_files_import_and_attach() {
 fn oxidraft_app_dgn(doc: &Document) -> Vec<u8> {
     oxidraft_app::dgn_bytes(doc)
 }
+
+#[test]
+fn autolisp_at_the_command_line_and_from_a_file() {
+    let mut h = app_with_line();
+    let history = |h: &mut Harness<'_, OxidraftApp>| h.state_mut().engine_mut().history().to_vec();
+    // Spaces inside parentheses are spaces; once they're closed, Space is Enter.
+    type_keys(&mut h, "(setq p (list 10 20))");
+    assert_eq!(h.state_mut().command_text(), "(setq p (list 10 20))");
+    type_keys(&mut h, " ");
+    h.run();
+    assert!(history(&mut h).iter().any(|l| l == "(10 20)"), "its value is shown");
+    // !p at a prompt gives the point.
+    let before = h.state_mut().document_mut().len();
+    h.state_mut().type_command("LINE");
+    h.state_mut().type_command("!p");
+    h.state_mut().type_command("(list 40 60)");
+    h.state_mut().type_command("");
+    h.run();
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.len(), before + 1);
+    let last = doc.entities().last().unwrap();
+    assert!(
+        matches!(last.geometry, Geometry::Line { start, end } if start == Point::new(10.0, 20.0) && end == Point::new(40.0, 60.0))
+    );
+
+    // A file defining a command that runs Oxidraft's, with "_." names.
+    let dir = std::env::temp_dir().join(format!("oxidraft-lisp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("square.lsp");
+    std::fs::write(
+        &file,
+        "; a square\n(defun c:SQUARE (/ s)\n  (setq s (getvar \"FILLETRAD\"))\n  (command \"_.PLINE\" '(0 0) (list s 0) (list s s) (list 0 s) \"_c\")\n  (princ))\n",
+    )
+    .unwrap();
+    h.state_mut().load_lisp(&file);
+    assert!(history(&mut h).iter().any(|l| l == "square.lsp successfully loaded."));
+    h.state_mut().type_command("(setvar \"FILLETRAD\" 5)");
+    let before = h.state_mut().document_mut().len();
+    h.state_mut().type_command("square");
+    h.run();
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.len(), before + 1, "SQUARE drew a polyline");
+    match &doc.entities().last().unwrap().geometry {
+        Geometry::Polyline { vertices, closed, .. } => {
+            assert!(*closed);
+            assert_eq!(vertices.len(), 4);
+            assert_eq!(vertices[2].point, Point::new(5.0, 5.0));
+        }
+        g => panic!("not a polyline: {g:?}"),
+    }
+    // Errors are reported, and cancel what the program left running.
+    h.state_mut().type_command("(car 5)");
+    assert!(history(&mut h).iter().any(|l| l.starts_with("; error: bad argument type")));
+    std::fs::remove_dir_all(&dir).ok();
+}
