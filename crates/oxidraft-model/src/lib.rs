@@ -6,6 +6,7 @@ pub mod annoscale;
 pub mod annotation;
 pub mod boundary;
 mod clip;
+pub mod dimassoc;
 mod document;
 mod entity;
 pub mod field;

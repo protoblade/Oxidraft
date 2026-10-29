@@ -209,14 +209,14 @@ impl Block {
 
 /// The layer table and the current layer, recorded whole for undo.
 #[derive(Debug, Clone, PartialEq)]
-struct LayerTable {
+pub(crate) struct LayerTable {
     layers: Vec<Layer>,
     current: String,
 }
 
 /// One edit, recorded with what it replaced so it can be undone.
 #[derive(Debug, Clone)]
-enum Change {
+pub(crate) enum Change {
     /// `before` is `None` for an add, `after` is `None` for a removal.
     Entity {
         id: EntityId,
@@ -288,6 +288,12 @@ enum Change {
         before: DrawingProperties,
         after: DrawingProperties,
     },
+    /// A dimension's associations (DIMREASSOCIATE, DIMDISASSOCIATE).
+    DimAssoc {
+        id: EntityId,
+        before: Option<crate::dimassoc::DimAssoc>,
+        after: Option<crate::dimassoc::DimAssoc>,
+    },
     /// The multileader and table styles.
     AnnotationStyles {
         before: (crate::annotation::LeaderStyle, crate::table::TableStyle),
@@ -343,6 +349,8 @@ pub struct Document {
     ucs: crate::ucs::Ucs,
     ucs_previous: Vec<crate::ucs::Ucs>,
     named_ucs: Vec<crate::ucs::NamedUcs>,
+    /// Associative dimensions: what each one's definition points follow.
+    pub(crate) dim_assoc: BTreeMap<EntityId, crate::dimassoc::DimAssoc>,
     /// ULAYERS: each PDF underlay's layers turned off, by its name.
     pdf_layers_off: BTreeMap<String, Vec<String>>,
     /// CANNOSCALE: drawing units per paper unit; ANNOALLVISIBLE.
@@ -496,6 +504,7 @@ impl Document {
             ucs_previous: Vec::new(),
             named_ucs: Vec::new(),
             pdf_layers_off: BTreeMap::new(),
+            dim_assoc: BTreeMap::new(),
             anno_scale: 1.0,
             anno_all_visible: true,
             limits: (Point::ORIGIN, Point::new(420.0, 297.0)),
@@ -2280,6 +2289,19 @@ impl Document {
 
     /// Ends the open transaction. Empty transactions leave no undo step.
     pub fn commit(&mut self) {
+        // Dimensions follow the objects they measure, in the same step.
+        if !self.dim_assoc.is_empty()
+            && let Some(t) = &self.open
+        {
+            let changed: std::collections::HashSet<EntityId> = t
+                .changes
+                .iter()
+                .filter_map(|c| if let Change::Entity { id, .. } = c { Some(*id) } else { None })
+                .collect();
+            if !changed.is_empty() {
+                self.follow_associations(&changed);
+            }
+        }
         if let Some(t) = self.open.take()
             && !t.changes.is_empty()
         {
@@ -2293,6 +2315,19 @@ impl Document {
         if let Some(t) = self.open.take() {
             self.revert(&t);
         }
+    }
+
+    /// The objects the open transaction added.
+    pub fn added_in_transaction(&self) -> Vec<EntityId> {
+        self.open.as_ref().map_or_else(Vec::new, |t| {
+            t.changes
+                .iter()
+                .filter_map(|c| match c {
+                    Change::Entity { id, before: None, after: Some(_) } => Some(*id),
+                    _ => None,
+                })
+                .collect()
+        })
     }
 
     /// How many changes the open transaction holds: a command's own Undo
@@ -2365,7 +2400,7 @@ impl Document {
         self.redo_stack.clear();
     }
 
-    fn record(&mut self, change: Change) {
+    pub(crate) fn record(&mut self, change: Change) {
         self.revision += 1;
         match &mut self.open {
             Some(t) => t.changes.push(change),
@@ -2391,6 +2426,7 @@ impl Document {
                     Change::AnnotationStyles { .. } => "Style",
                     Change::LayerStates { .. } => "Layer state",
                     Change::Properties { .. } => "Drawing properties",
+                    Change::DimAssoc { .. } => "Dimension association",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -2448,6 +2484,12 @@ impl Document {
             Change::Units { before, after } => self.units = if forward { *after } else { *before },
             Change::Current { before, after } => self.current = if forward { after } else { before }.clone(),
             Change::Properties { before, after } => self.properties = if forward { after } else { before }.clone(),
+            Change::DimAssoc { id, before, after } => {
+                match if forward { after } else { before } {
+                    Some(a) => self.dim_assoc.insert(*id, a.clone()),
+                    None => self.dim_assoc.remove(id),
+                };
+            }
             Change::LayerStates { before, after } => {
                 self.layer_states = if forward { after } else { before }.clone();
             }

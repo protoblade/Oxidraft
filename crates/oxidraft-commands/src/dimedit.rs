@@ -661,6 +661,58 @@ impl Command for DimUpdate {
     }
 }
 
+/// DIMREASSOCIATE and DIMDISASSOCIATE: dimensions made to follow the
+/// objects their points lie on, or made to stop (DIMREGEN brings them all
+/// up to date).
+#[derive(Clone, Copy, PartialEq)]
+pub enum AssocAction {
+    Reassociate,
+    Disassociate,
+}
+
+pub struct DimAssocCmd {
+    action: AssocAction,
+}
+
+impl DimAssocCmd {
+    pub fn new(action: AssocAction) -> Self {
+        Self { action }
+    }
+}
+
+impl Command for DimAssocCmd {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Select dimensions")
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let Input::Selection(s) = input else { return Ok(Step::Done) };
+        let dims: Vec<EntityId> = s
+            .ids
+            .into_iter()
+            .filter(|id| ctx.doc.entity(*id).is_some_and(|e| !e.geometry.dim_def_points().is_empty()))
+            .collect();
+        match self.action {
+            AssocAction::Reassociate => {
+                let points: usize = dims.iter().map(|id| ctx.doc.associate_dimension(*id)).sum();
+                ctx.messages.push(format!("{} dimension(s): {points} point(s) associated.", dims.len()));
+            }
+            AssocAction::Disassociate => {
+                let n = dims.iter().filter(|id| ctx.doc.dim_assoc(**id).is_some()).count();
+                for id in &dims {
+                    ctx.doc.set_dim_assoc(*id, None);
+                }
+                ctx.messages.push(format!("{n} disassociated."));
+            }
+        }
+        Ok(Step::Done)
+    }
+
+    fn wants_selection(&self) -> bool {
+        true
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum InspectStage {
     Mode,
@@ -851,6 +903,26 @@ mod tests {
         assert_eq!(extra(&d).0.style.map(|s| s.text_height), Some(5.0));
         run(&mut e, &mut d, &["dimupdate", "all", ""]);
         assert_eq!(extra(&d).0.style, None);
+    }
+
+    #[test]
+    fn dimensions_associate_as_they_are_made() {
+        let (mut e, mut d) = (Engine::new(), Document::new());
+        e.dynamic_input = false;
+        let line = d.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(30.0, 0.0) });
+        run(&mut e, &mut d, &["dimlinear", "0,0", "30,0", "15,10"]);
+        let dim = d.entities().find(|x| matches!(x.geometry, Geometry::Dimension { .. })).unwrap().id;
+        assert!(d.dim_assoc(dim).is_some(), "associated as made");
+        d.begin("STRETCH");
+        d.update(line, |x| x.geometry = Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(45.0, 0.0) });
+        d.commit();
+        assert!(
+            matches!(d.entity(dim).unwrap().geometry, Geometry::Dimension { p2, .. } if p2 == Point::new(45.0, 0.0))
+        );
+        run(&mut e, &mut d, &["dimdisassociate", "all", ""]);
+        assert!(d.dim_assoc(dim).is_none());
+        run(&mut e, &mut d, &["dimreassociate", "all", ""]);
+        assert!(d.dim_assoc(dim).is_some());
     }
 
     #[test]

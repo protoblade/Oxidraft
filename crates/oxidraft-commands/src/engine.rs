@@ -1001,6 +1001,24 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(crate::picture_tools::FrameVar::new(crate::picture_tools::Frames::All))),
     },
     CommandInfo {
+        name: "DIMREASSOCIATE",
+        aliases: &["DRE"],
+        description: "Make dimensions follow the objects their points lie on",
+        make: Some(|| Box::new(crate::dimedit::DimAssocCmd::new(crate::dimedit::AssocAction::Reassociate))),
+    },
+    CommandInfo {
+        name: "DIMDISASSOCIATE",
+        aliases: &["DDA"],
+        description: "Stop dimensions following the objects they measure",
+        make: Some(|| Box::new(crate::dimedit::DimAssocCmd::new(crate::dimedit::AssocAction::Disassociate))),
+    },
+    CommandInfo {
+        name: "DIMREGEN",
+        aliases: &[],
+        description: "Bring associative dimensions up to date with their objects",
+        make: None,
+    },
+    CommandInfo {
         name: "DIMINSPECT",
         aliases: &["-DIMINSPECT"],
         description: "Add inspection data (a shape, label and inspection rate) to dimensions, or remove it",
@@ -2685,6 +2703,13 @@ impl Engine {
                 if restored { "Restored previous layer states.".into() } else { "*No previous layer states*".into() }
             }
             "REGEN" => "Regenerating model.".into(),
+            "DIMREGEN" => {
+                let dims: Vec<EntityId> = doc.all_dim_assoc().map(|(id, _)| *id).collect();
+                doc.begin(name);
+                let n = dims.iter().filter(|id| doc.regen_dimension(**id)).count();
+                doc.commit();
+                format!("{n} associative dimension(s) updated.")
+            }
             "REGENALL" => "Regenerating model - caching viewports.".into(),
             "REDRAW" | "REDRAWALL" => String::new(),
             "DBLIST" => {
@@ -2766,6 +2791,14 @@ impl Engine {
             Ok(Step::Continue) => {}
             Ok(Step::Done) => {
                 let info = self.active.take().map(|a| a.info);
+                // DIMASSOC 2: new dimensions follow what they measure.
+                if self.vars.dim_assoc == 2 && info.is_some_and(|i| i.name.starts_with("DIM") || i.name == "QDIM") {
+                    for id in doc.added_in_transaction() {
+                        if doc.entity(id).is_some_and(|e| !e.geometry.dim_def_points().is_empty()) {
+                            doc.associate_dimension(id);
+                        }
+                    }
+                }
                 doc.commit();
                 if let Some(ids) = select {
                     self.set_selection(ids);

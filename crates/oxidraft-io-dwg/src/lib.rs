@@ -9,6 +9,7 @@ use acadrust::{CadDocument, DwgReadOptions, DwgReader, DwgWriter, DxfReader, Dxf
 use oxidraft_io_dxf::Imported;
 use oxidraft_model::Document;
 
+mod dimassoc;
 mod fields;
 mod groups;
 mod layouts;
@@ -111,6 +112,7 @@ pub fn read(bytes: &[u8]) -> Result<Opened, Error> {
     let dxf = DxfWriter::new(&cad).with_version(DxfVersion::AC1032).write_to_vec().map_err(|e| e.to_string())?;
     let mut imported = oxidraft_io_dxf::read(&mut dxf.as_slice()).map_err(|e| e.to_string())?;
     fields::restore(&cad, &mut imported);
+    dimassoc::restore(&cad, &mut imported);
     Ok(Opened { imported, version })
 }
 
@@ -121,6 +123,11 @@ pub fn read_dxf(bytes: &[u8]) -> Result<Imported, Error> {
         && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
     {
         fields::restore(&cad, &mut imported);
+    }
+    if bytes.windows(13).any(|w| w == b"ACAD_DIMASSOC")
+        && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
+    {
+        dimassoc::restore(&cad, &mut imported);
     }
     Ok(imported)
 }
@@ -139,6 +146,7 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
     groups::finish(&mut cad, doc, &handles);
     settings::finish(&mut cad, doc);
     cad.version = version;
+    dimassoc::finish(&mut cad, doc, &handles);
     if version >= DxfVersion::AC1018 {
         fields::finish(&mut cad, doc, &handles);
     } else {
@@ -998,6 +1006,53 @@ mod tests {
         let mut ours = Vec::new();
         oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
         check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
+    fn dimension_associations_survive_as_dimassoc() {
+        let mut doc = Document::new();
+        doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(40.0, 0.0) });
+        doc.add(Geometry::Circle { center: Point::new(80.0, 0.0), radius: 5.0 });
+        let linear = doc.add(Geometry::Dimension {
+            p1: Point::new(0.0, 0.0),
+            p2: Point::new(40.0, 0.0),
+            line: Point::new(0.0, 10.0),
+            rotation: 0.0,
+            aligned: false,
+            text: None,
+            scale: 1.0,
+            extra: Default::default(),
+        });
+        let radial = doc.add(Geometry::RadialDimension {
+            center: Point::new(80.0, 0.0),
+            point: Point::new(80.0, 5.0),
+            text_at: Point::new(80.0, 9.0),
+            diameter: false,
+            text: None,
+            scale: 1.0,
+        });
+        assert_eq!(doc.associate_dimension(linear), 2);
+        assert_eq!(doc.associate_dimension(radial), 2);
+        let check = |back: &Document, how: &str| {
+            let n: usize = back.all_dim_assoc().map(|(_, r)| r.iter().flatten().count()).sum();
+            assert_eq!(n, 4, "{how}");
+            // Still following: stretch the line in the copy read back.
+            let mut back = back.clone();
+            let line = back.entities().find(|e| matches!(e.geometry, Geometry::Line { .. })).unwrap().id;
+            back.begin("STRETCH");
+            back.update(line, |e| {
+                e.geometry = Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(50.0, 0.0) }
+            });
+            back.commit();
+            let moved = back
+                .entities()
+                .any(|e| matches!(e.geometry, Geometry::Dimension { p2, .. } if p2 == Point::new(50.0, 0.0)));
+            assert!(moved, "{how}");
+        };
         check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
         for version in [Version::R2018, Version::R2000] {
             check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));

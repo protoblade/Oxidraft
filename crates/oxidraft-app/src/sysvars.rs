@@ -216,6 +216,10 @@ fn vars() -> Vec<Var> {
                 a.doc.layouts().iter().find(|l| l.id == space).map_or_else(String::new, |l| l.name.clone())
             }
         }),
+        var!("DIMASSOC", |a| a.engine.vars.dim_assoc.to_string(), |a, v| {
+            a.engine.vars.dim_assoc = parse_int(v, 0, 2)? as u8;
+            Ok(())
+        }),
         var!("DIMSCALE", |a| number(a.engine.vars.dim_scale), |a, v| {
             a.engine.vars.dim_scale = parse_positive(v)?;
             Ok(())

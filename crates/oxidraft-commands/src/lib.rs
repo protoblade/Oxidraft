@@ -320,6 +320,8 @@ pub struct Vars {
     pub viewport: Option<EntityId>,
     /// GRIDUNIT, kept by the app (0: adaptive).
     pub grid_spacing: f64,
+    /// DIMASSOC: 2 associates new dimensions with what they measure.
+    pub dim_assoc: u8,
     /// How far the view is turned (VIEWTWIST), kept by the app.
     pub view_rotation: f64,
     /// The last area AREA or MEASUREGEOM measured (for Volume).
@@ -370,6 +372,7 @@ impl Default for Vars {
             isoplane: None,
             viewport: None,
             grid_spacing: 0.0,
+            dim_assoc: 2,
             view_rotation: 0.0,
             erased: Vec::new(),
             last_area: 0.0,
