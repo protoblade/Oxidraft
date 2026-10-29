@@ -912,7 +912,7 @@ mod center_tests {
     fn center_marks_follow_reset_and_let_go() {
         let (mut e, mut d) = (Engine::new(), Document::new());
         e.dynamic_input = false;
-        let mut run = |e: &mut Engine, d: &mut Document, t: &str| e.submit(t, d, Point::ORIGIN, 0.5);
+        let run = |e: &mut Engine, d: &mut Document, t: &str| e.submit(t, d, Point::ORIGIN, 0.5);
         run(&mut e, &mut d, "c");
         run(&mut e, &mut d, "0,0");
         run(&mut e, &mut d, "10");
