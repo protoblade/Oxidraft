@@ -683,6 +683,17 @@ fn main() {
     h.state_mut().type_command("preview");
     h.run_steps(4);
     save(&mut h, &dir, "36-layout-preview");
+    // The Layout ribbon tab, and the layout tabs' shortcut menu.
+    h.key_press(eframe::egui::Key::Escape);
+    h.run_steps(3);
+    h.get_by_role_and_label(eframe::egui::accesskit::Role::Tab, "A3 Plan").click_secondary();
+    h.run_steps(4);
+    save(&mut h, &dir, "37-layout-tab-menu");
+    h.key_press(eframe::egui::Key::Escape);
+    h.run_steps(3);
+    h.state_mut().type_command("pagesetup");
+    h.run_steps(4);
+    save(&mut h, &dir, "38-page-setup");
 
     // AutoComplete on the command line.
     let mut h = harness();

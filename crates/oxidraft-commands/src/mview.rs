@@ -26,11 +26,14 @@ pub struct Mview {
     /// The layout's printable area; `None` in model space, where the
     /// command isn't allowed.
     printable: Option<Aabb>,
+    /// Objects selected before: ON, OFF and Lock change those without
+    /// asking.
+    preselected: Vec<EntityId>,
 }
 
 impl Default for Mview {
     fn default() -> Self {
-        Self { stage: Stage::Corner, printable: None }
+        Self { stage: Stage::Corner, printable: None, preselected: Vec::new() }
     }
 }
 
@@ -152,6 +155,10 @@ impl Command for Mview {
         self.printable.is_none()
     }
 
+    fn preselected(&mut self, ids: &[EntityId]) {
+        self.preselected = ids.to_vec();
+    }
+
     fn prompt(&self) -> Prompt {
         match self.stage {
             Stage::Corner => Prompt::new("Specify corner of viewport").with_keywords(OPTIONS).with_default("Fit"),
@@ -168,10 +175,18 @@ impl Command for Mview {
                 let printable = self.printable.unwrap_or(Aabb::from_points(Point::ORIGIN, Point::ORIGIN));
                 return self.add(printable, ctx);
             }
+            (Stage::Corner, Input::Keyword(k @ ("ON" | "OFF"))) if !self.preselected.is_empty() => {
+                Self::set(&self.preselected, ctx, |on, _| *on = k == "ON");
+                return Ok(Step::Done);
+            }
             (Stage::Corner, Input::Keyword("ON")) => self.stage = Stage::Switch(true),
             (Stage::Corner, Input::Keyword("OFF")) => self.stage = Stage::Switch(false),
             (Stage::Corner, Input::Keyword("Lock")) => self.stage = Stage::LockMode,
             (Stage::Other(a), Input::Point(b)) => return self.add(Aabb::from_points(a, b), ctx),
+            (Stage::LockMode, Input::Keyword(k)) if !self.preselected.is_empty() => {
+                Self::set(&self.preselected, ctx, |_, locked| *locked = k == "ON");
+                return Ok(Step::Done);
+            }
             (Stage::LockMode, Input::Keyword(k)) => self.stage = Stage::Lock(k == "ON"),
             (Stage::Switch(state), Input::Selection(s)) => {
                 Self::set(&s.ids, ctx, |on, _| *on = state);

@@ -79,6 +79,12 @@ pub enum Icon {
     Redo,
     Pan,
     Zoom,
+    NewLayout,
+    PageSetup,
+    Viewport,
+    ViewportLock,
+    ViewportUnlock,
+    Maximize,
 }
 
 /// Accent colors used inside icons, as in AutoCAD's icon set.
@@ -517,6 +523,48 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
                 pen.arrow((0.5, 0.5), to, c);
             }
             pen.dot((0.5, 0.5), 0.07, blue);
+        }
+        // A sheet with a tab, and a plus.
+        Icon::NewLayout => {
+            pen.closed(&[(0.08, 0.3), (0.78, 0.3), (0.78, 0.82), (0.08, 0.82)], c);
+            pen.line(&[(0.08, 0.3), (0.12, 0.18), (0.38, 0.18), (0.42, 0.3)], c);
+            pen.line(&[(0.78, 0.5), (0.78, 0.9)], green);
+            pen.line(&[(0.58, 0.7), (0.98, 0.7)], green);
+        }
+        // A sheet with its printable area marked.
+        Icon::PageSetup => {
+            pen.closed(&[(0.1, 0.2), (0.9, 0.2), (0.9, 0.8), (0.1, 0.8)], c);
+            for (a, b) in
+                [((0.2, 0.3), (0.8, 0.3)), ((0.8, 0.3), (0.8, 0.7)), ((0.8, 0.7), (0.2, 0.7)), ((0.2, 0.7), (0.2, 0.3))]
+            {
+                for t in [0.0, 0.4, 0.8] {
+                    let at = |k: f32| (a.0 + (b.0 - a.0) * k, a.1 + (b.1 - a.1) * k);
+                    pen.line(&[at(t), at(t + 0.2)], blue);
+                }
+            }
+        }
+        // A viewport on a sheet, model space showing in it.
+        Icon::Viewport | Icon::ViewportLock | Icon::ViewportUnlock => {
+            pen.closed(&[(0.06, 0.18), (0.94, 0.18), (0.94, 0.82), (0.06, 0.82)], c);
+            pen.closed(&[(0.16, 0.28), (0.66, 0.28), (0.66, 0.72), (0.16, 0.72)], blue);
+            pen.circle((0.41, 0.5), 0.12, c);
+            if icon != Icon::Viewport {
+                pen.filled(&[(0.62, 0.58), (0.92, 0.58), (0.92, 0.88), (0.62, 0.88)], yellow);
+                let lift = if icon == Icon::ViewportLock { 0.0 } else { 0.08 };
+                pen.line(&[(0.67, 0.58), (0.67, 0.44 - lift), (0.87, 0.44 - lift), (0.87, 0.58 - lift * 2.0)], yellow);
+            }
+        }
+        // A frame with arrows out of its corners.
+        Icon::Maximize => {
+            pen.closed(&[(0.3, 0.3), (0.7, 0.3), (0.7, 0.7), (0.3, 0.7)], blue);
+            for (from, to) in [
+                ((0.3, 0.3), (0.06, 0.06)),
+                ((0.7, 0.3), (0.94, 0.06)),
+                ((0.7, 0.7), (0.94, 0.94)),
+                ((0.3, 0.7), (0.06, 0.94)),
+            ] {
+                pen.arrow(from, to, c);
+            }
         }
         Icon::Zoom => {
             pen.circle((0.42, 0.42), 0.27, c);

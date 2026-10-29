@@ -62,6 +62,10 @@ impl OxidraftApp {
         {
             self.leave_viewport();
         }
+        // The space changed under the view (LAYOUT, undo): its own view.
+        if self.doc.space() != self.view_space {
+            self.follow_space();
+        }
         // Double-clicking in or out of a viewport, before the view is used.
         let switched = response.double_clicked_by(PointerButton::Primary)
             && response.interact_pointer_pos().is_some_and(|p| self.viewport_double_click(p, rect));

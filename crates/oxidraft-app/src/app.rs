@@ -81,6 +81,16 @@ pub struct OxidraftApp {
     /// The viewport worked in (MSPACE, VPMAX), and each layout's last one.
     pub(crate) active_viewport: Option<crate::viewport::ActiveViewport>,
     pub(crate) last_viewport: std::collections::HashMap<oxidraft_model::Space, oxidraft_model::EntityId>,
+    /// The space `view` is of; when the drawing's changes under it (LAYOUT,
+    /// undo), the view follows.
+    pub(crate) view_space: oxidraft_model::Space,
+    /// A layout tab being renamed in place, a layout about to be deleted,
+    /// and the Page Setup dialog.
+    pub(crate) renaming_layout: Option<crate::layouts::Renaming>,
+    pub(crate) delete_layout_prompt: Option<oxidraft_model::Space>,
+    pub(crate) page_setup: Option<crate::layouts::PageSetup>,
+    /// The space the ribbon last saw: a layout brings its Layout tab up.
+    pub(crate) ribbon_space: oxidraft_model::Space,
     pub(crate) loader: crate::underlay::Loader,
     pub(crate) raster_revision: u64,
     pub(crate) image_attach_dialog: Option<crate::underlay::ImageAttachDialog>,
@@ -192,6 +202,11 @@ impl OxidraftApp {
             space_views: Default::default(),
             active_viewport: None,
             last_viewport: Default::default(),
+            view_space: oxidraft_model::MODEL,
+            renaming_layout: None,
+            delete_layout_prompt: None,
+            page_setup: None,
+            ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
             raster_revision: 0,
             image_attach_dialog: None,
@@ -244,28 +259,13 @@ impl OxidraftApp {
         self.engine.cancel(&mut self.doc);
         self.space_views.insert(self.doc.space(), self.view);
         self.doc.set_space(space);
-        match (self.space_views.get(&space), self.doc.layout(space)) {
-            (Some(view), _) => self.view = *view,
-            (None, Some(layout)) => {
-                let (sheet, _) = layout.paper.sheet_bounds();
-                self.pending_views.push(ViewRequest::Window(sheet));
-            }
-            (None, None) => self.zoom_extents_pending = true,
-        }
+        self.show_space_view();
     }
 
     /// A first layout for a drawing that has none, as AutoCAD's Layout1 is:
     /// an A4 sheet, landscape.
     pub(crate) fn first_layout(&mut self) -> oxidraft_model::Space {
-        let paper = oxidraft_model::Paper {
-            size_name: "ISO_A4_(297.00_x_210.00_MM)".into(),
-            width: 297.0,
-            height: 210.0,
-            margins: [7.5, 20.0, 7.5, 20.0],
-            rotation: 0,
-            millimeters: true,
-            raw: Vec::new(),
-        };
+        let paper = oxidraft_model::Paper::a4_landscape();
         let layout =
             oxidraft_model::layout::Layout { id: oxidraft_model::MODEL, name: "Layout1".into(), tab_order: 1, paper };
         self.doc.add_layout(layout)
@@ -287,6 +287,7 @@ impl OxidraftApp {
         self.space_views.clear();
         self.active_viewport = None;
         self.last_viewport.clear();
+        self.view_space = self.doc.space();
         self.view_history.clear();
     }
 
@@ -350,6 +351,7 @@ impl OxidraftApp {
         self.space_views.clear();
         self.active_viewport = None;
         self.last_viewport.clear();
+        self.view_space = oxidraft_model::MODEL;
         self.saved_revision = 0;
         self.path = None;
         self.dwg_version = None;
@@ -450,10 +452,18 @@ impl OxidraftApp {
     // ---- commands ------------------------------------------------------------
 
     /// Starts a command from a ribbon button or menu, like clicking in AutoCAD.
+    /// A button's macro may pick the command's options too, as AutoCAD's
+    /// "^C^C_MVIEW _L _ON" does: "MVIEW L ON".
     pub(crate) fn run(&mut self, name: &str) {
         self.command_text.clear();
-        if !self.run_app_command(name) {
-            self.engine.run(name, &mut self.doc);
+        let mut words = name.split_whitespace();
+        let Some(command) = words.next() else { return };
+        if !self.run_app_command(command) {
+            self.engine.run(command, &mut self.doc);
+            let (cursor, tolerance) = (self.cursor.unwrap_or(Point::ORIGIN), self.pick_tolerance());
+            for option in words {
+                self.engine.submit(option, &mut self.doc, cursor, tolerance);
+            }
         }
     }
 
@@ -485,8 +495,10 @@ impl OxidraftApp {
             "PSPACE" | "PS" => self.paper_space_command(false),
             "VPMIN" => self.paper_space_command(true),
             "VPMAX" => return self.maximize_command(),
-            // Viewports are made on the sheet: out of the one worked in first.
-            "MVIEW" | "MV" => {
+            "PAGESETUP" => self.page_setup_command(),
+            // Viewports and layouts are made on the sheets: out of the
+            // viewport worked in first.
+            "MVIEW" | "MV" | "LAYOUT" | "LO" => {
                 self.leave_viewport();
                 return false;
             }
@@ -563,7 +575,8 @@ impl OxidraftApp {
             || self.options.is_some()
             || self.quick_select.is_some()
             || self.attach_dialog.is_some()
-            || self.image_attach_dialog.is_some();
+            || self.image_attach_dialog.is_some()
+            || self.delete_layout_prompt.is_some();
         if !open || !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             return false;
         }
@@ -575,6 +588,7 @@ impl OxidraftApp {
             && self.options.take().is_none()
             && self.quick_select.take().is_none()
             && self.attach_dialog.take().is_none()
+            && self.delete_layout_prompt.take().is_none()
         {
             self.image_attach_dialog = None;
         }
@@ -602,6 +616,11 @@ impl OxidraftApp {
         }
         if ctx.input_mut(|i| i.consume_key(cmd, Key::P)) {
             self.open_plot(false);
+            return;
+        }
+        // Esc closes an open shortcut menu (or dropdown), and does nothing else.
+        if egui::Popup::is_any_open(ctx) && ctx.input_mut(|i| i.consume_key(none, Key::Escape)) {
+            egui::Popup::close_all(ctx);
             return;
         }
         // Esc is the open dialog's Cancel, even while one of its fields has
@@ -744,6 +763,8 @@ impl eframe::App for OxidraftApp {
         self.xref_palette(&ctx);
         self.xref_edit_save_dialog(&ctx);
         self.options_dialog(&ctx);
+        self.page_setup_dialog(&ctx);
+        self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);
         self.block_close_dialog(&ctx);
         self.blocks_palette(&ctx);

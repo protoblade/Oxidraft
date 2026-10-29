@@ -10,11 +10,24 @@ use crate::{
     app::OxidraftApp,
     icons::{self, Icon},
     layers::layer_state_icons,
+    layouts::TabAction,
     properties::common,
     theme,
 };
 
 const RIBBON_TABS: &[&str] = &["Home", "Insert", "Annotate", "View", "Manage", "Output", "Collaborate"];
+/// On a layout's tab the ribbon has a Layout tab too, after the others.
+const LAYOUT_TAB: usize = RIBBON_TABS.len();
+
+const LAYOUT_TOOLS: &[Tool] = &[
+    tool(Icon::NewLayout, "New", Some("LAYOUT N"), "Creates a layout (LAYOUT New)"),
+    tool(Icon::PageSetup, "Page Setup", Some("PAGESETUP"), "Sets the layout's paper and orientation (PAGESETUP)"),
+];
+const VIEWPORT_TOOLS: &[Tool] = &[
+    tool(Icon::ViewportLock, "Lock", Some("MVIEW L ON"), "Locks viewports' views: zooming in them moves the sheet"),
+    tool(Icon::ViewportUnlock, "Unlock", Some("MVIEW L OFF"), "Unlocks viewports' views"),
+    tool(Icon::Maximize, "Maximize", Some("VPMAX"), "Fills the drawing area with a viewport (VPMAX; VPMIN goes back)"),
+];
 
 /// A ribbon button: its icon, label and the command it runs (`None` = not implemented yet).
 struct Tool {
@@ -204,7 +217,20 @@ impl OxidraftApp {
         egui::Panel::top("ribbon_tabs").frame(tabs).exact_size(26.0).show_separator_line(false).show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                for (i, name) in RIBBON_TABS.iter().enumerate() {
+                // A layout brings its Layout tab up, as in AutoCAD; model space puts it away.
+                let shown = self.shown_space();
+                let on_layout = self.doc.layout(shown).is_some();
+                if shown != self.ribbon_space {
+                    self.ribbon_space = shown;
+                    if on_layout {
+                        self.ribbon_tab = LAYOUT_TAB;
+                    }
+                }
+                if !on_layout && self.ribbon_tab == LAYOUT_TAB {
+                    self.ribbon_tab = 0;
+                }
+                let names = RIBBON_TABS.iter().chain(on_layout.then_some(&"Layout"));
+                for (i, name) in names.enumerate() {
                     if ribbon_tab(ui, name, self.ribbon_tab == i).clicked() {
                         self.ribbon_tab = i;
                     }
@@ -225,6 +251,8 @@ impl OxidraftApp {
                 }
                 if self.ribbon_tab == 0 {
                     self.home_tab(ui);
+                } else if self.ribbon_tab == LAYOUT_TAB {
+                    self.layout_ribbon(ui);
                 } else if RIBBON_TABS[self.ribbon_tab] == "Insert" {
                     self.insert_tab(ui);
                 } else if RIBBON_TABS[self.ribbon_tab] == "Output" {
@@ -300,6 +328,27 @@ impl OxidraftApp {
                         "Edits a block reference or xref in place (REFEDIT)",
                     ),
                 );
+            });
+        });
+    }
+
+    /// The Layout tab, on a layout's tab: new layouts and page setup, and
+    /// its viewports.
+    fn layout_ribbon(&mut self, ui: &mut Ui) {
+        ribbon_panel(ui, "Layout", |ui| {
+            for t in LAYOUT_TOOLS {
+                self.large_tool(ui, t);
+            }
+        });
+        ribbon_panel(ui, "Layout Viewports", |ui| {
+            self.large_tool(
+                ui,
+                &tool(Icon::Viewport, "Rectangular", Some("MVIEW"), "Creates a rectangular viewport (MV)"),
+            );
+            ui.vertical(|ui| {
+                for t in VIEWPORT_TOOLS {
+                    self.small_tool(ui, t);
+                }
             });
         });
     }
@@ -622,21 +671,45 @@ impl OxidraftApp {
                 if tabs.len() == 1 {
                     tabs.push((None, "Layout1".into()));
                 }
-                let mut switch = None;
+                let (mut switch, mut action) = (None, None);
                 for (space, name) in tabs {
+                    // Double-clicking a layout's tab (or its menu's Rename) renames it in place.
+                    if space.is_some() && self.renaming_layout.as_ref().map(|r| r.space) == space {
+                        self.rename_field(ui);
+                        continue;
+                    }
                     let tab = layout_tab(ui, &name, space == Some(current));
-                    let tab = tab.on_hover_text(if space == Some(oxidraft_model::MODEL) {
-                        "Model space"
-                    } else {
-                        "A layout: a sheet to plot"
-                    });
+                    let model = space == Some(oxidraft_model::MODEL);
+                    let tab = tab.on_hover_text(if model { "Model space" } else { "A layout: a sheet to plot" });
                     if tab.clicked() {
                         switch = Some(space);
                     }
+                    if let Some(s) = space.filter(|_| !model && tab.double_clicked()) {
+                        action = Some(TabAction::Rename(s));
+                    }
+                    tab.context_menu(|ui| {
+                        let mut item = |label: &str, a: TabAction| {
+                            if ui.button(label).clicked() {
+                                action = Some(a);
+                            }
+                        };
+                        item("New Layout", TabAction::New);
+                        if let Some(s) = space.filter(|_| !model) {
+                            item("Delete", TabAction::Delete(s));
+                            item("Rename", TabAction::Rename(s));
+                            item("Copy", TabAction::Copy(s));
+                            item("Activate Model Tab", TabAction::Model);
+                            item("Page Setup...", TabAction::PageSetup(s));
+                            item("Plot...", TabAction::Plot(s));
+                        }
+                    });
                 }
                 if let Some(space) = switch.filter(|s| *s != Some(current)) {
                     let space = space.unwrap_or_else(|| self.first_layout());
                     self.switch_space(space);
+                }
+                if let Some(a) = action {
+                    self.tab_action(a);
                 }
                 ui.add_space(12.0);
                 let coords = self.cursor.map_or(String::new(), |p| format!("{:.4}, {:.4}, 0.0000", p.x, p.y));
@@ -753,6 +826,7 @@ fn paint_large(ui: &mut Ui, t: &Tool, enabled: bool) -> Response {
         FontId::proportional(11.5),
         color,
     );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, t.label.replace('\n', " ")));
     response
 }
 

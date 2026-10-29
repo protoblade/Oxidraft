@@ -1160,3 +1160,101 @@ fn plotting_a_layout_plots_its_sheet_with_model_space_through_the_viewport() {
     let history = h.state_mut().engine_mut().history().join("\n");
     assert!(history.contains("Effective plotting area: 282.00 wide by 170.00 high"), "{history}");
 }
+
+fn layout_names(h: &mut Harness<'_, OxidraftApp>) -> Vec<String> {
+    h.state_mut().document_mut().layouts().iter().map(|l| l.name.clone()).collect()
+}
+
+/// Right-clicks a layout tab and picks an item of its menu.
+fn tab_menu(h: &mut Harness<'_, OxidraftApp>, tab: &str, item: &str) {
+    h.get_by_role_and_label(Role::Tab, tab).click_secondary();
+    h.run_steps(3);
+    h.get_by_label(item).click();
+    h.run_steps(3);
+}
+
+#[test]
+fn layout_tabs_menu_makes_renames_copies_and_deletes_layouts() {
+    let mut h = app_with_line_at(1.0 / 60.0);
+    h.get_by_role_and_label(Role::Tab, "Layout1").click();
+    h.run_steps(3);
+    tab_menu(&mut h, "Layout1", "New Layout");
+    assert_eq!(layout_names(&mut h), ["Layout1", "Layout2"]);
+
+    // Rename puts a field in the tab's place.
+    tab_menu(&mut h, "Layout2", "Rename");
+    let field = h.get_by_role_and_label(Role::TextInput, "Layout name");
+    field.focus();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_role_and_label(Role::TextInput, "Layout name").type_text("Site plan");
+    h.run_steps(1);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(layout_names(&mut h), ["Layout1", "Site plan"]);
+
+    tab_menu(&mut h, "Layout1", "Copy");
+    assert_eq!(layout_names(&mut h), ["Layout1", "Layout1 (2)", "Site plan"]);
+
+    // Delete asks first.
+    tab_menu(&mut h, "Layout1", "Delete");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(layout_names(&mut h), ["Layout1 (2)", "Site plan"]);
+    assert_eq!(h.state_mut().document_mut().space(), oxidraft_model::MODEL, "it was the current one");
+    let tab = h.get_by_role_and_label(Role::Tab, "Model").accesskit_node().toggled();
+    assert_eq!(tab, Some(eframe::egui::accesskit::Toggled::True));
+}
+
+#[test]
+fn layout_set_switches_the_view_and_the_ribbon_shows_the_layout_tab() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["layout", "n", "Plan", "lo", "s", "plan"]);
+    h.run_steps(3);
+    let space = h.state_mut().document_mut().space();
+    assert_eq!(h.state_mut().document_mut().layout(space).unwrap().name, "Plan");
+    let tab = h.get_by_role_and_label(Role::Tab, "Plan").accesskit_node().toggled();
+    assert_eq!(tab, Some(eframe::egui::accesskit::Toggled::True));
+    // Its Layout ribbon tab came up, with the viewport tools.
+    assert!(h.query_by_label("Rectangular").is_some());
+    h.get_by_label("Rectangular").click();
+    h.run_steps(2);
+    type_all(&mut h, &["f"]);
+    let doc = h.state_mut().document_mut();
+    let viewport = doc.entities().find(|e| matches!(e.geometry, Geometry::Viewport { .. })).map(|e| e.id).unwrap();
+    // Lock on the viewport selected first, from the ribbon.
+    h.state_mut().engine_mut().set_selection(vec![viewport]);
+    h.get_by_label("Lock").click();
+    h.run_steps(2);
+    let locked = matches!(
+        h.state_mut().document_mut().entity(viewport).unwrap().geometry,
+        Geometry::Viewport { locked: true, .. }
+    );
+    assert!(locked);
+    // Back on Model the ribbon has no Layout tab.
+    h.get_by_role_and_label(Role::Tab, "Model").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Rectangular").is_none());
+}
+
+#[test]
+fn page_setup_changes_a_layouts_paper() {
+    let mut h = app_with_line();
+    h.get_by_role_and_label(Role::Tab, "Layout1").click();
+    h.run_steps(3);
+    type_all(&mut h, &["pagesetup"]);
+    h.run_steps(2);
+    assert!(h.query_by_label("Page Setup - Layout1").is_some());
+    h.get_by_role(Role::ComboBox).click();
+    h.run_steps(2);
+    h.get_by_label("ISO A3 (297.00 x 420.00 MM)").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let doc = h.state_mut().document_mut();
+    let paper = doc.layout(doc.space()).unwrap().paper.clone();
+    assert_eq!((paper.width, paper.height, paper.rotation), (420.0, 297.0, 0), "A3, landscape as it was");
+    assert_eq!(paper.size_name, "ISO_A3_(420.00_x_297.00_MM)");
+    h.state_mut().document_mut().undo();
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.layout(doc.space()).unwrap().paper.width, 297.0);
+}

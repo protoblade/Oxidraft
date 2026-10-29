@@ -9,6 +9,7 @@ mod clipboard;
 mod cmdline;
 mod icons;
 mod layers;
+mod layouts;
 mod plot;
 mod properties;
 mod qselect;

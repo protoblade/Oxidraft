@@ -108,6 +108,7 @@ impl OxidraftApp {
             frame.model_view(page)
         };
         self.view_history.clear();
+        self.view_space = MODEL;
         self.last_viewport.insert(layout, id);
         self.active_viewport = Some(ActiveViewport { layout, id, page, maximized });
     }
@@ -139,6 +140,7 @@ impl OxidraftApp {
         }
         self.doc.set_space(a.layout);
         self.view = a.page;
+        self.view_space = self.doc.space();
         self.view_history.clear();
     }
 
