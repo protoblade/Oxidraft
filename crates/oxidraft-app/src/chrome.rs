@@ -34,27 +34,31 @@ const DRAW_LARGE: &[Tool] = &[
     tool(Icon::Circle, "Circle", Some("CIRCLE"), "Creates a circle by center and radius (C)"),
     tool(Icon::Arc, "Arc", Some("ARC"), "Creates an arc through three points or from its center (A)"),
 ];
+/// Beside the large Draw tools.
 const DRAW_SMALL: &[Tool] = &[
-    tool(Icon::Rectangle, "", Some("RECTANG"), "Rectangle: creates a rectangular polyline (REC)"),
-    tool(Icon::Polygon, "", Some("POLYGON"), "Polygon: creates a regular polygon (POL)"),
-    tool(Icon::Ellipse, "", Some("ELLIPSE"), "Ellipse: creates an ellipse or elliptical arc (EL)"),
-    tool(Icon::Hatch, "", Some("HATCH"), "Hatch: fills an enclosed area with a pattern (H)"),
+    tool(Icon::Rectangle, "Rectangle", Some("RECTANG"), "Creates a rectangular polyline (REC)"),
+    tool(Icon::Hatch, "Hatch", Some("HATCH"), "Fills an enclosed area with a pattern (H)"),
+];
+/// The Draw panel's slide-out, under its title.
+const DRAW_MORE: &[Tool] = &[
+    tool(Icon::Ellipse, "Ellipse", Some("ELLIPSE"), "Creates an ellipse or elliptical arc (EL)"),
+    tool(Icon::Polygon, "Polygon", Some("POLYGON"), "Creates a regular polygon (POL)"),
     tool(
         Icon::Spline,
-        "",
+        "Spline",
         Some("SPLINE"),
-        "Spline: creates a smooth curve through fit points or by control vertices (SPL)",
+        "Creates a smooth curve through fit points or by control vertices (SPL)",
     ),
     tool(
         Icon::Point,
-        "",
+        "Point",
         Some("POINT"),
-        "Point: places a point object (PO); DIVIDE and MEASURE place them along objects",
+        "Places a point object (PO); DIVIDE and MEASURE place them along objects",
     ),
-    tool(Icon::Xline, "", Some("XLINE"), "Construction Line: creates a line infinite both ways (XL)"),
-    tool(Icon::Ray, "", Some("RAY"), "Ray: creates a line infinite one way"),
-    tool(Icon::RevCloud, "", Some("REVCLOUD"), "Revision Cloud: draws a cloud of arcs around an area or object"),
-    tool(Icon::Donut, "", Some("DONUT"), "Donut: creates filled rings and dots (DO)"),
+    tool(Icon::Xline, "Construction Line", Some("XLINE"), "Creates a line infinite both ways (XL)"),
+    tool(Icon::Ray, "Ray", Some("RAY"), "Creates a line infinite one way"),
+    tool(Icon::RevCloud, "Revision Cloud", Some("REVCLOUD"), "Draws a cloud of arcs around an area or object"),
+    tool(Icon::Donut, "Donut", Some("DONUT"), "Creates filled rings and dots (DO)"),
 ];
 const MODIFY_GRID: &[[Tool; 3]] = &[
     [
@@ -78,11 +82,17 @@ const MODIFY_GRID: &[[Tool; 3]] = &[
         tool(Icon::Array, "Array", Some("ARRAY"), "Copies objects in rows and columns or around a center (AR)"),
     ],
 ];
-const MODIFY_SMALL: &[Tool] = &[
-    tool(Icon::Erase, "", Some("ERASE"), "Erase: removes objects from the drawing (E)"),
-    tool(Icon::Explode, "", Some("EXPLODE"), "Explode: breaks polylines into lines and arcs (X)"),
-    tool(Icon::Offset, "", Some("OFFSET"), "Offset: creates parallel copies (O)"),
-    tool(Icon::EditPolyline, "", Some("PEDIT"), "Edit Polyline: closes, opens, joins or reverses polylines (PE)"),
+/// The Modify panel's slide-out, under its title.
+const MODIFY_MORE: &[Tool] = &[
+    tool(Icon::Erase, "Erase", Some("ERASE"), "Removes objects from the drawing (E, or Delete)"),
+    tool(Icon::Offset, "Offset", Some("OFFSET"), "Creates parallel copies (O)"),
+    tool(Icon::Explode, "Explode", Some("EXPLODE"), "Breaks polylines and blocks into their parts (X)"),
+    tool(Icon::Chamfer, "Chamfer", Some("CHAMFER"), "Bevels the corner between lines, or a polyline's corners (CHA)"),
+    tool(Icon::Extend, "Extend", Some("EXTEND"), "Extends objects to meet others (EX)"),
+    tool(Icon::Break, "Break", Some("BREAK"), "Breaks an object between two points (BR)"),
+    tool(Icon::Join, "Join", Some("JOIN"), "Joins lines, arcs and polylines end to end (J)"),
+    tool(Icon::Lengthen, "Lengthen", Some("LENGTHEN"), "Changes the length of an object (LEN)"),
+    tool(Icon::EditPolyline, "Edit Polyline", Some("PEDIT"), "Closes, opens, joins or reverses polylines (PE)"),
 ];
 const LAYER_TOOLS: &[Tool] = &[
     tool(Icon::LayerIsolate, "", Some("LAYISO"), "Isolate: locks every layer but those of the selected objects"),
@@ -288,20 +298,24 @@ impl OxidraftApp {
     }
 
     fn home_tab(&mut self, ui: &mut Ui) {
-        ribbon_panel(ui, "Draw", |ui| {
+        // The most used tools show; the rest are in each panel's slide-out,
+        // opened from its title, as in AutoCAD.
+        let draw = ribbon_panel_more(ui, "Draw", |ui| {
             for t in DRAW_LARGE {
                 self.large_tool(ui, t);
             }
-            // Three small tools to a column, as tall as the large ones.
-            for column in DRAW_SMALL.chunks(3) {
-                ui.vertical(|ui| {
-                    for t in column {
-                        self.small_tool(ui, t);
-                    }
-                });
+            ui.vertical(|ui| {
+                for t in DRAW_SMALL {
+                    self.small_tool(ui, t);
+                }
+            });
+        });
+        egui::Popup::menu(&draw).show(|ui| {
+            for t in DRAW_MORE {
+                self.small_tool(ui, t);
             }
         });
-        ribbon_panel(ui, "Modify", |ui| {
+        let modify = ribbon_panel_more(ui, "Modify", |ui| {
             ui.vertical(|ui| {
                 for row in MODIFY_GRID {
                     ui.horizontal(|ui| {
@@ -311,35 +325,27 @@ impl OxidraftApp {
                     });
                 }
             });
-            // Three small tools to a column, as tall as the large ones.
-            for column in MODIFY_SMALL.chunks(3) {
-                ui.vertical(|ui| {
-                    for t in column {
-                        self.small_tool(ui, t);
-                    }
-                });
+        });
+        egui::Popup::menu(&modify).show(|ui| {
+            for t in MODIFY_MORE {
+                self.small_tool(ui, t);
             }
             // Draw order, as the panel's split button offers it.
-            ui.vertical(|ui| {
-                for (icon, label, option, tip) in [
-                    (
-                        Icon::BringToFront,
-                        "Bring to Front",
-                        "Front",
-                        "Draws the selected objects over everything (DRAWORDER)",
-                    ),
-                    (
-                        Icon::SendToBack,
-                        "Send to Back",
-                        "Back",
-                        "Draws the selected objects under everything (DRAWORDER)",
-                    ),
-                ] {
-                    if self.small_tool_clicked(ui, &tool(icon, "", None, tip), label) {
-                        self.engine.draw_order(option, &mut self.doc);
-                    }
+            for (icon, label, option, tip) in [
+                (
+                    Icon::BringToFront,
+                    "Bring to Front",
+                    "Front",
+                    "Draws the selected objects over everything (DRAWORDER)",
+                ),
+                (Icon::SendToBack, "Send to Back", "Back", "Draws the selected objects under everything (DRAWORDER)"),
+            ] {
+                let response = paint_small(ui, &tool(icon, label, None, tip), true);
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+                if response.on_hover_text(tip).clicked() {
+                    self.engine.draw_order(option, &mut self.doc);
                 }
-            });
+            }
         });
         ribbon_panel(ui, "Annotation", |ui| {
             for t in ANNOTATION_LARGE {
@@ -456,17 +462,6 @@ impl OxidraftApp {
     fn small_tool(&mut self, ui: &mut Ui, t: &Tool) {
         let response = paint_small(ui, t, t.command.is_some());
         self.tool_response(&response, t);
-    }
-
-    /// A small icon button that does something other than run a command;
-    /// `label` names it for screen readers.
-    fn small_tool_clicked(&mut self, ui: &mut Ui, t: &Tool, label: &str) -> bool {
-        let (rect, response) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
-        paint_hover(ui, rect, &response, true);
-        let icon = Rect::from_center_size(rect.center(), vec2(16.0, 16.0));
-        icons::paint(ui.painter(), icon, t.icon, theme::text(), true);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
-        response.on_hover_text(t.tip).clicked()
     }
 
     fn tool_response(&mut self, response: &Response, t: &Tool) {
@@ -717,11 +712,19 @@ fn paint_small(ui: &mut Ui, t: &Tool, enabled: bool) -> Response {
     icons::paint(ui.painter(), icon, t.icon, color, enabled);
     if !t.label.is_empty() {
         ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, t.label, font, color);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, t.label));
     }
     response
 }
 
 fn ribbon_panel(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {
+    let _ = ribbon_panel_more(ui, title, contents);
+}
+
+/// A ribbon panel; returns its title strip, which opens the panel's
+/// slide-out where it has one.
+fn ribbon_panel_more(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) -> Response {
+    let mut title_response = None;
     let response = ui
         .vertical(|ui| {
             let r = ui.horizontal(|ui| {
@@ -731,8 +734,11 @@ fn ribbon_panel(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {
                 ui.add_space(4.0);
             });
             let width = r.response.rect.width();
-            let (title_rect, _) = ui.allocate_exact_size(vec2(width, 18.0), Sense::hover());
-            ui.painter().rect_filled(title_rect, 0.0, theme::ribbon_title());
+            let (title_rect, strip) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click());
+            let fill = if strip.hovered() { theme::ribbon_hover() } else { theme::ribbon_title() };
+            ui.painter().rect_filled(title_rect, 0.0, fill);
+            strip.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{title} panel")));
+            title_response = Some(strip);
             let text = ui.painter().text(
                 title_rect.center() - vec2(5.0, 0.0),
                 Align2::CENTER_CENTER,
@@ -755,6 +761,7 @@ fn ribbon_panel(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {
         Stroke::new(1.0, theme::ribbon_title()),
     );
     ui.add_space(1.0);
+    title_response.unwrap_or(response)
 }
 
 fn paint_hover(ui: &Ui, rect: Rect, response: &Response, enabled: bool) {

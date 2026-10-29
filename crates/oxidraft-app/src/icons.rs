@@ -22,6 +22,11 @@ pub enum Icon {
     Stretch,
     Scale,
     Trim,
+    Extend,
+    Chamfer,
+    Break,
+    Join,
+    Lengthen,
     Fillet,
     Array,
     Erase,
@@ -251,6 +256,32 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
             pen.line(&[(0.5, 0.5), (0.9, 0.5)], red);
             pen.line(&[(0.64, 0.38), (0.78, 0.62)], red);
             pen.line(&[(0.64, 0.62), (0.78, 0.38)], red);
+        }
+        Icon::Extend => {
+            // A line reaching out to a boundary.
+            pen.line(&[(0.85, 0.1), (0.85, 0.9)], c);
+            pen.line(&[(0.1, 0.5), (0.45, 0.5)], c);
+            pen.arrow((0.45, 0.5), (0.82, 0.5), blue);
+        }
+        Icon::Chamfer => {
+            pen.line(&[(0.15, 0.85), (0.15, 0.45)], c);
+            pen.line(&[(0.55, 0.15), (0.85, 0.15)], c);
+            pen.line(&[(0.15, 0.45), (0.55, 0.15)], blue);
+        }
+        Icon::Break => {
+            pen.line(&[(0.1, 0.65), (0.4, 0.45)], c);
+            pen.line(&[(0.6, 0.35), (0.9, 0.15)], c);
+            pen.grip((0.4, 0.45), blue);
+            pen.grip((0.6, 0.35), blue);
+        }
+        Icon::Join => {
+            pen.line(&[(0.1, 0.7), (0.5, 0.5)], c);
+            pen.line(&[(0.5, 0.5), (0.9, 0.3)], blue);
+            pen.grip((0.5, 0.5), blue);
+        }
+        Icon::Lengthen => {
+            pen.line(&[(0.1, 0.8), (0.55, 0.45)], c);
+            pen.arrow((0.55, 0.45), (0.9, 0.18), blue);
         }
         Icon::Fillet => {
             pen.line(&[(0.15, 0.85), (0.15, 0.5)], c);

@@ -550,6 +550,12 @@ fn main() {
         h.state_mut().apply_settings(&ctx, Settings::default());
     }
 
+    // The Draw panel's slide-out, opened from its title.
+    let mut h = harness();
+    h.get_by_label("Draw panel").click();
+    h.run_steps(3);
+    save(&mut h, &dir, "30-draw-slideout");
+
     // AutoComplete on the command line.
     let mut h = harness();
     h.state_mut().set_command_text("c");
