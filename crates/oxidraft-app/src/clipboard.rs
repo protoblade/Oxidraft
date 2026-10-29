@@ -37,6 +37,15 @@ impl OxidraftApp {
 
     /// Typed PASTECLIP or PASTEORIG: from the system clipboard, or else what
     /// was last copied here.
+    /// PASTEBLOCK (Cmd+Shift+V): the clipboard as a block reference.
+    pub(crate) fn paste_block_command(&mut self) {
+        let system = arboard::Clipboard::new().and_then(|mut c| c.get_text()).ok().filter(|t| looks_like_dxf(t));
+        match system.or_else(|| self.clipboard.clone()).as_deref().and_then(clip_from) {
+            Some(clip) => self.engine.paste_block(clip, &mut self.doc),
+            None => self.engine.log("Nothing to paste: the clipboard holds no drawing objects."),
+        }
+    }
+
     pub(crate) fn paste_command(&mut self, original: bool) {
         let system = arboard::Clipboard::new().and_then(|mut c| c.get_text()).ok().filter(|t| looks_like_dxf(t));
         match system.or_else(|| self.clipboard.clone()).as_deref().and_then(clip_from) {
@@ -45,7 +54,7 @@ impl OxidraftApp {
         }
     }
 
-    /// Cmd+C, Cmd+X, Cmd+Shift+C and Cmd+V. Copying text typed on the
+    /// Cmd+C, Cmd+X, Cmd+Shift+C, Cmd+V and Cmd+Shift+V (as a block). Copying text typed on the
     /// command line, or in a field, still works as usual.
     pub(crate) fn handle_clipboard_keys(&mut self, ctx: &egui::Context) {
         if self.editing_field(ctx) {
@@ -54,6 +63,7 @@ impl OxidraftApp {
         let typing = !self.command_text.is_empty();
         let copy_base = ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::C));
         let (mut copy, mut cut, mut pasted) = (false, false, None);
+        let shift = ctx.input(|i| i.modifiers.shift);
         ctx.input_mut(|i| {
             i.events.retain(|e| match e {
                 Event::Copy if !typing => {
@@ -81,8 +91,10 @@ impl OxidraftApp {
         } else if cut {
             self.run("CUTCLIP");
         }
-        if let Some(clip) = pasted {
-            self.engine.paste(clip, false, &mut self.doc);
+        match pasted {
+            Some(clip) if shift => self.engine.paste_block(clip, &mut self.doc),
+            Some(clip) => self.engine.paste(clip, false, &mut self.doc),
+            None => {}
         }
     }
 }

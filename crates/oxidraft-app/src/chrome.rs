@@ -133,6 +133,7 @@ const BLOCK_DEFINITION: &[Tool] = &[
     ),
     tool(Icon::EditReference, "Edit Attribute", Some("EATTEDIT"), "Edits a reference's attribute values"),
     tool(Icon::Properties, "Synchronize", Some("ATTSYNC"), "Gives a block's references the attributes it now defines"),
+    tool(Icon::Properties, "Manage Attributes", Some("BATTMAN"), "Edits, reorders and removes a block's attributes"),
     tool(Icon::Save, "Write Block", Some("WBLOCK"), "Writes a block, objects or the drawing to a drawing file (W)"),
 ];
 const LAYER_TOOLS: &[Tool] = &[

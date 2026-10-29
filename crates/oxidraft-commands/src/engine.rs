@@ -16,6 +16,7 @@ use crate::{
     attribute::EattEdit,
     block::DefineBlock,
     block::InsertBlock,
+    block_tools::{AttEdit, AttEditGlobal, NCopy, SetByLayer},
     break_join::Break,
     break_join::Join,
     calc::Cal,
@@ -618,6 +619,37 @@ pub const COMMANDS: &[CommandInfo] = &[
         name: "PTYPE",
         aliases: &["DDPTYPE"],
         description: "Choose how points look, and their size (Point Style)",
+        make: None,
+    },
+    CommandInfo {
+        name: "SETBYLAYER",
+        aliases: &[],
+        description: "Make the selected objects' color, linetype and lineweight ByLayer",
+        make: Some(|| Box::new(SetByLayer::default())),
+    },
+    CommandInfo {
+        name: "NCOPY",
+        aliases: &[],
+        description: "Copy objects from inside block references and external references",
+        make: Some(|| Box::new(NCopy::default())),
+    },
+    CommandInfo {
+        name: "ATTEDIT",
+        aliases: &["ATE"],
+        description: "Edit a block reference's attribute values",
+        make: Some(|| Box::new(AttEdit)),
+    },
+    CommandInfo {
+        name: "-ATTEDIT",
+        aliases: &["-ATE"],
+        description: "Change attribute values across block references",
+        make: Some(|| Box::new(AttEditGlobal::default())),
+    },
+    CommandInfo { name: "PASTEBLOCK", aliases: &[], description: "Paste the clipboard as a block", make: None },
+    CommandInfo {
+        name: "BATTMAN",
+        aliases: &[],
+        description: "Manage a block's attribute definitions (Block Attribute Manager)",
         make: None,
     },
     CommandInfo {
@@ -1436,6 +1468,26 @@ impl Engine {
         }
         let info = find("PLOT").expect("PLOT is a command");
         self.launch(info, Box::new(PlotWindow::default()), doc, Point::ORIGIN, 0.0);
+    }
+
+    /// PASTEBLOCK: the clipboard's objects as a block reference to place.
+    pub fn paste_block(&mut self, clip: Document, doc: &mut Document) {
+        if self.active.is_some() {
+            self.cancel(doc);
+        }
+        self.log("Command: PASTEBLOCK".to_string());
+        let info = find("PASTEBLOCK").expect("PASTEBLOCK is a command");
+        self.started.push(info.name);
+        doc.begin(info.name);
+        let one = crate::block_tools::as_block(doc, &clip);
+        doc.commit();
+        self.launch(
+            find("PASTECLIP").expect("PASTECLIP is a command"),
+            Box::new(Paste::new(one)),
+            doc,
+            Point::ORIGIN,
+            0.0,
+        );
     }
 
     pub fn paste(&mut self, clip: Document, original: bool, doc: &mut Document) {

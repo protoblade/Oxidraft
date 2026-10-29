@@ -2133,3 +2133,68 @@ fn multileader_and_table_styles() {
     h.run_steps(2);
     assert!(h.query_by_label("Modify Table Style: Standard").is_some());
 }
+
+#[test]
+fn block_attribute_manager_reorders_and_syncs() {
+    use oxidraft_model::{Attach, Block, BlockEntity, Color, Placement};
+    let mut h = app_with_line();
+    {
+        let doc = h.state_mut().document_mut();
+        let attdef = |tag: &str, y: f64| {
+            BlockEntity::new(
+                "0",
+                Color::ByLayer,
+                Geometry::AttributeDefinition {
+                    tag: tag.into(),
+                    prompt: format!("{tag}?"),
+                    default: format!("{tag}1"),
+                    position: Point::new(0.0, y),
+                    height: 2.5,
+                    rotation: 0.0,
+                    attach: Attach::BottomLeft,
+                    invisible: false,
+                    constant: false,
+                },
+            )
+        };
+        doc.define_block(Block {
+            name: "Door".into(),
+            base: Point::ORIGIN,
+            entities: vec![attdef("NUMBER", 0.0), attdef("WIDTH", 5.0)],
+        });
+        doc.add(Geometry::Insert {
+            block: "Door".into(),
+            placement: Placement::at(Point::new(50.0, 30.0)),
+            attributes: Vec::new(),
+            clip: None,
+        });
+    }
+    type_all(&mut h, &["battman"]);
+    h.run_steps(2);
+    h.get_by_label("WIDTH").click();
+    h.run_steps(1);
+    h.get_by_label("Move Up").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let doc = h.state_mut().document_mut();
+    let tags: Vec<String> = doc
+        .block("Door")
+        .unwrap()
+        .entities
+        .iter()
+        .filter_map(|be| match &be.geometry {
+            Geometry::AttributeDefinition { tag, .. } => Some(tag.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tags, ["WIDTH", "NUMBER"]);
+    let on_reference: Vec<String> = doc
+        .entities()
+        .find_map(|e| match &e.geometry {
+            Geometry::Insert { attributes, .. } => Some(attributes.iter().map(|a| a.tag.clone()).collect()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(on_reference, ["WIDTH", "NUMBER"], "the reference was synced");
+}

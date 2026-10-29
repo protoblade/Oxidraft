@@ -3,6 +3,7 @@
 mod annotation_styles;
 mod app;
 mod attedit;
+mod battman;
 mod blocks;
 mod canvas;
 mod chrome;

@@ -86,6 +86,15 @@ fn excerpt(doc: &Document, entities: &[BlockEntity], base: Point) -> Document {
 /// the layers, linetypes and blocks they use that `doc` doesn't have yet
 /// (existing ones are kept, as in AutoCAD). Returns the new objects.
 pub fn paste(doc: &mut Document, clip: &Document, offset: Point) -> Vec<EntityId> {
+    paste_definitions(doc, clip);
+    clip.entities()
+        .map(|e| doc.add_styled(e.geometry.translated(offset), &e.layer, e.color, &e.linetype, e.lineweight))
+        .collect()
+}
+
+/// The clipboard drawing's layers, linetypes and blocks that `doc`
+/// hasn't got yet.
+pub(crate) fn paste_definitions(doc: &mut Document, clip: &Document) {
     for layer in clip.layers() {
         if doc.layer(&layer.name).is_none() {
             doc.add_layer(layer.clone());
@@ -102,9 +111,6 @@ pub fn paste(doc: &mut Document, clip: &Document, offset: Point) -> Vec<EntityId
             doc.define_block(b.clone());
         }
     }
-    clip.entities()
-        .map(|e| doc.add_styled(e.geometry.translated(offset), &e.layer, e.color, &e.linetype, e.lineweight))
-        .collect()
 }
 
 /// The lower-left corner of the objects: COPYCLIP's base point.

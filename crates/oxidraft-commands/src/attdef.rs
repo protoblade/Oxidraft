@@ -138,6 +138,28 @@ impl Command for AttDef {
 #[derive(Default)]
 pub struct AttSync;
 
+/// ATTSYNC's work: every reference to block `name` given the attributes
+/// its definition now has, keeping the values of tags it still has.
+/// Returns how many references.
+pub fn sync_attributes(doc: &mut oxidraft_model::Document, name: &str) -> usize {
+    let Some(def) = doc.block(name).cloned() else { return 0 };
+    let references: Vec<_> = doc
+        .all_entities()
+        .filter(|e| matches!(&e.geometry, Geometry::Insert { block, .. } if block.eq_ignore_ascii_case(name)))
+        .map(|e| e.id)
+        .collect();
+    for id in &references {
+        doc.update(*id, |e| {
+            if let Geometry::Insert { placement, attributes, .. } = &mut e.geometry {
+                let old = attributes.clone();
+                let value_of = |tag: &str| old.iter().find(|a| a.tag == tag).map(|a| a.value.clone());
+                *attributes = def.attributes_for(placement, value_of);
+            }
+        });
+    }
+    references.len()
+}
+
 impl Command for AttSync {
     fn prompt(&self) -> Prompt {
         Prompt::new("Select a block")
@@ -151,25 +173,9 @@ impl Command for AttSync {
                     return Err("That isn't a block reference.".into());
                 };
                 let name = block.clone();
-                let def = ctx.doc.block(&name).cloned().ok_or("The block isn't defined.")?;
-                let references: Vec<_> = ctx
-                    .doc
-                    .all_entities()
-                    .filter(
-                        |e| matches!(&e.geometry, Geometry::Insert { block, .. } if block.eq_ignore_ascii_case(&name)),
-                    )
-                    .map(|e| e.id)
-                    .collect();
-                for id in &references {
-                    ctx.doc.update(*id, |e| {
-                        if let Geometry::Insert { placement, attributes, .. } = &mut e.geometry {
-                            let old = attributes.clone();
-                            let value_of = |tag: &str| old.iter().find(|a| a.tag == tag).map(|a| a.value.clone());
-                            *attributes = def.attributes_for(placement, value_of);
-                        }
-                    });
-                }
-                ctx.messages.push(format!("ATTSYNC complete: {} reference(s) of \"{name}\".", references.len()));
+                ctx.doc.block(&name).ok_or("The block isn't defined.")?;
+                let n = sync_attributes(ctx.doc, &name);
+                ctx.messages.push(format!("ATTSYNC complete: {n} reference(s) of \"{name}\"."));
                 Ok(Step::Done)
             }
             Input::Enter => Ok(Step::Done),

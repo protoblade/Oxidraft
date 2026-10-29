@@ -129,6 +129,7 @@ pub struct OxidraftApp {
     pub(crate) point_style: Option<crate::drafting::PointStyle>,
     pub(crate) tolerance_dialog: Option<crate::tolerance::ToleranceDialog>,
     pub(crate) style_dialog: Option<crate::annotation_styles::StyleDialog>,
+    pub(crate) attribute_manager: Option<crate::battman::AttributeManager>,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
     pub(crate) ribbon_space: oxidraft_model::Space,
@@ -283,6 +284,7 @@ impl OxidraftApp {
             point_style: None,
             tolerance_dialog: None,
             style_dialog: None,
+            attribute_manager: None,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
@@ -562,6 +564,7 @@ impl OxidraftApp {
             "ZE" => self.pending_views.push(ViewRequest::Extents),
             "PASTECLIP" => self.paste_command(false),
             "PASTEORIG" => self.paste_command(true),
+            "PASTEBLOCK" => self.paste_block_command(),
             "SAVE" | "QSAVE" => self.save(false),
             "SAVEAS" => self.save(true),
             "OPEN" => self.open_dialog(),
@@ -605,6 +608,7 @@ impl OxidraftApp {
             "PTYPE" | "DDPTYPE" => self.open_point_style(),
             "TOLERANCE" | "TOL" => self.open_tolerance(),
             "MLEADERSTYLE" | "MLS" => self.open_leader_style(),
+            "BATTMAN" => self.open_attribute_manager(),
             "TABLESTYLE" | "TS" => self.open_table_style(),
             "SELECTALL" | "AI_SELALL" => self.engine.select_all(&self.doc),
             "COMPARE" => self.compare_command(),
@@ -975,6 +979,7 @@ impl eframe::App for OxidraftApp {
         self.point_style_dialog(&ctx);
         self.tolerance_dialog(&ctx);
         self.annotation_style_dialog(&ctx);
+        self.attribute_manager_dialog(&ctx);
         self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);

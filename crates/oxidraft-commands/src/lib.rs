@@ -13,6 +13,7 @@ mod array;
 mod attdef;
 mod attribute;
 mod block;
+mod block_tools;
 mod break_join;
 pub mod calc;
 mod chamfer;
@@ -80,6 +81,7 @@ mod xline;
 mod xref;
 mod zoom;
 
+pub use attdef::sync_attributes;
 pub use cleanup::object_key;
 pub use clipboard::{block_drawing, clip_of, paste};
 pub use engine::{COMMANDS, CommandInfo, Engine, Tracked};
