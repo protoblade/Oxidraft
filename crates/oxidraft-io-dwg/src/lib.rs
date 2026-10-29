@@ -866,6 +866,43 @@ mod tests {
     }
 
     #[test]
+    fn picture_adjustments_and_frames_survive() {
+        let mut doc = Document::new();
+        doc.set_image_def(oxidraft_model::ImageDef {
+            name: "ortho".into(),
+            path: "ortho.png".into(),
+            page: None,
+            width: 400.0,
+            height: 200.0,
+            status: oxidraft_model::XrefStatus::Loaded,
+        });
+        let adjust = oxidraft_model::PictureAdjust { brightness: 70, contrast: 40, fade: 20, monochrome: false };
+        doc.add(Geometry::Image {
+            image: "ortho".into(),
+            origin: Point::new(0.0, 0.0),
+            u: Point::new(40.0, 0.0),
+            v: Point::new(0.0, 20.0),
+            clip: Vec::new(),
+            adjust,
+        });
+        doc.set_picture_frame(false, 0);
+        doc.set_picture_frame(true, 2);
+        doc.set_wipeout_frame(2);
+        let check = |back: &Document, how: &str| {
+            assert!(
+                matches!(&back.entities().next().unwrap().geometry, Geometry::Image { adjust: a, .. } if *a == adjust),
+                "{how}"
+            );
+            let frames = (back.picture_frame(false), back.picture_frame(true), back.wipeout_frame());
+            assert_eq!(frames, (0, 2, 2), "{how}");
+        };
+        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
     fn hyperlinks_survive() {
         let mut doc = Document::new();
         let id = doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });

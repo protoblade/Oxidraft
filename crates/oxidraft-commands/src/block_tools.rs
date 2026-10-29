@@ -275,7 +275,7 @@ impl Default for AttEditGlobal {
 }
 
 /// `*` and `?` wildcards, ignoring case.
-fn matches_spec(spec: &str, s: &str) -> bool {
+pub(crate) fn matches_spec(spec: &str, s: &str) -> bool {
     fn go(p: &[char], s: &[char]) -> bool {
         match (p.first(), s.first()) {
             (None, None) => true,

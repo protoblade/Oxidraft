@@ -429,6 +429,24 @@ impl OxidraftApp {
                         "Edits a block reference or xref in place (REFEDIT)",
                     ),
                 );
+                self.small_tool(
+                    ui,
+                    &tool(
+                        Icon::Image,
+                        "Adjust",
+                        Some("ADJUST"),
+                        "Adjusts an image's brightness, contrast and fade, or a PDF's fade and monochrome",
+                    ),
+                );
+                self.small_tool(
+                    ui,
+                    &tool(
+                        Icon::ImageClip,
+                        "Frames",
+                        Some("FRAME"),
+                        "Frames of images, PDFs and wipeouts: hidden, shown and plotted, or shown only (FRAME)",
+                    ),
+                );
             });
         });
         ribbon_panel(ui, "Data", |ui| {

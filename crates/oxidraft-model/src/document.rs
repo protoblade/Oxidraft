@@ -358,6 +358,9 @@ pub struct Document {
     /// WIPEOUTFRAME: wipeouts' frames shown and plotted (1), shown but
     /// not plotted (2), or neither (0).
     wipeout_frame: u8,
+    /// IMAGEFRAME and PDFFRAME, the same for images and PDF underlays.
+    image_frame: u8,
+    pdf_frame: u8,
     /// Groups (GROUP), by name.
     groups: Vec<Group>,
     /// The dimension style (DIMSTYLE) dimensions are drawn in.
@@ -481,6 +484,8 @@ impl Document {
             space: crate::layout::MODEL,
             views: Vec::new(),
             wipeout_frame: 1,
+            image_frame: 1,
+            pdf_frame: 1,
             groups: Vec::new(),
             dim_style: crate::annotation::DEFAULT_DIM_STYLE,
             units: crate::units::DEFAULT_UNITS,
@@ -901,6 +906,24 @@ impl Document {
     /// WIPEOUTFRAME.
     pub fn wipeout_frame(&self) -> u8 {
         self.wipeout_frame
+    }
+
+    /// IMAGEFRAME, or PDFFRAME for PDF underlays.
+    pub fn picture_frame(&self, pdf: bool) -> u8 {
+        if pdf { self.pdf_frame } else { self.image_frame }
+    }
+
+    /// The frame setting of the picture `image` shows.
+    pub fn frame_of(&self, image: &str) -> u8 {
+        self.picture_frame(self.image_def(image).is_some_and(ImageDef::is_pdf))
+    }
+
+    pub fn set_picture_frame(&mut self, pdf: bool, mode: u8) {
+        let frame = if pdf { &mut self.pdf_frame } else { &mut self.image_frame };
+        if mode <= 2 && mode != *frame {
+            *frame = mode;
+            self.revision += 1;
+        }
     }
 
     pub fn set_wipeout_frame(&mut self, mode: u8) {
@@ -2375,6 +2398,7 @@ mod tests {
         assert_eq!(draw_order(&d), vec![4, 3, 1, 2]);
         // A new hatch goes behind lines, but over images.
         let image = d.add(Geometry::Image {
+            adjust: Default::default(),
             image: "ortho".into(),
             origin: Point::ORIGIN,
             u: Point::new(1.0, 0.0),

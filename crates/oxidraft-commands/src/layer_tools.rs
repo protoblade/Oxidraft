@@ -331,6 +331,138 @@ impl Command for LayVpi {
     }
 }
 
+#[derive(Clone, PartialEq)]
+enum VpStage {
+    Option,
+    List,
+    Layers(&'static str),
+    Where(&'static str, Vec<String>),
+    Select(&'static str, Vec<String>),
+}
+
+/// VPLAYER: layers frozen or thawed by name (wildcards too) in layout
+/// viewports: all of the layout's, those selected, the current one, or
+/// all but it.
+pub struct VpLayer {
+    stage: VpStage,
+}
+
+impl Default for VpLayer {
+    fn default() -> Self {
+        Self { stage: VpStage::Option }
+    }
+}
+
+fn viewport(ctx: &Ctx, id: EntityId) -> bool {
+    matches!(ctx.doc.entity(id).map(|e| &e.geometry), Some(oxidraft_model::Geometry::Viewport { .. }))
+}
+
+impl VpLayer {
+    /// Freezes (or thaws) `layers` in `viewports`; back to the options.
+    fn apply(&mut self, ctx: &mut Ctx, op: &str, layers: &[String], viewports: &[EntityId]) {
+        let names: Vec<String> = ctx
+            .doc
+            .layers()
+            .iter()
+            .map(|l| l.name.clone())
+            .filter(|n| layers.iter().any(|spec| crate::block_tools::matches_spec(spec, n)))
+            .collect();
+        for id in viewports {
+            ctx.doc.update(*id, |e| {
+                if let oxidraft_model::Geometry::Viewport { frozen, .. } = &mut e.geometry {
+                    frozen.retain(|f| !names.iter().any(|n| n.eq_ignore_ascii_case(f)));
+                    if op == "Freeze" {
+                        frozen.extend(names.iter().cloned());
+                    }
+                }
+            });
+        }
+        let done = if op == "Freeze" { "frozen" } else { "thawed" };
+        ctx.messages.push(format!("{} layer(s) {done} in {} viewport(s).", names.len(), viewports.len()));
+        self.stage = VpStage::Option;
+    }
+}
+
+impl Command for VpLayer {
+    fn prompt(&self) -> Prompt {
+        match &self.stage {
+            VpStage::Option => Prompt::new("Enter an option").with_keywords(&["?", "Freeze", "Thaw", "Reset"]),
+            VpStage::List => Prompt::new("Select a viewport"),
+            VpStage::Layers(op) => Prompt::new(format!("Enter layer name(s) to {}", op.to_lowercase())),
+            VpStage::Where(..) => Prompt::new("Enter an option")
+                .with_keywords(&["All", "Select", "Current", "Except current"])
+                .with_default("Current"),
+            VpStage::Select(..) => Prompt::new("Select viewports"),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match (self.stage.clone(), input) {
+            (VpStage::Option, Input::Keyword("?")) => self.stage = VpStage::List,
+            (VpStage::Option, Input::Keyword(op)) => self.stage = VpStage::Layers(op),
+            (VpStage::List, Input::Pick { at, .. }) => {
+                let id = ctx.pick(at).filter(|id| viewport(ctx, *id)).ok_or("Select a viewport's frame.")?;
+                if let Some(oxidraft_model::Geometry::Viewport { frozen, .. }) = ctx.doc.entity(id).map(|e| &e.geometry)
+                {
+                    let list = if frozen.is_empty() { "none".to_string() } else { frozen.join(", ") };
+                    ctx.messages.push(format!("Layers frozen in this viewport: {list}"));
+                }
+                self.stage = VpStage::Option;
+            }
+            (VpStage::Layers(op), Input::Text(t)) => {
+                let layers: Vec<String> =
+                    t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                if layers.is_empty() {
+                    return Err("Enter layer names, separated by commas.".into());
+                }
+                self.stage = VpStage::Where(op, layers);
+            }
+            (VpStage::Where(op, layers), input @ (Input::Keyword(_) | Input::Enter)) => {
+                let current = ctx.vars.viewport.filter(|id| viewport(ctx, *id));
+                let space = current.and_then(|id| ctx.doc.entity(id)).map_or(ctx.doc.space(), |e| e.space);
+                let in_layout: Vec<EntityId> = ctx
+                    .doc
+                    .space_in_draw_order(space)
+                    .iter()
+                    .filter(|e| matches!(e.geometry, oxidraft_model::Geometry::Viewport { .. }))
+                    .map(|e| e.id)
+                    .collect();
+                let viewports = match input {
+                    Input::Keyword("All") => in_layout,
+                    Input::Keyword("Select") => {
+                        self.stage = VpStage::Select(op, layers);
+                        return Ok(Step::Continue);
+                    }
+                    Input::Keyword("Except current") => {
+                        in_layout.into_iter().filter(|id| Some(*id) != current).collect()
+                    }
+                    _ => vec![current.ok_or("No viewport is current: work in one (MSPACE), or pick All or Select.")?],
+                };
+                self.apply(ctx, op, &layers, &viewports);
+            }
+            (VpStage::Select(op, layers), Input::Selection(s)) => {
+                let viewports: Vec<EntityId> = s.ids.iter().copied().filter(|id| viewport(ctx, *id)).collect();
+                self.apply(ctx, op, &layers, &viewports);
+            }
+            (_, Input::Enter) => return Ok(Step::Done),
+            _ => return Err("Invalid input.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn wants_pick(&self) -> bool {
+        self.stage == VpStage::List
+    }
+
+    fn wants_selection(&self) -> bool {
+        matches!(self.stage, VpStage::Select(..))
+    }
+
+    fn wants_text(&self) -> bool {
+        matches!(self.stage, VpStage::Layers(_))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Engine;
@@ -438,5 +570,40 @@ mod tests {
         };
         assert!(frozen(&d, a).is_empty(), "kept in the picked one");
         assert_eq!(frozen(&d, b), ["Walls"]);
+    }
+
+    #[test]
+    fn vplayer_freezes_and_thaws_by_name() {
+        let (mut e, mut d) = (Engine::new(), doc());
+        let sheet = d.new_layout("Layout1").unwrap();
+        d.set_space(sheet);
+        let viewport = |x: f64| Geometry::Viewport {
+            center: Point::new(x, 50.0),
+            width: 40.0,
+            height: 40.0,
+            view_center: Point::ORIGIN,
+            view_height: 20.0,
+            twist: 0.0,
+            frozen: Vec::new(),
+            locked: false,
+            on: true,
+            clip: Vec::new(),
+        };
+        let (a, b) = (d.add(viewport(50.0)), d.add(viewport(150.0)));
+        let frozen = |d: &Document, id| match &d.entity(id).unwrap().geometry {
+            Geometry::Viewport { frozen, .. } => frozen.clone(),
+            _ => Vec::new(),
+        };
+        e.run("VPLAYER", &mut d);
+        run(&mut e, &mut d, &["f", "W*,old", "a"]);
+        assert_eq!(frozen(&d, a), ["Walls", "Old"]);
+        assert_eq!(frozen(&d, b), ["Walls", "Old"]);
+        // Current: the one worked in; Except current: the others.
+        e.vars.viewport = Some(a);
+        run(&mut e, &mut d, &["t", "walls", ""]);
+        assert_eq!(frozen(&d, a), ["Old"]);
+        run(&mut e, &mut d, &["r", "*", "e", ""]);
+        assert_eq!(frozen(&d, b), Vec::<String>::new());
+        assert!(!e.is_active());
     }
 }

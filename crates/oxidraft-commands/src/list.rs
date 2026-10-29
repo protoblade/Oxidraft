@@ -179,7 +179,7 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
                 out.push(value("Title:", title));
             }
         }
-        Geometry::Image { image, origin, u, v, clip } => {
+        Geometry::Image { image, origin, u, v, clip, .. } => {
             out.push(value("Image name:", format!("\"{image}\"")));
             out.push(at("Insertion point:", *origin));
             out.push(value("Width:", n(u.length()).trim()));

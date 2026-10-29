@@ -11,7 +11,7 @@ use dxf::enums::ImageClippingBoundaryType;
 use dxf::objects::{Dictionary, ImageDefinition, Object, ObjectType, UnderlayDefinition};
 use dxf::{Drawing, Handle};
 use oxidraft_geom::Point;
-use oxidraft_model::{Document, Geometry, ImageDef, XrefStatus};
+use oxidraft_model::{Document, Geometry, ImageDef, PictureAdjust, XrefStatus};
 
 use crate::{from_dxf, from_dxf_vector, to_dxf, to_dxf_vector};
 
@@ -81,6 +81,11 @@ pub(crate) fn add_definitions(drawing: &mut Drawing, doc: &Document) -> Handles 
 }
 
 /// Solves `p = origin + a·u + b·v` for `(a, b)`.
+/// A brightness, contrast or fade as read: 0 to 100.
+fn percent(v: i16) -> u8 {
+    v.clamp(0, 100) as u8
+}
+
 fn picture_coords(p: Point, origin: Point, u: Point, v: Point) -> (f64, f64) {
     let det = u.cross(v);
     if det.abs() < 1e-300 {
@@ -92,7 +97,7 @@ fn picture_coords(p: Point, origin: Point, u: Point, v: Point) -> (f64, f64) {
 
 /// The entity for a picture, or `None` if its definition is missing.
 pub(crate) fn entity(g: &Geometry, handles: &Handles) -> Option<EntityType> {
-    let Geometry::Image { image, origin, u, v, clip } = g else { return None };
+    let Geometry::Image { image, origin, u, v, clip, adjust } = g else { return None };
     let (handle, def) = handles.get(&image.to_ascii_uppercase())?;
     if def.is_pdf() {
         // Underlay scales count drawing units per inch of the page.
@@ -104,10 +109,13 @@ pub(crate) fn entity(g: &Geometry, handles: &Handles) -> Option<EntityType> {
             y_scale: scale(v.length(), h),
             z_scale: 1.0,
             rotation_angle: Point::ORIGIN.angle_to(*u),
+            contrast: i16::from(adjust.contrast),
+            fade: i16::from(adjust.fade),
             ..Default::default()
         };
         e.__object_handle = *handle;
         e.set_is_underlay_on(true);
+        e.set_is_monochrome(adjust.monochrome);
         return Some(EntityType::PdfUnderlay(e));
     }
     let (w, h) = (def.width.max(1.0), def.height.max(1.0));
@@ -118,6 +126,9 @@ pub(crate) fn entity(g: &Geometry, handles: &Handles) -> Option<EntityType> {
         image_size: dxf::Vector::new(w, h, 0.0),
         image_def_reference: format!("{:X}", handle.0),
         use_clipping: clip.len() >= 3,
+        brightness: i16::from(adjust.brightness),
+        contrast: i16::from(adjust.contrast),
+        fade: i16::from(adjust.fade),
         ..Default::default()
     };
     e.set_show_image(true);
@@ -210,7 +221,13 @@ impl Definitions {
                     clip.clear();
                 }
                 let image = def.name.clone();
-                (def, Geometry::Image { image, origin, u, v, clip })
+                let adjust = PictureAdjust {
+                    brightness: percent(i.brightness),
+                    contrast: percent(i.contrast),
+                    fade: percent(i.fade),
+                    monochrome: false,
+                };
+                (def, Geometry::Image { adjust, image, origin, u, v, clip })
             }
             // Until the PDF is read, its page is an inch across at scale 1.
             EntityType::PdfUnderlay(p) => {
@@ -218,7 +235,22 @@ impl Definitions {
                 let r = p.rotation_angle;
                 let (u, v) = (Point::ORIGIN.polar(p.x_scale, r), Point::ORIGIN.polar(p.y_scale, r + 90.0));
                 let image = def.name.clone();
-                (def, Geometry::Image { image, origin: from_dxf(&p.insertion_point), u, v, clip: Vec::new() })
+                (
+                    def,
+                    Geometry::Image {
+                        adjust: PictureAdjust {
+                            contrast: percent(p.contrast),
+                            fade: percent(p.fade),
+                            monochrome: p.is_monochrome(),
+                            ..Default::default()
+                        },
+                        image,
+                        origin: from_dxf(&p.insertion_point),
+                        u,
+                        v,
+                        clip: Vec::new(),
+                    },
+                )
             }
             _ => return None,
         };

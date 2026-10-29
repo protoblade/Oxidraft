@@ -29,6 +29,64 @@ impl ImageDef {
     }
 }
 
+/// ADJUST: how a picture shows — brightness and contrast (0 to 100, 50 as
+/// it is), fade toward the background (0 to 100), and, for a PDF, in
+/// grays (monochrome).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PictureAdjust {
+    pub brightness: u8,
+    pub contrast: u8,
+    pub fade: u8,
+    pub monochrome: bool,
+}
+
+impl Default for PictureAdjust {
+    fn default() -> Self {
+        PictureAdjust { brightness: 50, contrast: 50, fade: 0, monochrome: false }
+    }
+}
+
+impl PictureAdjust {
+    pub fn is_plain(&self) -> bool {
+        *self == PictureAdjust::default()
+    }
+
+    /// What shows: for a PDF its fade and monochrome (its contrast is
+    /// AutoCAD's underlay setting, kept as it is), for an image its
+    /// brightness, contrast and fade.
+    pub fn shown(&self, pdf: bool) -> PictureAdjust {
+        if pdf {
+            PictureAdjust { fade: self.fade, monochrome: self.monochrome, ..Default::default() }
+        } else {
+            PictureAdjust { monochrome: false, ..*self }
+        }
+    }
+
+    /// One color channel (0 to 255) adjusted: contrast about the middle,
+    /// brightness up or down, then faded toward `background`.
+    pub fn channel(&self, c: u8, background: u8) -> u8 {
+        let contrast = f64::from(self.contrast) / 50.0;
+        let v = (f64::from(c) - 127.5) * contrast + 127.5 + (f64::from(self.brightness) - 50.0) * 2.55;
+        let fade = f64::from(self.fade.min(100)) / 100.0;
+        let v = v.clamp(0.0, 255.0) * (1.0 - fade) + f64::from(background) * fade;
+        v.round().clamp(0.0, 255.0) as u8
+    }
+
+    /// RGBA pixels adjusted, faded toward a white background.
+    pub fn apply(&self, rgba: &mut [u8]) {
+        for px in rgba.as_chunks_mut::<4>().0 {
+            if self.monochrome {
+                let gray =
+                    (0.299 * f64::from(px[0]) + 0.587 * f64::from(px[1]) + 0.114 * f64::from(px[2])).round() as u8;
+                px[..3].fill(gray);
+            }
+            for c in &mut px[..3] {
+                *c = self.channel(*c, 255);
+            }
+        }
+    }
+}
+
 /// The corners of a picture from its lower-left corner and its edge
 /// vectors: lower-left, lower-right, upper-right, upper-left.
 pub fn image_corners(origin: Point, u: Point, v: Point) -> [Point; 4] {

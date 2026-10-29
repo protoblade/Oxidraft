@@ -656,7 +656,14 @@ impl OxidraftApp {
                 status: XrefStatus::Unloaded,
             };
             self.doc.set_image_def(def);
-            let image = Geometry::Image { image: name.clone(), origin: g.origin, u: g.u, v: g.v, clip: Vec::new() };
+            let image = Geometry::Image {
+                adjust: Default::default(),
+                image: name.clone(),
+                origin: g.origin,
+                u: g.u,
+                v: g.v,
+                clip: Vec::new(),
+            };
             let bounds = image.bounds();
             extent = Some(extent.map_or(bounds, |b| b.union(bounds)));
             let layer = sanitize_name(&name);
@@ -831,7 +838,7 @@ impl OxidraftApp {
     /// boundary), else its frame with its name and state. A thick stroke
     /// (selection) draws the frame only.
     pub(crate) fn draw_image(&self, painter: &Painter, rect: Rect, g: &Geometry, stroke: Stroke) {
-        let Geometry::Image { image, origin, u, v, clip } = g else { return };
+        let Geometry::Image { image, origin, u, v, clip, adjust } = g else { return };
         let to = |p: Point| self.view.to_screen(rect, p);
         let ring: Vec<Point> = if clip.len() >= 3 { clip.clone() } else { image_corners(*origin, *u, *v).to_vec() };
         let frame: Vec<Pos2> = ring.iter().map(|p| to(*p)).collect();
@@ -846,11 +853,13 @@ impl OxidraftApp {
                 let (a, b) = if det.abs() > 0.0 { (d.cross(*v) / det, u.cross(d) / det) } else { (0.0, 0.0) };
                 egui::pos2(a as f32, (1.0 - b) as f32)
             };
+            let pdf = self.doc.image_def(image).is_some_and(|d| d.is_pdf());
+            let (tint, overlays) = screen_adjust(&adjust.shown(pdf));
             let mut mesh = egui::Mesh::with_texture(texture);
             for t in hatch::triangles(std::slice::from_ref(&ring)) {
                 let i = mesh.vertices.len() as u32;
                 for p in t {
-                    mesh.vertices.push(egui::epaint::Vertex { pos: to(p), uv: uv(p), color: Color32::WHITE });
+                    mesh.vertices.push(egui::epaint::Vertex { pos: to(p), uv: uv(p), color: tint });
                 }
                 mesh.add_triangle(i, i + 1, i + 2);
             }
@@ -878,12 +887,28 @@ impl OxidraftApp {
                             ((f64::from(whole.x) - x0) / (x1 - x0)) as f32,
                             ((f64::from(whole.y) - y0) / (y1 - y0)) as f32,
                         );
-                        mesh.vertices.push(egui::epaint::Vertex { pos: to(p), uv, color: Color32::WHITE });
+                        mesh.vertices.push(egui::epaint::Vertex { pos: to(p), uv, color: tint });
                     }
                     mesh.add_triangle(i, i + 1, i + 2);
                 }
                 painter.add(Shape::mesh(mesh));
             }
+            // Brightened, or with less contrast: washed over in white or gray.
+            for color in overlays {
+                let mut mesh = egui::Mesh::default();
+                for t in hatch::triangles(std::slice::from_ref(&ring)) {
+                    let i = mesh.vertices.len() as u32;
+                    for p in t {
+                        mesh.colored_vertex(to(p), color);
+                    }
+                    mesh.add_triangle(i, i + 1, i + 2);
+                }
+                painter.add(Shape::mesh(mesh));
+            }
+        }
+        // IMAGEFRAME (PDFFRAME) 0 hides a shown picture's frame.
+        if texture.is_some() && stroke.width < 4.0 && self.doc.frame_of(image) == 0 {
+            return;
         }
         let frame_stroke =
             if stroke.width >= 4.0 { stroke } else { Stroke::new(1.0, stroke.color.gamma_multiply(0.7)) };
@@ -902,4 +927,23 @@ impl OxidraftApp {
             }
         }
     }
+}
+
+/// How ADJUST's settings show on screen: the picture's tint (darker, and
+/// faded into the background) and the washes over it (white to brighten,
+/// gray for less contrast).
+fn screen_adjust(a: &oxidraft_model::PictureAdjust) -> (Color32, Vec<Color32>) {
+    let opacity = 1.0 - f32::from(a.fade.min(100)) / 100.0;
+    let dark = (f32::from(a.brightness.min(50)) / 50.0 * 255.0) as u8;
+    let tint = Color32::from_rgba_unmultiplied(dark, dark, dark, (opacity * 255.0) as u8);
+    let mut overlays = Vec::new();
+    if a.brightness > 50 {
+        let alpha = f32::from(a.brightness - 50) / 50.0 * 0.85 * opacity;
+        overlays.push(Color32::from_rgba_unmultiplied(255, 255, 255, (alpha * 255.0) as u8));
+    }
+    if a.contrast < 50 {
+        let alpha = f32::from(50 - a.contrast) / 50.0 * opacity;
+        overlays.push(Color32::from_rgba_unmultiplied(128, 128, 128, (alpha * 255.0) as u8));
+    }
+    (tint, overlays)
 }

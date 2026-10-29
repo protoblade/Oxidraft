@@ -111,7 +111,7 @@ fn ccw(mut ring: Vec<Point>) -> Vec<Point> {
 
 /// A picture's clipping polygon cut to the boundary, if either is convex.
 fn cut_image(g: &Geometry, boundary: &[Point]) -> Option<Geometry> {
-    let Geometry::Image { image, origin, u, v, clip } = g else { return None };
+    let Geometry::Image { image, origin, u, v, clip, adjust } = g else { return None };
     let ring = if clip.len() >= 3 { clip.clone() } else { image_corners(*origin, *u, *v).to_vec() };
     let cut = if is_convex(&ring) {
         clip_ring(&ccw(boundary.to_vec()), &ccw(ring))
@@ -120,7 +120,14 @@ fn cut_image(g: &Geometry, boundary: &[Point]) -> Option<Geometry> {
     } else {
         return keep_whole(g, boundary);
     };
-    (cut.len() >= 3).then(|| Geometry::Image { image: image.clone(), origin: *origin, u: *u, v: *v, clip: cut })
+    (cut.len() >= 3).then(|| Geometry::Image {
+        adjust: *adjust,
+        image: image.clone(),
+        origin: *origin,
+        u: *u,
+        v: *v,
+        clip: cut,
+    })
 }
 
 fn keep_whole(g: &Geometry, boundary: &[Point]) -> Option<Geometry> {

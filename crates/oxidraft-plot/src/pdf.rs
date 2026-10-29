@@ -332,6 +332,7 @@ mod tests {
         use oxidraft_model::Geometry;
         let mut doc = Document::new();
         doc.add(Geometry::Image {
+            adjust: Default::default(),
             image: "ortho".into(),
             origin: Point::new(0.0, 0.0),
             u: Point::new(100.0, 0.0),
@@ -339,6 +340,7 @@ mod tests {
             clip: vec![Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(50.0, 50.0)],
         });
         doc.add(Geometry::Image {
+            adjust: Default::default(),
             image: "missing".into(),
             origin: Point::ORIGIN,
             u: Point::new(1.0, 0.0),
@@ -352,6 +354,11 @@ mod tests {
             ..PlotSettings::default()
         };
         let lookup = |n: &str| (n == "ortho").then(|| picture.clone());
+        // IMAGEFRAME 1 plots the frames too, the unloaded one's as well.
+        let framed = crate::render_with_pictures(&doc, oxidraft_model::MODEL, &settings, &lookup).unwrap();
+        let strokes = framed.items.iter().filter(|i| matches!(i, crate::Item::Stroke { .. })).count();
+        assert!(strokes >= 1, "{:?}", framed.items);
+        doc.set_picture_frame(false, 2);
         let sheet = crate::render_with_pictures(&doc, oxidraft_model::MODEL, &settings, &lookup).unwrap();
         assert_eq!(sheet.items.len(), 1, "the unloaded one plots nothing");
         let bytes = pdf(&sheet, "ortho");

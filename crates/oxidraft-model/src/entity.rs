@@ -207,6 +207,8 @@ pub enum Geometry {
         u: Point,
         v: Point,
         clip: Vec<Point>,
+        /// How it shows (ADJUST).
+        adjust: crate::underlay::PictureAdjust,
     },
     /// A layout viewport (DXF VIEWPORT): a `width` x `height` window in
     /// paper space centered on `center`, showing model space around
@@ -862,7 +864,8 @@ impl Geometry {
             Geometry::Xline { base, direction } => {
                 Geometry::Xline { base: f(*base), direction: f(*base + *direction) - f(*base) }
             }
-            Geometry::Image { image, origin, u, v, clip } => Geometry::Image {
+            Geometry::Image { image, origin, u, v, clip, adjust } => Geometry::Image {
+                adjust: *adjust,
                 image: image.clone(),
                 origin: f(*origin),
                 u: f(*origin + *u) - f(*origin),

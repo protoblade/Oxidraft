@@ -38,6 +38,6 @@ pub use oxidraft_geom::{ellipse::Ellipse, spline::Spline};
 pub use palette::aci_rgb;
 pub use purge::Unused;
 pub use refedit::RefEdit;
-pub use underlay::{ImageDef, image_corners};
+pub use underlay::{ImageDef, PictureAdjust, image_corners};
 pub use units::{AngleType, LengthType, Units};
 pub use xref::{Xref, XrefStatus, dependent_name, is_dependent};

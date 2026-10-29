@@ -243,16 +243,43 @@ impl<'a> Plotter<'a> {
         let width = if self.settings.lineweights { s.lineweight.mm().unwrap_or(0.25) } else { 0.0 };
         let g = &s.geometry;
         match g {
-            // Unloaded images don't plot; frames don't either (IMAGEFRAME 2).
-            Geometry::Image { image, origin, u, v, clip } => {
-                let Some(picture) = (self.lookup)(image) else { return };
-                self.pictures.insert(image.clone(), picture);
+            // Unloaded images don't plot; frames do with IMAGEFRAME (PDFFRAME) 1.
+            Geometry::Image { image, origin, u, v, clip, adjust } => {
                 let paper = |q: Point| self.paper(q);
+                let ring: Vec<Point> = if clip.len() >= 3 {
+                    clip.clone()
+                } else {
+                    oxidraft_model::image_corners(*origin, *u, *v).to_vec()
+                };
+                let frame: Vec<Point> = ring.iter().map(|q| paper(*q)).collect();
                 let (o, pu, pv) =
                     (paper(*origin), paper(*origin + *u) - paper(*origin), paper(*origin + *v) - paper(*origin));
-                let clip = clip.iter().map(|q| paper(*q)).collect();
-                let gray = self.settings.style != crate::PlotStyle::None;
-                self.items.push(Item::Image { name: image.clone(), origin: o, u: pu, v: pv, clip, gray });
+                let paper_clip: Vec<Point> = clip.iter().map(|q| paper(*q)).collect();
+                if let Some(picture) = (self.lookup)(image) {
+                    let pdf = self.doc.image_def(image).is_some_and(|d| d.is_pdf());
+                    // Adjusted (ADJUST): its own pixels, under a name of their own.
+                    let shown = adjust.shown(pdf);
+                    let name = if shown.is_plain() {
+                        image.clone()
+                    } else {
+                        format!("{image}|{}-{}-{}-{}", shown.brightness, shown.contrast, shown.fade, shown.monochrome)
+                    };
+                    if !self.pictures.contains_key(&name) {
+                        let picture = if shown.is_plain() {
+                            picture
+                        } else {
+                            let mut rgba = picture.rgba.clone();
+                            shown.apply(&mut rgba);
+                            Arc::new(Picture { width: picture.width, height: picture.height, rgba })
+                        };
+                        self.pictures.insert(name.clone(), picture);
+                    }
+                    let gray = self.settings.style != crate::PlotStyle::None;
+                    self.items.push(Item::Image { name, origin: o, u: pu, v: pv, clip: paper_clip, gray });
+                }
+                if self.doc.frame_of(image) == 1 {
+                    self.push_stroke(vec![Path { points: frame, closed: true }], width, color, false);
+                }
             }
             Geometry::Text { .. } => self.text(g, color),
             // White paper over what's under it, and its frame (WIPEOUTFRAME 1).

@@ -444,7 +444,7 @@ impl OxidraftApp {
                 }
                 rows
             }
-            Geometry::Image { image, origin, u, v, clip } => vec![
+            Geometry::Image { image, origin, u, v, clip, adjust } => vec![
                 ("Name", Value::Text(image.clone())),
                 ("Position X", Value::Number(origin.x)),
                 ("Position Y", Value::Number(origin.y)),
@@ -452,6 +452,9 @@ impl OxidraftApp {
                 ("Height", Value::Text(fmt(v.length()))),
                 ("Rotation", Value::Angle(Point::ORIGIN.angle_to(*u))),
                 ("Clipped", Value::Text(if clip.len() >= 3 { "Yes" } else { "No" }.into())),
+                ("Brightness", Value::Number(f64::from(adjust.brightness))),
+                ("Contrast", Value::Number(f64::from(adjust.contrast))),
+                ("Fade", Value::Number(f64::from(adjust.fade))),
             ],
             Geometry::Viewport { center, width, height, view_center, view_height, locked, on, .. } => {
                 // A locked viewport's scale can't change.
@@ -771,6 +774,14 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
             let o = *origin;
             let to = if label == "Position X" { Point::new(v, o.y) } else { Point::new(o.x, v) };
             return Some(g.translated(to - o));
+        }
+        (Geometry::Image { adjust, .. }, "Brightness" | "Contrast" | "Fade") if (0.0..=100.0).contains(&v) => {
+            let v = v.round() as u8;
+            match label {
+                "Brightness" => adjust.brightness = v,
+                "Contrast" => adjust.contrast = v,
+                _ => adjust.fade = v,
+            }
         }
         (Geometry::Image { origin, u, .. }, "Rotation") => {
             let (o, turn) = (*origin, v - Point::ORIGIN.angle_to(*u));

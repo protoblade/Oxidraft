@@ -800,6 +800,9 @@ pub fn settings_of(doc: &Document) -> Vec<(&'static str, f64)> {
         ("LEADER_LANDING", l.landing),
         ("TABLE_TEXT_HEIGHT", t.text_height),
         ("TABLE_MARGIN", t.margin),
+        ("IMAGEFRAME", f64::from(doc.picture_frame(false))),
+        ("PDFFRAME", f64::from(doc.picture_frame(true))),
+        ("WIPEOUTFRAME", f64::from(doc.wipeout_frame())),
     ]
 }
 
@@ -880,6 +883,9 @@ fn read_settings(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
                     "LEADER_LANDING" => l.landing = v.max(0.0),
                     "TABLE_TEXT_HEIGHT" => t.text_height = positive(v, t.text_height),
                     "TABLE_MARGIN" => t.margin = v.max(0.0),
+                    "IMAGEFRAME" => doc.set_picture_frame(false, v as u8),
+                    "PDFFRAME" => doc.set_picture_frame(true, v as u8),
+                    "WIPEOUTFRAME" => doc.set_wipeout_frame(v as u8),
                     _ => {}
                 }
             }
@@ -2157,7 +2163,9 @@ mod tests {
         doc.set_image_def(def("ortho", "tiles\\ortho.tif", None, 400.0, 200.0));
         doc.set_image_def(def("plan - 2", "plan.pdf", Some(1), 842.0, 595.0));
         let clip = vec![Point::new(110.0, 205.0), Point::new(130.0, 205.0), Point::new(120.0, 215.0)];
+        let adjust = oxidraft_model::PictureAdjust { brightness: 70, contrast: 40, fade: 20, monochrome: false };
         let ortho = Geometry::Image {
+            adjust,
             image: "ortho".into(),
             origin: Point::new(100.0, 200.0),
             u: Point::new(40.0, 0.0),
@@ -2165,7 +2173,10 @@ mod tests {
             clip: clip.clone(),
         };
         doc.add(ortho.clone());
+        let pdf_adjust =
+            oxidraft_model::PictureAdjust { contrast: 20, fade: 25, monochrome: true, ..Default::default() };
         let page = Geometry::Image {
+            adjust: pdf_adjust,
             image: "plan - 2".into(),
             origin: Point::new(0.0, 0.0),
             u: Point::new(0.0, 297.0),
@@ -2185,7 +2196,9 @@ mod tests {
         let d = back.image_def("ortho").unwrap();
         assert_eq!((d.path.as_str(), d.page, d.width, d.height), ("tiles\\ortho.tif", None, 400.0, 200.0));
         let shapes: Vec<Geometry> = back.entities().map(|e| e.geometry.clone()).collect();
-        let Geometry::Image { origin, u, v, clip: c, .. } = &shapes[0] else { panic!() };
+        let Geometry::Image { origin, u, v, clip: c, adjust: a, .. } = &shapes[0] else { panic!() };
+        assert_eq!(*a, adjust);
+        assert!(matches!(&shapes[1], Geometry::Image { adjust: a, .. } if *a == pdf_adjust));
         assert!(
             origin.approx_eq(Point::new(100.0, 200.0))
                 && u.approx_eq(Point::new(40.0, 0.0))

@@ -29,8 +29,14 @@ impl AttachImage {
         if doc.image_def(&self.def.name).is_none() {
             doc.set_image_def(self.def.clone());
         }
-        let image =
-            Geometry::Image { image: self.def.name.clone(), origin: at, u: self.u, v: self.v, clip: Vec::new() };
+        let image = Geometry::Image {
+            adjust: Default::default(),
+            image: self.def.name.clone(),
+            origin: at,
+            u: self.u,
+            v: self.v,
+            clip: Vec::new(),
+        };
         // Pictures are underlays: behind the drawing.
         let id = doc.add_on_layer(image, &sanitize_name(&self.def.name), Color::ByLayer);
         doc.send_to_back(&[id]);

@@ -703,6 +703,36 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(crate::views::IsoPlaneCmd::default())),
     },
     CommandInfo {
+        name: "VPLAYER",
+        aliases: &[],
+        description: "Freeze or thaw layers in layout viewports by name: all, selected, current or all but current",
+        make: Some(|| Box::new(crate::layer_tools::VpLayer::default())),
+    },
+    CommandInfo {
+        name: "ADJUST",
+        aliases: &[],
+        description: "Adjust an image's brightness, contrast and fade, or a PDF underlay's fade and monochrome",
+        make: Some(|| Box::new(crate::picture_tools::Adjust::default())),
+    },
+    CommandInfo {
+        name: "IMAGEFRAME",
+        aliases: &[],
+        description: "Image frames: 0 hidden, 1 shown and plotted, 2 shown but not plotted",
+        make: Some(|| Box::new(crate::picture_tools::FrameVar::new(crate::picture_tools::Frames::Image))),
+    },
+    CommandInfo {
+        name: "PDFFRAME",
+        aliases: &[],
+        description: "PDF underlay frames: 0 hidden, 1 shown and plotted, 2 shown but not plotted",
+        make: Some(|| Box::new(crate::picture_tools::FrameVar::new(crate::picture_tools::Frames::Pdf))),
+    },
+    CommandInfo {
+        name: "FRAME",
+        aliases: &[],
+        description: "Frames of images, PDF underlays and wipeouts together (IMAGEFRAME, PDFFRAME, WIPEOUTFRAME)",
+        make: Some(|| Box::new(crate::picture_tools::FrameVar::new(crate::picture_tools::Frames::All))),
+    },
+    CommandInfo {
         name: "DIMINSPECT",
         aliases: &["-DIMINSPECT"],
         description: "Add inspection data (a shape, label and inspection rate) to dimensions, or remove it",
@@ -3686,6 +3716,7 @@ mod tests {
     fn imageclip_clips_and_unclips_a_picture() {
         let (mut e, mut d) = (engine(), Document::new());
         d.add(Geometry::Image {
+            adjust: Default::default(),
             image: "ortho".into(),
             origin: Point::ORIGIN,
             u: Point::new(100.0, 0.0),

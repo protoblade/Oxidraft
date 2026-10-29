@@ -55,6 +55,7 @@ mod move_copy;
 mod mview;
 mod offset;
 mod pedit;
+mod picture_tools;
 mod pline;
 mod plot;
 mod point;
@@ -300,6 +301,9 @@ pub struct Vars {
     pub isoplane: Option<IsoPlane>,
     /// What the last ERASE took out, for OOPS to put back.
     pub erased: Vec<oxidraft_model::Entity>,
+    /// The layout viewport model space is being worked in through
+    /// (MSPACE), kept by the app.
+    pub viewport: Option<EntityId>,
     /// The last area AREA or MEASUREGEOM measured (for Volume).
     pub last_area: f64,
     /// SNAPMODE (F9) and SNAPUNIT: the cursor jumps to points this far
@@ -346,6 +350,7 @@ impl Default for Vars {
             revcloud_polygonal: false,
             color_theme: 0,
             isoplane: None,
+            viewport: None,
             erased: Vec::new(),
             last_area: 0.0,
             snap: false,
