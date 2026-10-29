@@ -53,9 +53,10 @@ What AutoCAD LT has that Oxidraft doesn't, yet:
 - **Multileaders** with block content (`MLEADERCOLLECT`); a multileader's extra leader lines come back from AutoCAD's files as separate leaders.
 - **Text fonts:** text draws in one typeface whatever font its style names (SHX and TrueType fonts aren't rendered); annotative text and dimension styles (objects are made annotative one by one), and per-scale positions (`ANNORESET` has none to reset).
 - **Import and export:** `PDFIMPORT`, PDF underlay layers (`ULAYERS`), `IMPORT`, DWF (`EXPORTDWF`), WMF (`WMFOUT`), OLE objects (`INSERTOBJ`); plots go to PDF only, with no plotter configurations (`PLOTTERMANAGER`).
-- **Smaller tools:** a hatch's origin (`HATCHSETORIGIN`), revision cloud properties (`REVCLOUDPROPERTIES`), bitonal image transparency (`TRANSPARENCY`).
+- **Smaller tools:** a hatch's origin (`HATCHSETORIGIN`), revision cloud properties (`REVCLOUDPROPERTIES`), bitonal image transparency (`TRANSPARENCY`), comparing an xref with its changed file (`XCOMPARE`; `COMPARE` compares drawings).
+- **Sheet sets** (`SHEETSET`, `ARCHIVE`).
 - **Interface:** customization (`CUI`, `WORKSPACE`; command aliases are, in `ALIASEDIT`); one drawing per window, so no `CASCADE`, `TILE` or `SWITCHWINDOWS`.
-- **Autodesk's cloud:** `SHARE`, markup import and assist (`MARKUP`), `XCOMPARE`, Traces, sheet sets (`ARCHIVE`).
+- **Autodesk's cloud:** `SHARE`, markup import and assist (`MARKUP`), Traces.
 - **Saved for AutoCAD in Oxidraft's own data:** dimension breaks, jogs and inspection, annotative scales and drawing settings round-trip in Oxidraft but show plain in AutoCAD. Fields naming objects come back as fields only with those objects. `SPELL` uses the system word list (macOS, Linux), so on Windows only the words you add.
 
 Not in AutoCAD LT either, and not planned: parametric constraints, `REGION`, `MLINE` and the layer translator.
