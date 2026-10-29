@@ -108,10 +108,8 @@ pub(crate) struct XrefEditSave {
     site: Document,
     /// The file's DWG version, or `None` for DXF.
     version: Option<oxidraft_io_dwg::Version>,
-    /// Objects in the file Oxidraft can't keep: of types it doesn't
-    /// support, and in layouts.
+    /// Objects in the file of types Oxidraft can't keep.
     skipped: usize,
-    paper_space: usize,
 }
 
 /// The backup AutoCAD makes when it writes over a drawing: "site.bak".
@@ -183,14 +181,8 @@ impl OxidraftApp {
         };
         match read {
             Ok((imported, version)) => {
-                self.xref_edit_save = Some(XrefEditSave {
-                    name,
-                    path,
-                    site: imported.document,
-                    version,
-                    skipped: imported.skipped,
-                    paper_space: imported.paper_space,
-                });
+                self.xref_edit_save =
+                    Some(XrefEditSave { name, path, site: imported.document, version, skipped: imported.skipped });
             }
             Err(e) => self.engine.log(format!("Could not read {}: {e}; the edits aren't saved.", path.display())),
         }
@@ -214,19 +206,12 @@ impl OxidraftApp {
                 ui.set_width(380.0);
                 ui.label(RichText::new(format!("All reference edits will be saved to {file}.")).strong());
                 ui.add_space(4.0);
-                if d.skipped + d.paper_space > 0 {
-                    let mut lost = Vec::new();
-                    if d.skipped > 0 {
-                        lost.push(format!("{} object(s) of types it doesn't support", d.skipped));
-                    }
-                    if d.paper_space > 0 {
-                        lost.push(format!("{} object(s) in layouts", d.paper_space));
-                    }
+                if d.skipped > 0 {
                     ui.colored_label(
                         theme::warning(),
                         format!(
-                            "Oxidraft rewrites the file and can't keep {}; they'll be left out.",
-                            lost.join(" or ")
+                            "Oxidraft rewrites the file and can't keep {} object(s) of types it doesn't support; they'll be left out.",
+                            d.skipped
                         ),
                     );
                 }
@@ -255,7 +240,7 @@ impl OxidraftApp {
         let written =
             std::fs::copy(&d.path, backup_path(&d.path)).map_err(|e| e.to_string()).and_then(|_| match d.version {
                 Some(v) => oxidraft_io_dwg::save_file(&d.site, &d.path, v),
-                None => oxidraft_io_dxf::save_file(&d.site, &d.path).map_err(|e| e.to_string()),
+                None => oxidraft_io_dwg::save_dxf(&d.site, &d.path),
             });
         if let Err(e) = written {
             self.engine.log(format!("Could not save {}: {e}; still editing.", d.path.display()));

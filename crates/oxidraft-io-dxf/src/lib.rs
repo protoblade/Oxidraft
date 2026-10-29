@@ -13,13 +13,14 @@ use dxf::{Color as DxfColor, Drawing, Point as DxfPoint};
 use oxidraft_geom::Point;
 use oxidraft_model::{
     Attach, Attribute, AttributeDisplay, Block, BlockEntity, Color, Document, Ellipse, EntityId, Geometry,
-    HatchPattern, Layer, Linetype, Lineweight, Placement, Spline, Vertex, Xref, XrefStatus,
+    HatchPattern, Layer, Linetype, Lineweight, MODEL, Placement, Space, Spline, Vertex, Xref, XrefStatus,
     annotation::{angle_around, decode_control_codes, two_line_angle},
     constant_width, hatch, is_dependent, linetype,
 };
 
 mod clip_dxf;
 mod hatch_dxf;
+mod layout_dxf;
 mod underlay_dxf;
 
 pub type Error = dxf::DxfError;
@@ -30,9 +31,6 @@ pub struct Imported {
     pub document: Document,
     /// Number of DXF entities of types Oxidraft can't represent yet.
     pub skipped: usize,
-    /// Number of objects in layouts (paper space), which Oxidraft doesn't
-    /// keep yet.
-    pub paper_space: usize,
 }
 
 fn to_dxf(p: Point) -> DxfPoint {
@@ -446,6 +444,8 @@ impl Exporter {
                 out
             }
             Geometry::Image { .. } => underlay_dxf::entity(g, &self.images).into_iter().collect(),
+            // The dxf crate has no VIEWPORT: they're added with their layouts.
+            Geometry::Viewport { .. } => Vec::new(),
             // A placeholder the crate can write; `write` turns it into a HATCH.
             Geometry::Hatch { .. } => {
                 self.hatches.push(hatch_dxf::hatch_data(g));
@@ -503,8 +503,22 @@ pub fn to_drawing(doc: &Document) -> Drawing {
     build(doc).0
 }
 
-/// The drawing, and the AcDbHatch data of each hatch placeholder.
-fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
+/// What [`build`] makes: the drawing, the AcDbHatch data of each hatch
+/// placeholder, and each ATTRIB's layer and color in the order they're in
+/// the file.
+type Built = (Drawing, Vec<Vec<(i32, String)>>, Vec<(String, Color)>);
+
+/// Adds an INSERT's attributes, noting their styles for `fix_attributes`.
+fn add_attributes(drawing: &mut Drawing, de: &mut DxfEntity, g: &Geometry, styles: &mut Vec<(String, Color)>) {
+    if let (EntityType::Insert(ins), Geometry::Insert { attributes, .. }) = (&mut de.specific, g) {
+        for a in attributes {
+            ins.add_attribute(drawing, attribute_to_dxf(a));
+            styles.push((a.layer.clone(), a.color));
+        }
+    }
+}
+
+fn build(doc: &Document) -> Built {
     let mut drawing = Drawing::new();
     // R2000 is the oldest version with lightweight polylines; PDF underlays
     // need R2007 or later.
@@ -598,14 +612,36 @@ fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
     // Objects are written in draw order, which is the order AutoCAD draws
     // them in when there's no SORTENTSTABLE.
     let mut entities: Vec<(DxfEntity, &Geometry)> = Vec::new();
-    for e in doc.entities_in_draw_order() {
+    let (mut styles, mut block_styles) = (Vec::new(), Vec::new());
+    for e in doc.space_in_draw_order(MODEL) {
         for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
-            if let (EntityType::Insert(ins), Geometry::Insert { attributes, .. }) = (&mut de.specific, &e.geometry) {
-                for a in attributes {
-                    ins.add_attribute(&mut drawing, attribute_to_dxf(a));
+            add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
+            entities.push((de, &e.geometry));
+        }
+    }
+    // Layouts, as AutoCAD keeps them: the first one's objects in ENTITIES,
+    // marked paper space; the others' in their *Paper_SpaceN blocks. Their
+    // LAYOUT objects and viewports are added where the file is finished.
+    for (i, layout) in doc.layouts().into_iter().enumerate() {
+        let name = format!("*Paper_Space{}", i.saturating_sub(1));
+        let mut in_block = Vec::new();
+        for e in doc.space_in_draw_order(layout.id) {
+            for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
+                if i == 0 {
+                    de.common.is_in_paper_space = true;
+                    add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
+                    entities.push((de, &e.geometry));
+                } else {
+                    add_attributes(&mut drawing, &mut de, &e.geometry, &mut block_styles);
+                    if is_clipped(&de, &e.geometry) {
+                        block_clips.push((name.clone(), in_block.len(), &e.geometry));
+                    }
+                    in_block.push(de);
                 }
             }
-            entities.push((de, &e.geometry));
+        }
+        if i > 0 {
+            blocks.push(dxf::Block { name, entities: in_block, ..Default::default() });
         }
     }
     for b in blocks.into_iter().chain(ex.blocks) {
@@ -630,7 +666,9 @@ fn build(doc: &Document) -> (Drawing, Vec<Vec<(i32, String)>>) {
             added.common.extension_data_groups.push(group);
         }
     }
-    (drawing, ex.hatches)
+    // The ATTRIBs in the BLOCKS section come before those in ENTITIES.
+    block_styles.extend(styles);
+    (drawing, ex.hatches, block_styles)
 }
 
 fn is_clipped(de: &DxfEntity, g: &Geometry) -> bool {
@@ -881,6 +919,8 @@ struct Raw {
     hatches: Vec<hatch_dxf::RawHatch>,
     /// XCLIP boundaries, by the extension dictionary of their INSERT.
     clips: HashMap<u64, oxidraft_model::XClip>,
+    /// Layouts' page setups, and viewports.
+    layouts: layout_dxf::RawLayouts,
 }
 
 /// An INSERT's clip from the file, if it has one.
@@ -932,6 +972,47 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         doc.add_layer(layer.clone());
         doc.update_layer(layer);
     }
+    // Layouts, each a space of its own: their paper space objects are found
+    // by their block records, "*Paper_Space" being the active layout's.
+    let mut records: HashMap<u64, String> =
+        drawing.block_records().map(|r| (r.handle.0, r.name.to_ascii_uppercase())).collect();
+    records.extend(raw.layouts.records.iter().map(|(h, n)| (*h, n.clone())));
+    let mut layouts: Vec<&dxf::objects::Layout> = drawing
+        .objects()
+        .filter_map(|o| match &o.specific {
+            dxf::objects::ObjectType::Layout(l) if !l.layout_name.eq_ignore_ascii_case("Model") => Some(l),
+            _ => None,
+        })
+        .collect();
+    layouts.sort_by_key(|l| l.tab_order);
+    let mut layout_spaces: HashMap<String, Space> = HashMap::new();
+    let mut first_layout = None;
+    for l in layouts {
+        let paper = raw.layouts.papers.get(&l.layout_name.to_ascii_uppercase()).cloned().unwrap_or_default();
+        let layout =
+            oxidraft_model::layout::Layout { id: MODEL, name: l.layout_name.clone(), tab_order: l.tab_order, paper };
+        let space = doc.add_layout(layout);
+        first_layout.get_or_insert(space);
+        let handle = raw.layouts.layout_records.get(&l.layout_name.to_ascii_uppercase()).copied();
+        if let Some(record) = records.get(&handle.unwrap_or(l.__table_record_handle.0)) {
+            layout_spaces.insert(record.clone(), space);
+        }
+    }
+    // Paper space objects in a file without layouts (R12) get one.
+    let has_paper =
+        drawing.entities().any(|e| e.common.is_in_paper_space) || raw.layouts.viewports.iter().any(|v| v.id != 1);
+    if first_layout.is_none() && has_paper {
+        let layout = oxidraft_model::layout::Layout {
+            id: MODEL,
+            name: "Layout1".into(),
+            tab_order: 1,
+            paper: oxidraft_model::Paper::default(),
+        };
+        first_layout = Some(doc.add_layout(layout));
+    }
+    let space_of_record = |name: &str| layout_spaces.get(&name.to_ascii_uppercase()).copied();
+    let active = space_of_record("*PAPER_SPACE").or(first_layout);
+    let space_of_owner = |owner: u64| records.get(&owner).and_then(|n| layout_spaces.get(n)).copied();
     let mut skipped = 0;
     // "*Model_Space" and "*Paper_Space" hold the drawing itself; other "*"
     // blocks (exploded hatches, dimension graphics) are kept so references
@@ -1012,10 +1093,18 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         let n = attribute_count(e);
         let style = styles.as_ref().map(|s| &s[next..next + n]);
         next += n;
-        // Paper space (layouts) isn't supported yet; its objects aren't model space.
-        if e.common.is_in_paper_space || is_template(&e.specific) {
+        if is_template(&e.specific) {
             continue;
         }
+        // The active layout's objects are here too, marked paper space.
+        let space = match e.common.is_in_paper_space {
+            false => MODEL,
+            true => match space_of_owner(e.common.__owner_handle.0).or(active) {
+                Some(space) => space,
+                None => continue,
+            },
+        };
+        doc.set_space(space);
         let picture = match &e.specific {
             EntityType::Image(_) | EntityType::PdfUnderlay(_) => pictures.geometry(&e.specific, &mut doc),
             _ => None,
@@ -1036,11 +1125,72 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
             }
             None => skipped += 1,
         }
+        doc.set_space(MODEL);
+    }
+    // The other layouts' objects, in their *Paper_SpaceN blocks.
+    for b in drawing.blocks().filter(|b| b.name.to_ascii_lowercase().starts_with("*paper_space")) {
+        let Some(space) = space_of_record(&b.name) else { continue };
+        doc.set_space(space);
+        for e in b.entities.iter().filter(|e| !is_template(&e.specific)) {
+            let picture = match &e.specific {
+                EntityType::Image(_) | EntityType::PdfUnderlay(_) => pictures.geometry(&e.specific, &mut doc),
+                _ => None,
+            };
+            match picture.or_else(|| geometry_from_dxf(&e.specific)) {
+                Some(mut g) => {
+                    style_attributes(&mut g, None, &e.common.layer);
+                    attach_clip(&mut g, e, &raw.clips);
+                    let id = doc.add_styled(
+                        g,
+                        &e.common.layer,
+                        from_dxf_color(&e.common.color),
+                        &linetype_from_dxf(&e.common.line_type_name),
+                        lineweight_from_dxf(e.common.lineweight_enum_value),
+                    );
+                    placed.push((e.common.handle.0, f64::from(u32::MAX), id));
+                }
+                None => skipped += 1,
+            }
+        }
+        for h in raw.hatches.iter().filter(|h| h.block.as_deref() == Some(b.name.as_str())) {
+            let id = doc.add_styled(h.geometry.clone(), &h.layer, h.color, &h.linetype, h.lineweight);
+            placed.push((h.handle, f64::from(u32::MAX), id));
+        }
+        doc.set_space(MODEL);
+    }
+    // Viewports onto model space, in their layouts (not each layout's own,
+    // which only frames the sheet).
+    let layer_names: HashMap<u64, String> = drawing.layers().map(|l| (l.handle.0, l.name.clone())).collect();
+    for v in raw.layouts.viewports.iter().filter(|v| v.id != 1) {
+        let space = match &v.block {
+            Some(block) => space_of_record(block),
+            None => space_of_owner(v.owner).or(active),
+        };
+        let Some(space) = space else { continue };
+        doc.set_space(space);
+        let g = Geometry::Viewport {
+            center: v.center,
+            width: v.width,
+            height: v.height,
+            view_center: v.view_center,
+            view_height: v.view_height,
+            twist: v.twist,
+            frozen: v.frozen.iter().filter_map(|h| layer_names.get(h).cloned()).collect(),
+            locked: v.locked,
+            on: v.on,
+        };
+        let id = doc.add_styled(g, &v.layer, Color::ByLayer, linetype::BYLAYER, Lineweight::ByLayer);
+        placed.push((v.handle, f64::from(u32::MAX), id));
+        doc.set_space(MODEL);
     }
     // Hatches are read last, then put in their place in the draw order.
-    for h in raw.hatches.into_iter().filter(|h| h.block.is_none() && !h.paper_space) {
+    for h in raw.hatches.into_iter().filter(|h| h.block.is_none()) {
+        let space = if h.paper_space { active } else { Some(MODEL) };
+        let Some(space) = space else { continue };
+        doc.set_space(space);
         let id = doc.add_styled(h.geometry, &h.layer, h.color, &h.linetype, h.lineweight);
         placed.push((h.handle, h.position as f64 - 0.5, id));
+        doc.set_space(MODEL);
     }
     let by_handle = placed.iter().all(|p| p.0 != 0);
     let mut order: Vec<(f64, EntityId)> = placed
@@ -1054,14 +1204,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
     doc.set_draw_order(&order.into_iter().map(|(_, id)| id).collect::<Vec<_>>());
     // A freshly opened file starts with an empty undo history.
     doc.forget_history();
-    // Viewports aren't read, so they aren't counted.
-    let paper_space = drawing.entities().filter(|e| e.common.is_in_paper_space).count()
-        + drawing
-            .blocks()
-            .filter(|b| b.name.to_ascii_lowercase().starts_with("*paper_space"))
-            .map(|b| b.entities.len())
-            .sum::<usize>();
-    Imported { document: doc, skipped, paper_space }
+    Imported { document: doc, skipped }
 }
 
 /// Sets imported attributes' layer and color: from the file when known,
@@ -1132,16 +1275,8 @@ fn attribute_styles(dxf: &[u8]) -> Option<Vec<(String, Color)>> {
 
 pub fn write<W: Write>(doc: &Document, writer: &mut W) -> Result<(), Error> {
     let mut buf = Vec::new();
-    let (drawing, hatches) = build(doc);
+    let (drawing, hatches, styles) = build(doc);
     drawing.save(&mut buf)?;
-    // Attributes are written in document order, one INSERT after another.
-    let styles: Vec<(String, Color)> = doc
-        .entities()
-        .flat_map(|e| match &e.geometry {
-            Geometry::Insert { attributes, .. } => attributes.iter().map(|a| (a.layer.clone(), a.color)).collect(),
-            _ => Vec::new(),
-        })
-        .collect();
     // Layer flags: 1 frozen, 4 locked; 16 from an xref, 32 that xref found.
     let layers: Vec<(String, i16, i16)> = doc
         .layers()
@@ -1278,6 +1413,7 @@ pub fn read<R: BufRead>(reader: &mut R) -> Result<Imported, Error> {
         layer_flags: layer_flags(&bytes),
         hatches: hatch_dxf::read_hatches(&bytes),
         clips: clip_dxf::read_clips(&bytes),
+        layouts: layout_dxf::read(&bytes),
     };
     Ok(from_drawing_styled(&drawing, raw))
 }

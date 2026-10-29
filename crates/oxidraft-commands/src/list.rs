@@ -126,6 +126,13 @@ pub(crate) fn describe(e: &Entity) -> Vec<String> {
                 }
             }
         }
+        Geometry::Viewport { center, width, height, view_center, view_height, .. } => {
+            out.push(at("Center:", *center));
+            out.push(value("Width:", n(*width).trim()));
+            out.push(value("Height:", n(*height).trim()));
+            out.push(at("View center:", *view_center));
+            out.push(value("Scale:", format!("1:{}", n(view_height / height.max(1e-12)).trim())));
+        }
         Geometry::Image { image, origin, u, v, clip } => {
             out.push(value("Image name:", format!("\"{image}\"")));
             out.push(at("Insertion point:", *origin));

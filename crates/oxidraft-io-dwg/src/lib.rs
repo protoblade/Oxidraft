@@ -5,9 +5,11 @@
 use std::io::Cursor;
 use std::path::Path;
 
-use acadrust::{DwgReadOptions, DwgReader, DwgWriter, DxfReader, DxfWriter, types::DxfVersion};
+use acadrust::{CadDocument, DwgReadOptions, DwgReader, DwgWriter, DxfReader, DxfWriter, types::DxfVersion};
 use oxidraft_io_dxf::Imported;
 use oxidraft_model::Document;
+
+mod layouts;
 
 pub type Error = String;
 
@@ -93,15 +95,37 @@ pub fn read(bytes: &[u8]) -> Result<Opened, Error> {
     Ok(Opened { imported, version })
 }
 
-/// The drawing as a DWG file of `version`.
-pub fn write(doc: &Document, version: Version) -> Result<Vec<u8>, Error> {
+/// The drawing as acadrust holds it, layouts and all, ready to write.
+fn cad(doc: &Document) -> Result<CadDocument, Error> {
     let mut dxf = Vec::new();
     oxidraft_io_dxf::write(doc, &mut dxf).map_err(|e| e.to_string())?;
     let mut cad = DxfReader::from_reader(Cursor::new(dxf)).and_then(|r| r.read()).map_err(|e| e.to_string())?;
+    layouts::finish(&mut cad, doc);
+    Ok(cad)
+}
+
+/// The drawing as a DWG file of `version`.
+pub fn write(doc: &Document, version: Version) -> Result<Vec<u8>, Error> {
+    let mut cad = cad(doc)?;
     cad.version = version.code();
     let mut out = Cursor::new(Vec::new());
     DwgWriter::write_to_writer(&mut out, &cad).map_err(|e| e.to_string())?;
     Ok(out.into_inner())
+}
+
+/// The drawing as a DXF file: AutoCAD 2000, or 2010 with PDF underlays
+/// (2007 is the first to have them). Written by acadrust, which also
+/// writes the layouts' page setups and viewports.
+pub fn write_dxf(doc: &Document) -> Result<Vec<u8>, Error> {
+    let pdfs = doc.image_defs().any(|d| d.is_pdf());
+    let version = if pdfs { DxfVersion::AC1024 } else { DxfVersion::AC1015 };
+    let mut cad = cad(doc)?;
+    cad.version = version;
+    DxfWriter::new(&cad).with_version(version).write_to_vec().map_err(|e| e.to_string())
+}
+
+pub fn save_dxf(doc: &Document, path: impl AsRef<Path>) -> Result<(), Error> {
+    std::fs::write(path, write_dxf(doc)?).map_err(|e| e.to_string())
 }
 
 pub fn load_file(path: impl AsRef<Path>) -> Result<Opened, Error> {
@@ -321,6 +345,92 @@ mod tests {
                 .collect();
             assert_eq!(read, clips.iter().cloned().map(Some).collect::<Vec<_>>(), "{version:?}");
         }
+    }
+
+    #[test]
+    fn layouts_survive_with_their_objects_page_setups_and_viewports() {
+        use oxidraft_model::{MODEL, Paper, layout::Layout};
+        let mut doc = survey();
+        doc.add_layer(Layer::new("Notes", 2));
+        let a3 = Paper {
+            size_name: "ISO_A3_(420.00_x_297.00_MM)".into(),
+            width: 420.0,
+            height: 297.0,
+            margins: [7.5, 20.0, 7.5, 20.0],
+            rotation: 0,
+            millimeters: true,
+            raw: Vec::new(),
+        };
+        let sheet = doc.add_layout(Layout { id: MODEL, name: "Sheet A3".into(), tab_order: 1, paper: a3.clone() });
+        let plan = doc.add_layout(Layout { id: MODEL, name: "Plan 1-500".into(), tab_order: 2, paper: a3 });
+        doc.set_space(sheet);
+        doc.add(Geometry::Text {
+            position: Point::new(300.0, 20.0),
+            height: 5.0,
+            rotation: 0.0,
+            width: 0.0,
+            attach: Attach::BottomLeft,
+            content: "ЧЕРТЕЖ".into(),
+        });
+        let frame = [(10.0, 10.0), (410.0, 10.0), (410.0, 287.0), (10.0, 287.0)];
+        doc.add(Geometry::Polyline {
+            vertices: frame.iter().map(|&(x, y)| Vertex::at(Point::new(x, y))).collect(),
+            closed: true,
+        });
+        let viewport = |frozen: Vec<String>| Geometry::Viewport {
+            center: Point::new(200.0, 150.0),
+            width: 300.0,
+            height: 200.0,
+            view_center: Point::new(50.0, 25.0),
+            view_height: 100.0,
+            twist: 0.0,
+            frozen,
+            locked: true,
+            on: true,
+        };
+        doc.add(viewport(Vec::new()));
+        doc.set_space(plan);
+        doc.add(Geometry::Line { start: Point::new(20.0, 20.0), end: Point::new(100.0, 20.0) });
+        doc.add(viewport(vec!["Notes".into()]));
+        doc.set_space(MODEL);
+        let model = doc.len();
+
+        let check = |back: &Document, how: &str| {
+            let names: Vec<&str> = back.layouts().iter().map(|l| l.name.as_str()).collect();
+            assert_eq!(names, ["Sheet A3", "Plan 1-500"], "{how}");
+            let [first, second] = [back.layouts()[0].id, back.layouts()[1].id];
+            let kinds = |space| {
+                let mut k: Vec<&str> =
+                    back.all_entities().filter(|e| e.space == space).map(|e| e.geometry.name()).collect();
+                k.sort();
+                k
+            };
+            assert_eq!(kinds(first), ["MText", "Polyline", "Viewport"], "{how}");
+            assert_eq!(kinds(second), ["Line", "Viewport"], "{how}");
+            assert_eq!(back.len(), model, "model space is as it was ({how})");
+            let paper = &back.layouts()[0].paper;
+            assert_eq!(
+                (paper.width, paper.height, paper.size_name.as_str()),
+                (420.0, 297.0, "ISO_A3_(420.00_x_297.00_MM)"),
+                "{how}"
+            );
+            let vp = back
+                .all_entities()
+                .find(|e| e.space == second && matches!(e.geometry, Geometry::Viewport { .. }))
+                .unwrap();
+            let Geometry::Viewport { center, width, view_center, view_height, frozen, locked, .. } = &vp.geometry
+            else {
+                panic!()
+            };
+            assert!(center.approx_eq(Point::new(200.0, 150.0)) && (*width - 300.0).abs() < 1e-9, "{how}");
+            assert!(view_center.approx_eq(Point::new(50.0, 25.0)) && (*view_height - 100.0).abs() < 1e-9, "{how}");
+            assert_eq!((frozen.as_slice(), *locked), (["Notes".to_string()].as_slice(), true), "{how}");
+        };
+        for version in [Version::R2018, Version::R2000] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+        let dxf = write_dxf(&doc).unwrap();
+        check(&oxidraft_io_dxf::read(&mut dxf.as_slice()).unwrap().document, "DXF");
     }
 
     #[test]

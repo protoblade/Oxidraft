@@ -374,7 +374,7 @@ impl OxidraftApp {
             let version = self.dwg_version.unwrap_or_default();
             oxidraft_io_dwg::save_file(&self.doc, &path, version).map(|()| Some(version))
         } else {
-            oxidraft_io_dxf::save_file(&self.doc, &path).map(|()| None).map_err(|e| e.to_string())
+            oxidraft_io_dwg::save_dxf(&self.doc, &path).map(|()| None)
         };
         match saved {
             Ok(version) => {

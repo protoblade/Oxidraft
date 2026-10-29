@@ -180,6 +180,11 @@ enum Change {
         before: Option<f64>,
         after: Option<f64>,
     },
+    /// The layouts (their names, order and sheets).
+    Layouts {
+        before: Vec<crate::layout::Layout>,
+        after: Vec<crate::layout::Layout>,
+    },
     /// REFEDIT's session: started, its working set changed, or ended.
     RefEdit {
         before: Option<Box<RefEdit>>,
@@ -231,6 +236,10 @@ pub struct Document {
     top: f64,
     /// The block reference or xref being edited in place (REFEDIT).
     refedit: Option<RefEdit>,
+    /// The layouts, and the space being drawn in: model space, or one of
+    /// them. [`Document::entities`] and what's added are that space's.
+    layouts: Vec<crate::layout::Layout>,
+    space: crate::layout::Space,
 }
 
 impl Default for Document {
@@ -261,6 +270,8 @@ impl Document {
             order: BTreeMap::new(),
             top: 0.0,
             refedit: None,
+            layouts: Vec::new(),
+            space: crate::layout::MODEL,
         }
     }
 
@@ -272,20 +283,79 @@ impl Document {
 
     // ---- queries -------------------------------------------------------
 
+    /// The objects in the space being drawn in (model space, or a layout).
     pub fn entities(&self) -> impl Iterator<Item = &Entity> {
+        self.entities.values().filter(move |e| e.space == self.space)
+    }
+
+    /// Every object, in every space.
+    pub fn all_entities(&self) -> impl Iterator<Item = &Entity> {
         self.entities.values()
+    }
+
+    /// The objects of `space`, in draw order.
+    pub fn space_in_draw_order(&self, space: crate::layout::Space) -> Vec<&Entity> {
+        let mut all: Vec<&Entity> = self.entities.values().filter(|e| e.space == space).collect();
+        if !self.order.is_empty() {
+            all.sort_by(|a, b| self.draw_key(a.id).total_cmp(&self.draw_key(b.id)));
+        }
+        all
+    }
+
+    // ---- layouts ----------------------------------------------------------------
+
+    /// The layouts, in tab order.
+    pub fn layouts(&self) -> Vec<&crate::layout::Layout> {
+        let mut all: Vec<&crate::layout::Layout> = self.layouts.iter().collect();
+        all.sort_by_key(|l| l.tab_order);
+        all
+    }
+
+    pub fn layout(&self, space: crate::layout::Space) -> Option<&crate::layout::Layout> {
+        self.layouts.iter().find(|l| l.id == space)
+    }
+
+    /// Adds a layout (its `id` is given here) and returns its space.
+    pub fn add_layout(&mut self, mut layout: crate::layout::Layout) -> crate::layout::Space {
+        layout.id = self.layouts.iter().map(|l| l.id).max().unwrap_or(crate::layout::MODEL) + 1;
+        let id = layout.id;
+        let mut after = self.layouts.clone();
+        after.push(layout);
+        self.set_layouts(after);
+        id
+    }
+
+    pub fn set_layouts(&mut self, layouts: Vec<crate::layout::Layout>) {
+        let before = std::mem::replace(&mut self.layouts, layouts.clone());
+        if before != layouts {
+            self.record(Change::Layouts { before, after: layouts });
+        }
+    }
+
+    /// The space being drawn in: model space, or a layout.
+    pub fn space(&self) -> crate::layout::Space {
+        self.space
+    }
+
+    /// Switches to model space or a layout, as the tabs do. Not a step to
+    /// undo.
+    pub fn set_space(&mut self, space: crate::layout::Space) {
+        if space == crate::layout::MODEL || self.layout(space).is_some() {
+            self.space = space;
+        }
     }
 
     pub fn entity(&self, id: EntityId) -> Option<&Entity> {
         self.entities.get(&id)
     }
 
+    /// How many objects the space being drawn in has.
     pub fn len(&self) -> usize {
-        self.entities.len()
+        self.entities().count()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entities.is_empty()
+        self.entities().next().is_none()
     }
 
     pub fn layers(&self) -> &[Layer] {
@@ -621,8 +691,7 @@ impl Document {
     /// AutoCAD's ZOOM Extents, objects on frozen layers don't count, and
     /// neither do construction lines and rays, which go on forever.
     pub fn extents(&self) -> Option<Aabb> {
-        self.entities
-            .values()
+        self.entities()
             .filter(|e| !self.layer(&e.layer).is_some_and(|l| l.frozen) && !e.geometry.is_infinite())
             .map(|e| self.entity_bounds(e))
             .reduce(Aabb::union)
@@ -855,7 +924,8 @@ impl Document {
         };
         let id = EntityId(self.next_id);
         self.next_id += 1;
-        let entity = Entity { id, layer, color, linetype: linetype.to_string(), lineweight, geometry };
+        let entity =
+            Entity { id, space: self.space, layer, color, linetype: linetype.to_string(), lineweight, geometry };
         // Something was brought to the front: new objects go above it, in
         // the same undo step.
         let over_top = self.top >= id.0 as f64;
@@ -882,12 +952,9 @@ impl Document {
     }
 
     /// The objects from the back to the front.
+    /// The objects of the space being drawn in, in draw order.
     pub fn entities_in_draw_order(&self) -> Vec<&Entity> {
-        let mut all: Vec<&Entity> = self.entities.values().collect();
-        if !self.order.is_empty() {
-            all.sort_by(|a, b| self.draw_key(a.id).total_cmp(&self.draw_key(b.id)));
-        }
-        all
+        self.space_in_draw_order(self.space)
     }
 
     fn set_draw_key(&mut self, id: EntityId, key: f64) {
@@ -1130,6 +1197,7 @@ impl Document {
                     Change::Image { .. } => "Image",
                     Change::Order { .. } => "Draw order",
                     Change::RefEdit { .. } => "Reference edit",
+                    Change::Layouts { .. } => "Layout",
                 };
                 self.undo_stack.push(Transaction { name: name.into(), changes: vec![change] });
                 self.redo_stack.clear();
@@ -1181,6 +1249,7 @@ impl Document {
             Change::RefEdit { before, after } => {
                 self.refedit = if forward { after } else { before }.as_deref().cloned()
             }
+            Change::Layouts { before, after } => self.layouts = if forward { after } else { before }.clone(),
         }
     }
 }

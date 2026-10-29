@@ -381,6 +381,17 @@ impl OxidraftApp {
                 ("Rotation", Value::Angle(Point::ORIGIN.angle_to(*u))),
                 ("Clipped", Value::Text(if clip.len() >= 3 { "Yes" } else { "No" }.into())),
             ],
+            Geometry::Viewport { center, width, height, view_center, view_height, locked, on, .. } => vec![
+                ("Center X", Value::Text(fmt(center.x))),
+                ("Center Y", Value::Text(fmt(center.y))),
+                ("Width", Value::Text(fmt(*width))),
+                ("Height", Value::Text(fmt(*height))),
+                ("On", Value::Text(if *on { "Yes" } else { "No" }.into())),
+                ("Display locked", Value::Text(if *locked { "Yes" } else { "No" }.into())),
+                ("Standard scale", Value::Text(format!("1:{}", fmt(view_height / height.max(1e-12))))),
+                ("View center X", Value::Text(fmt(view_center.x))),
+                ("View center Y", Value::Text(fmt(view_center.y))),
+            ],
             Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => vec![
                 ("Basepoint X", Value::Number(base.x)),
                 ("Basepoint Y", Value::Number(base.y)),

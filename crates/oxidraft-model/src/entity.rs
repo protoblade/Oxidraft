@@ -63,6 +63,17 @@ pub fn constant_width(vertices: &[Vertex]) -> Option<f64> {
     vertices.iter().all(|v| v.start_width == w && v.end_width == w).then_some(w)
 }
 
+/// A viewport's frame: lower left, lower right, upper right, upper left.
+pub fn viewport_corners(center: Point, width: f64, height: f64) -> [Point; 4] {
+    let (w, h) = (width / 2.0, height / 2.0);
+    [
+        Point::new(center.x - w, center.y - h),
+        Point::new(center.x + w, center.y - h),
+        Point::new(center.x + w, center.y + h),
+        Point::new(center.x - w, center.y + h),
+    ]
+}
+
 /// `direction` scaled to length 1 (or +X if it has none).
 fn unit(direction: Point) -> Point {
     let len = direction.length();
@@ -189,6 +200,21 @@ pub enum Geometry {
         u: Point,
         v: Point,
         clip: Vec<Point>,
+    },
+    /// A layout viewport (DXF VIEWPORT): a `width` x `height` window in
+    /// paper space centered on `center`, showing model space around
+    /// `view_center`, `view_height` model units tall, turned by `twist`
+    /// degrees. `frozen` names the layers it doesn't show.
+    Viewport {
+        center: Point,
+        width: f64,
+        height: f64,
+        view_center: Point,
+        view_height: f64,
+        twist: f64,
+        frozen: Vec<String>,
+        locked: bool,
+        on: bool,
     },
 }
 
@@ -328,6 +354,7 @@ impl Geometry {
             Geometry::Xline { .. } => "Xline",
             Geometry::Ray { .. } => "Ray",
             Geometry::Image { .. } => "Raster Image",
+            Geometry::Viewport { .. } => "Viewport",
         }
     }
 
@@ -418,6 +445,11 @@ impl Geometry {
             | Geometry::AngularDimension { .. }
             | Geometry::Leader { .. }
             | Geometry::Hatch { .. } => Vec::new(),
+            // Its border, which snaps and picks like a rectangle.
+            Geometry::Viewport { center, width, height, .. } => {
+                let c = viewport_corners(*center, *width, *height);
+                (0..4).map(|i| Seg::Line(Segment::new(c[i], c[(i + 1) % 4]))).collect()
+            }
         }
     }
 
@@ -675,6 +707,20 @@ impl Geometry {
                 v: f(*origin + *v) - f(*origin),
                 clip: clip.iter().map(|p| f(*p)).collect(),
             },
+            // Its frame moves and scales; the view through it stays.
+            Geometry::Viewport { center, width, height, view_center, view_height, twist, frozen, locked, on } => {
+                Geometry::Viewport {
+                    center: f(*center),
+                    width: width * length_factor,
+                    height: height * length_factor,
+                    view_center: *view_center,
+                    view_height: *view_height,
+                    twist: *twist,
+                    frozen: frozen.clone(),
+                    locked: *locked,
+                    on: *on,
+                }
+            }
             Geometry::Ray { base, direction } => {
                 Geometry::Ray { base: f(*base), direction: f(*base + *direction) - f(*base) }
             }
@@ -790,6 +836,7 @@ impl Geometry {
             }
             Geometry::Xline { base, .. } | Geometry::Ray { base, .. } => self.translated(shift(*base) - *base),
             Geometry::Image { origin, .. } => self.translated(shift(*origin) - *origin),
+            Geometry::Viewport { center, .. } => self.translated(shift(*center) - *center),
             Geometry::Insert { placement, .. } => self.translated(shift(placement.position) - placement.position),
             Geometry::Text { position, .. } => self.translated(shift(*position) - *position),
             Geometry::Dimension { p1, p2, line, rotation, aligned, text, scale } => Geometry::Dimension {
@@ -869,6 +916,11 @@ impl Geometry {
             Geometry::Spline(s) => s.grip_points(),
             Geometry::Image { origin, u, v, .. } => crate::underlay::image_corners(*origin, *u, *v).to_vec(),
             Geometry::Xline { base, direction } | Geometry::Ray { base, direction } => vec![*base, *base + *direction],
+            Geometry::Viewport { center, width, height, .. } => {
+                let mut g = vec![*center];
+                g.extend(viewport_corners(*center, *width, *height));
+                g
+            }
         }
     }
 
@@ -941,6 +993,19 @@ impl Geometry {
                 Geometry::Leader { points, content: content.clone(), scale: *scale }
             }
             (Geometry::Hatch { .. }, _) => self.translated(to - self.bounds().center()),
+            (Geometry::Viewport { center, .. }, 0) => self.translated(to - *center),
+            // A corner: the opposite one stays.
+            (Geometry::Viewport { center, width, height, .. }, i) => {
+                let corners = viewport_corners(*center, *width, *height);
+                let fixed = corners[(i + 1) % 4];
+                let mut g = self.clone();
+                if let Geometry::Viewport { center, width, height, .. } = &mut g {
+                    *center = fixed.midpoint(to);
+                    *width = (to.x - fixed.x).abs();
+                    *height = (to.y - fixed.y).abs();
+                }
+                g
+            }
             (Geometry::Ellipse(e), 0) => self.translated(to - e.center),
             (Geometry::Ellipse(e), 1 | 3) => Geometry::Ellipse(e.with_axes(e.center.distance(to), e.b())),
             (Geometry::Ellipse(e), 2 | 4) => Geometry::Ellipse(e.with_axes(e.a(), e.center.distance(to))),
@@ -1045,6 +1110,8 @@ pub fn quadrants(center: Point, radius: f64) -> [Point; 4] {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entity {
     pub id: EntityId,
+    /// Model space, or the layout it's drawn on.
+    pub space: crate::layout::Space,
     pub layer: String,
     pub color: Color,
     /// A linetype name, or ByLayer / ByBlock (see [`crate::linetype`]).
