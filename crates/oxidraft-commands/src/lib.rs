@@ -223,6 +223,10 @@ pub enum UiRequest {
     TableExport(EntityId),
     /// BROWSER, GOTOURL: this address, to open.
     OpenUrl(String),
+    /// PASTEASHYPERLINK: these objects get the clipboard's text as a hyperlink.
+    PasteHyperlink(Vec<EntityId>),
+    /// VIEWGO: this named view, to make current.
+    RestoreView(String),
 }
 
 /// Result of feeding one input to a command.

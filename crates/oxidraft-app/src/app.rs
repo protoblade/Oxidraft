@@ -131,6 +131,13 @@ pub struct OxidraftApp {
     pub(crate) log_file: Option<(std::path::PathBuf, usize)>,
     /// PLOTSTAMP.
     pub(crate) plot_stamp: bool,
+    /// QVLAYOUT's list open.
+    pub(crate) qv_layouts: bool,
+    /// APERTURE: how far object snaps reach, in screen points.
+    pub(crate) aperture: f32,
+    /// AUTOCOMPLETE off, and HYPERLINKOPTIONS' tooltips off.
+    pub(crate) autocomplete_off: bool,
+    pub(crate) hyperlink_tips_off: bool,
     pub(crate) publish: Option<crate::publish::PublishDialog>,
     /// UNITS: the settings being chosen.
     pub(crate) units_dialog: Option<oxidraft_model::Units>,
@@ -344,6 +351,10 @@ impl OxidraftApp {
             hidden_palettes: None,
             log_file: None,
             plot_stamp: false,
+            qv_layouts: false,
+            aperture: crate::canvas::APERTURE,
+            autocomplete_off: false,
+            hyperlink_tips_off: false,
             publish: None,
             units_dialog: None,
             rename: None,
@@ -532,7 +543,7 @@ impl OxidraftApp {
     }
 
     pub(crate) fn pick_tolerance(&self) -> f64 {
-        self.view.units(crate::canvas::APERTURE)
+        self.view.units(self.aperture)
     }
 
     // ---- files -------------------------------------------------------------
@@ -760,6 +771,37 @@ impl OxidraftApp {
             "DWGCONVERT" => self.dwg_convert(),
             "PLOTSTAMP" => self.toggle_plot_stamp(),
             "WHOHAS" => self.who_has(),
+            "EATTEXT" | "ATTEXT" | "DATAEXTRACTION" | "DX" => self.extract_attributes(),
+            "WMFIN" => self.wmf_in(),
+            "PUBLISHTOWEB" => self.publish_to_web(),
+            "PSETUPIN" => self.psetupin(),
+            "QVDRAWING" => {
+                self.tab_request = Some(crate::drawings::TabRequest::Arrange(crate::drawings::Arrange::Vertical))
+            }
+            "QVDRAWINGCLOSE" => self.tab_request = Some(crate::drawings::TabRequest::CloseArranged),
+            "QVLAYOUT" => self.qv_layouts = true,
+            "QVLAYOUTCLOSE" => self.qv_layouts = false,
+            "CUIEXPORT" => self.cui_export(),
+            "CUIIMPORT" | "CUILOAD" => self.cui_import(),
+            "CUIUNLOAD" => {
+                let settings = crate::settings::Settings {
+                    shortcuts: Vec::new(),
+                    quick_access: Vec::new(),
+                    ..self.settings.clone()
+                };
+                self.keep_settings(settings);
+                self.engine.log("Back to the built-in shortcuts and Quick Access Toolbar.");
+            }
+            "AUTOCOMPLETE" => {
+                self.autocomplete_off = !self.autocomplete_off;
+                self.log_toggle("AutoComplete", !self.autocomplete_off);
+            }
+            "HYPERLINKOPTIONS" => {
+                self.hyperlink_tips_off = !self.hyperlink_tips_off;
+                self.log_toggle("Hyperlink tooltips", !self.hyperlink_tips_off);
+            }
+            "MARKUPCLOSE" => self.markup_close(),
+            "EXPORTTOAUTOCAD" | "AECTOACAD" => self.export(false),
             "SHEETSET" | "SSM" => self.toggle_sheet_set(),
             "SHEETSETHIDE" => self.sheet_set = None,
             "OPENSHEETSET" => {
@@ -869,7 +911,9 @@ impl OxidraftApp {
             let expanded = self.engine.expand_alias(&text);
             if expanded != text.trim() {
                 text = expanded;
-            } else if let Some(c) = Engine::suggest(&text).get(self.suggestion) {
+            } else if !self.autocomplete_off
+                && let Some(c) = Engine::suggest(&text).get(self.suggestion)
+            {
                 text = c.name.to_string();
             }
             self.suggestion = 0;
@@ -904,6 +948,8 @@ impl OxidraftApp {
                 UiRequest::ChangeSpace(ids) => self.change_space(&ids),
                 UiRequest::WmfOut(ids) => self.wmf_out(&ids),
                 UiRequest::RunCommand(c) => self.run(&c),
+                UiRequest::PasteHyperlink(ids) => self.paste_as_hyperlink(&ids),
+                UiRequest::RestoreView(name) => self.go_to_view(&name),
                 UiRequest::TableExport(id) => self.table_export(id),
                 UiRequest::OpenUrl(url) => {
                     if let Err(e) = crate::more_app::open_url(&url) {
@@ -1259,6 +1305,7 @@ impl eframe::App for OxidraftApp {
         self.plotter_manager_dialog(&ctx);
         self.cui_dialog(&ctx);
         self.sheet_set_palette(&ctx);
+        self.quick_view_layouts(&ctx);
         self.publish_dialog(&ctx);
         self.units_dialog(&ctx);
         self.rename_dialog(&ctx);

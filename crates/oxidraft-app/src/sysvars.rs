@@ -121,6 +121,10 @@ fn vars() -> Vec<Var> {
             a.anno_autoscale = parse_int(v, -4, 4)? > 0;
             Ok(())
         }),
+        var!("APERTURE", |a| number(f64::from(a.aperture)), |a, v| {
+            a.aperture = parse_int(v, 1, 50)? as f32;
+            Ok(())
+        }),
         var!("ARRAYASSOCIATIVITY", |a| flag(a.engine.vars.array_assoc), |a, v| {
             a.engine.vars.array_assoc = parse_flag(v)?;
             Ok(())

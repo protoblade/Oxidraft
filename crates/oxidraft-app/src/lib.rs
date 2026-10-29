@@ -23,6 +23,7 @@ mod files;
 mod fonts;
 mod icons;
 mod image_out;
+mod last_cmds;
 mod layer_states;
 mod layer_walk;
 mod layers;

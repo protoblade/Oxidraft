@@ -3057,3 +3057,45 @@ fn isolation_addselected_and_more_lt_commands() {
     h.run_steps(1);
     assert!(h.query_by_label("Home").is_some());
 }
+
+#[test]
+fn urls_views_web_pages_and_customization_files() {
+    let mut h = app_with_line();
+    let first = h.state_mut().document_mut().entities().next().unwrap().id;
+    // ATTACHURL, then DETACHURL.
+    h.state_mut().engine_mut().set_selection(vec![first]);
+    type_all(&mut h, &["attachurl", "https://example.com/plan"]);
+    let link = |h: &mut Harness<'_, OxidraftApp>| {
+        h.state_mut().document_mut().entity(first).and_then(|e| e.hyperlink.as_ref().map(|l| l.url.clone()))
+    };
+    assert_eq!(link(&mut h).as_deref(), Some("https://example.com/plan"));
+    h.state_mut().engine_mut().set_selection(vec![first]);
+    type_all(&mut h, &["detachurl"]);
+    assert_eq!(link(&mut h), None);
+    // APERTURE: snaps reach 20 pixels.
+    type_all(&mut h, &["aperture", "20"]);
+    type_all(&mut h, &["aperture"]);
+    assert!(
+        h.state_mut().engine_mut().history().iter().any(|l| l.contains("APERTURE") || l.contains("Object snap target"))
+    );
+    // PUBLISHTOWEB: a page with an image of each sheet.
+    let dir = std::env::temp_dir().join(format!("oxidraft-web-{}", std::process::id()));
+    let n = h.state_mut().publish_to_web_in(&dir).unwrap();
+    assert!(n >= 1);
+    let html = std::fs::read_to_string(dir.join("index.html")).unwrap();
+    assert!(html.contains("sheet1.png") && dir.join("sheet1.png").is_file());
+    // WMFIN: a metafile written by WMFOUT comes back in as objects.
+    let ids: Vec<_> = h.state_mut().document_mut().entities().map(|e| e.id).collect();
+    let wmf = dir.join("lines.wmf");
+    h.state_mut().wmf_out_to(&wmf, &ids).unwrap();
+    let before = h.state_mut().document_mut().len();
+    assert!(h.state_mut().wmf_in_file(&wmf).unwrap() >= 2);
+    assert!(h.state_mut().document_mut().len() >= before + 2);
+    // CUIIMPORT: shortcuts from a file.
+    let cui = dir.join("mine.cui.json");
+    std::fs::write(&cui, r#"{"shortcuts":[["Ctrl+Shift+K","CIRCLE"]],"quick_access":["LINE"]}"#).unwrap();
+    h.state_mut().cui_import_from(&cui).unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label("line").is_some(), "LINE on the Quick Access Toolbar");
+    std::fs::remove_dir_all(&dir).ok();
+}

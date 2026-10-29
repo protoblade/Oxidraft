@@ -33,6 +33,8 @@ pub enum TabRequest {
     /// The next drawing, or the previous one.
     Next(bool),
     Arrange(Arrange),
+    /// The arranged drawings put away (QVDRAWINGCLOSE).
+    CloseArranged,
 }
 
 /// The drawings open in the window, and which one is current.
@@ -195,6 +197,7 @@ impl Drawings {
                 }
             }
             TabRequest::Arrange(a) => self.arranged = (self.list.len() > 1).then_some(a),
+            TabRequest::CloseArranged => self.arranged = None,
         }
     }
 

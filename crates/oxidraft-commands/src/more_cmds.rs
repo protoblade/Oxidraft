@@ -676,3 +676,160 @@ mod tests {
         assert!(d.len() > 1);
     }
 }
+
+/// ATTACHURL (a web address on the objects selected), DETACHURL (their
+/// hyperlinks taken off) and PASTEASHYPERLINK (the clipboard's text on
+/// them, which the app fills in).
+pub struct Url {
+    mode: UrlMode,
+    ids: Vec<EntityId>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum UrlMode {
+    Attach,
+    Detach,
+    Paste,
+}
+
+impl Url {
+    pub fn new(mode: UrlMode) -> Self {
+        Self { mode, ids: Vec::new() }
+    }
+}
+
+impl Command for Url {
+    fn prompt(&self) -> Prompt {
+        if self.ids.is_empty() { Prompt::new("Select objects") } else { Prompt::new("Enter hyperlink") }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        match input {
+            Input::Selection(s) if self.ids.is_empty() => {
+                if s.ids.is_empty() {
+                    return Ok(Step::Done);
+                }
+                match self.mode {
+                    UrlMode::Attach => self.ids = s.ids,
+                    UrlMode::Detach => {
+                        let mut n = 0;
+                        for id in s.ids {
+                            if ctx.doc.entity(id).is_some_and(|e| e.hyperlink.is_some()) {
+                                ctx.doc.update(id, |e| e.hyperlink = None);
+                                n += 1;
+                            }
+                        }
+                        ctx.messages.push(format!("{n} hyperlink(s) deleted."));
+                        return Ok(Step::Done);
+                    }
+                    UrlMode::Paste => {
+                        ctx.ui = Some(UiRequest::PasteHyperlink(s.ids));
+                        return Ok(Step::Done);
+                    }
+                }
+            }
+            Input::Text(t) if !t.trim().is_empty() => {
+                let link = oxidraft_model::Hyperlink { url: t.trim().to_string(), description: String::new() };
+                for id in &self.ids {
+                    ctx.doc.update(*id, |e| e.hyperlink = Some(Box::new(link.clone())));
+                }
+                return Ok(Step::Done);
+            }
+            Input::Enter => return Ok(Step::Done),
+            _ => return Err("Select objects, then press Enter.".into()),
+        }
+        Ok(Step::Continue)
+    }
+
+    fn wants_selection(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    fn wants_text(&self) -> bool {
+        !self.ids.is_empty()
+    }
+}
+
+/// VIEWGO and VIEWPLAY: a named view, by name, made current.
+#[derive(Default)]
+pub struct ViewGo;
+
+impl Command for ViewGo {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Enter view name")
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let Input::Text(name) = input else { return Ok(Step::Done) };
+        if !ctx.doc.views().iter().any(|v| v.name.eq_ignore_ascii_case(name.trim())) {
+            return Err(format!("View \"{}\" not found.", name.trim()));
+        }
+        ctx.ui = Some(UiRequest::RestoreView(name.trim().to_string()));
+        Ok(Step::Done)
+    }
+
+    fn wants_text(&self) -> bool {
+        true
+    }
+
+    fn text_with_spaces(&self) -> bool {
+        true
+    }
+}
+
+/// XBIND: an attached drawing's layer or block (XREF|NAME) made this
+/// drawing's own, as XREF$0$NAME, as AutoCAD binds them.
+#[derive(Default)]
+pub struct XBind;
+
+impl Command for XBind {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Enter the attached drawing's layer or block to bind (XREF|NAME)")
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let Input::Text(t) = input else { return Ok(Step::Done) };
+        let name = t.trim();
+        let Some((xref, own)) = name.split_once('|') else {
+            return Err("Name one of an attached drawing's: XREF|NAME.".into());
+        };
+        let bound = format!("{xref}$0${own}");
+        if let Some(layer) = ctx.doc.layer(name).cloned() {
+            ctx.doc.rename_layer(&layer.name, &bound)?;
+        } else if ctx.doc.block(name).is_some() {
+            ctx.doc.rename_block(name, &bound)?;
+        } else {
+            return Err(format!("\"{name}\" isn't an attached drawing's layer or block."));
+        }
+        ctx.messages.push(format!("{name} bound as {bound}."));
+        Ok(Step::Done)
+    }
+
+    fn wants_text(&self) -> bool {
+        true
+    }
+
+    fn text_with_spaces(&self) -> bool {
+        true
+    }
+}
+
+/// APERTURE: how many pixels round the cursor object snaps reach.
+#[derive(Default)]
+pub struct Aperture;
+
+impl Command for Aperture {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Object snap target height (1-50 pixels)").with_default("10")
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let v = match input {
+            Input::Value(v) if (1.0..=50.0).contains(&v) => v,
+            Input::Enter => 10.0,
+            _ => return Err("Requires an integer between 1 and 50.".into()),
+        };
+        ctx.ui = Some(UiRequest::SetVar("APERTURE".into(), format!("{}", v.round())));
+        Ok(Step::Done)
+    }
+}

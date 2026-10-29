@@ -1318,13 +1318,13 @@ impl OxidraftApp {
         let selecting_in_command = self.engine.is_active() && self.picks_objects();
         if !selecting_in_command {
             let arm = rect.width().max(rect.height()) * CURSOR_SIZE / 100.0;
-            let gap = if self.picks_objects() { APERTURE / 2.0 + 1.0 } else { 0.0 };
+            let gap = if self.picks_objects() { self.aperture / 2.0 + 1.0 } else { 0.0 };
             for d in [vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0)] {
                 painter.line_segment([at + d * gap, at + d * arm], stroke);
             }
         }
         if self.picks_objects() {
-            let half = APERTURE / 2.0;
+            let half = self.aperture / 2.0;
             painter.rect_stroke(Rect::from_center_size(at, vec2(half, half) * 2.0), 0.0, stroke, StrokeKind::Middle);
         }
     }
@@ -1348,6 +1348,7 @@ impl OxidraftApp {
         // An object's hyperlink, under the cursor while idle.
         if !self.engine.is_active()
             && c.snap.is_none()
+            && !self.hyperlink_tips_off
             && let Some(link) = snap::pick(&self.doc, c.raw, self.pick_tolerance())
                 .and_then(|id| self.doc.entity(id))
                 .and_then(|e| e.hyperlink.as_ref())
