@@ -116,6 +116,7 @@ pub struct OxidraftApp {
     pub(crate) publish: Option<crate::publish::PublishDialog>,
     /// UNITS: the settings being chosen.
     pub(crate) units_dialog: Option<oxidraft_model::Units>,
+    pub(crate) rename: Option<crate::manage::RenameDialog>,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
     pub(crate) ribbon_space: oxidraft_model::Space,
@@ -258,6 +259,7 @@ impl OxidraftApp {
             export_pdf: None,
             publish: None,
             units_dialog: None,
+            rename: None,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
@@ -563,6 +565,7 @@ impl OxidraftApp {
             "EXPORTPDF" => self.open_export_pdf(),
             "PUBLISH" => self.open_publish(),
             "UNITS" | "UN" => self.open_units(),
+            "RENAME" | "REN" => self.open_rename(),
             "COMPARE" => self.compare_command(),
             "DIMSTYLE" | "D" | "DST" => self.open_dim_style(),
             "FIND" => self.find_replace = Some(Default::default()),
@@ -917,6 +920,7 @@ impl eframe::App for OxidraftApp {
         self.export_pdf_dialog(&ctx);
         self.publish_dialog(&ctx);
         self.units_dialog(&ctx);
+        self.rename_dialog(&ctx);
         self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);

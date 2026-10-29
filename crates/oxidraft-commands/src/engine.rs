@@ -65,6 +65,7 @@ use crate::{
     polygon::Polygon,
     rectang::Rectang,
     refedit::{RefClose, RefEdit, RefSet},
+    rename::Rename,
     revcloud::RevCloud,
     rotate::Rotate,
     scale::Scale,
@@ -421,6 +422,18 @@ pub const COMMANDS: &[CommandInfo] = &[
         aliases: &["-UN"],
         description: "Set the drawing units at the command line",
         make: Some(|| Box::new(UnitsCmd::default())),
+    },
+    CommandInfo {
+        name: "RENAME",
+        aliases: &["REN"],
+        description: "Rename blocks, layers, linetypes and views",
+        make: None,
+    },
+    CommandInfo {
+        name: "-RENAME",
+        aliases: &["-REN"],
+        description: "Rename a block, layer, linetype or view at the command line",
+        make: Some(|| Box::new(Rename::default())),
     },
     CommandInfo {
         name: "EXPORTPDF",

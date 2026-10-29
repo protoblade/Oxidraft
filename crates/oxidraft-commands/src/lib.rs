@@ -53,6 +53,7 @@ mod point;
 mod polygon;
 mod rectang;
 mod refedit;
+mod rename;
 mod revcloud;
 mod rotate;
 mod scale;
@@ -77,6 +78,7 @@ pub use clipboard::{clip_of, paste};
 pub use engine::{COMMANDS, CommandInfo, Engine, Tracked};
 pub use input::{Input, parse_input};
 pub use mview::{viewport_at, viewport_onto_model};
+pub use rename::Named;
 pub use select::{QuickOperator, QuickProperty, QuickSelect, SimilarMode, color_label, object_type, select_similar};
 pub use views::Tiling;
 

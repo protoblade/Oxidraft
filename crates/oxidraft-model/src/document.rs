@@ -565,6 +565,22 @@ impl Document {
         found
     }
 
+    /// RENAME a named view.
+    pub fn rename_view(&mut self, old: &str, new: &str) -> Result<(), String> {
+        check_name(new)?;
+        let view = self.views.iter().find(|v| v.name.eq_ignore_ascii_case(old.trim())).cloned();
+        let view = view.ok_or_else(|| format!("View \"{old}\" not found."))?;
+        let taken = self.views.iter().any(|v| v.name.eq_ignore_ascii_case(new.trim()) && v.name != view.name);
+        if taken {
+            return Err(format!("A view named \"{}\" already exists.", new.trim()));
+        }
+        let mut after: Vec<NamedView> = self.views.iter().filter(|v| v.name != view.name).cloned().collect();
+        after.push(NamedView { name: new.trim().into(), ..view });
+        after.sort_by_key(|v| v.name.to_lowercase());
+        self.set_views(after);
+        Ok(())
+    }
+
     fn set_views(&mut self, views: Vec<NamedView>) {
         let before = std::mem::replace(&mut self.views, views.clone());
         if before != views {
@@ -817,6 +833,46 @@ impl Document {
     /// hasn't loaded).
     pub fn own_linetypes(&self) -> Vec<String> {
         self.linetypes.values().map(|l| l.name.clone()).collect()
+    }
+
+    /// RENAME a linetype: its definition, and the objects, layers and
+    /// block contents that use it. Continuous, ByLayer and ByBlock can't
+    /// be.
+    pub fn rename_linetype(&mut self, old: &str, new: &str) -> Result<(), String> {
+        let new = new.trim();
+        check_name(new)?;
+        let special = |n: &str| [CONTINUOUS, "ByLayer", "ByBlock"].iter().any(|s| s.eq_ignore_ascii_case(n.trim()));
+        if special(old) || special(new) {
+            return Err(format!("\"{}\" can't be renamed.", old.trim()));
+        }
+        let lt = self.linetype(old.trim()).ok_or_else(|| format!("Linetype \"{}\" not found.", old.trim()))?;
+        if !new.eq_ignore_ascii_case(&lt.name) && self.linetypes.contains_key(&new.to_ascii_uppercase()) {
+            return Err(format!("A linetype named \"{new}\" already exists."));
+        }
+        let old = lt.name.clone();
+        let old_key = old.to_ascii_uppercase();
+        if let Some(before) = self.linetypes.remove(&old_key) {
+            self.record(Change::Linetype { key: old_key, before: Some(before), after: None });
+        }
+        let renamed = Linetype { name: new.into(), ..lt };
+        let key = new.to_ascii_uppercase();
+        let before = self.linetypes.insert(key.clone(), renamed.clone());
+        self.record(Change::Linetype { key, before, after: Some(renamed) });
+        let is_old = |n: &str| n.eq_ignore_ascii_case(&old);
+        let ids: Vec<EntityId> = self.entities.values().filter(|e| is_old(&e.linetype)).map(|e| e.id).collect();
+        for id in ids {
+            self.update(id, |e| e.linetype = new.to_string());
+        }
+        self.edit_layers(|layers| {
+            layers.iter_mut().filter(|l| is_old(&l.linetype)).for_each(|l| l.linetype = new.into())
+        });
+        let blocks: Vec<Block> =
+            self.blocks.values().filter(|b| b.entities.iter().any(|be| is_old(&be.linetype))).cloned().collect();
+        for mut b in blocks {
+            b.entities.iter_mut().filter(|be| is_old(&be.linetype)).for_each(|be| be.linetype = new.to_string());
+            self.define_block(b);
+        }
+        Ok(())
     }
 
     /// Removes one of the drawing's linetypes (PURGE), undoably.
@@ -1281,6 +1337,54 @@ impl Document {
         let name = block.name.clone();
         let before = self.blocks.insert(name.clone(), block.clone());
         self.record(Change::Block { name, before, after: Some(block) });
+    }
+
+    /// RENAME a block: its definition and every reference to it, nested
+    /// ones too. Anonymous blocks and external references' can't be.
+    pub fn rename_block(&mut self, old: &str, new: &str) -> Result<(), String> {
+        let new = new.trim();
+        check_name(new)?;
+        let block = self.block(old.trim()).cloned().ok_or_else(|| format!("Block \"{}\" not found.", old.trim()))?;
+        if block.name.starts_with('*') || is_dependent(&block.name) || self.xref(&block.name).is_some() {
+            return Err(format!("\"{}\" can't be renamed.", block.name));
+        }
+        if !new.eq_ignore_ascii_case(&block.name) && self.block(new).is_some() {
+            return Err(format!("A block named \"{new}\" already exists."));
+        }
+        let old = block.name.clone();
+        let retarget = |g: &mut Geometry| {
+            if let Geometry::Insert { block, .. } = g
+                && block.eq_ignore_ascii_case(&old)
+            {
+                *block = new.to_string();
+            }
+        };
+        self.remove_block(&old);
+        self.define_block(Block { name: new.into(), ..block });
+        let ids: Vec<EntityId> = self
+            .entities
+            .values()
+            .filter(|e| matches!(&e.geometry, Geometry::Insert { block, .. } if block.eq_ignore_ascii_case(&old)))
+            .map(|e| e.id)
+            .collect();
+        for id in ids {
+            self.update(id, |e| retarget(&mut e.geometry));
+        }
+        let nesting: Vec<Block> = self
+            .blocks
+            .values()
+            .filter(|b| {
+                b.entities.iter().any(
+                    |be| matches!(&be.geometry, Geometry::Insert { block, .. } if block.eq_ignore_ascii_case(&old)),
+                )
+            })
+            .cloned()
+            .collect();
+        for mut b in nesting {
+            b.entities.iter_mut().for_each(|be| retarget(&mut be.geometry));
+            self.define_block(b);
+        }
+        Ok(())
     }
 
     /// Removes a block definition (whatever still references it draws nothing).

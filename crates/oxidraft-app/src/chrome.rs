@@ -252,7 +252,9 @@ impl OxidraftApp {
                 }
             }
             ui.menu_button("Drawing Utilities", |ui| {
-                for (label, cmd) in [("Units...", "UNITS"), ("Audit", "AUDIT"), ("Purge...", "PURGE")] {
+                for (label, cmd) in
+                    [("Units...", "UNITS"), ("Rename...", "RENAME"), ("Audit", "AUDIT"), ("Purge...", "PURGE")]
+                {
                     if ui.button(label).clicked() {
                         self.run(cmd);
                     }

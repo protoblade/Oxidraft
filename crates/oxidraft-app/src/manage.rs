@@ -1,8 +1,8 @@
-//! The Manage tab's dialogs: PURGE's list of what nothing uses, and
-//! ALIASEDIT's command aliases.
+//! The Manage tab's dialogs: PURGE's list of what nothing uses,
+//! ALIASEDIT's command aliases, and RENAME's named objects.
 
 use eframe::egui::{self, Align, Layout, RichText, vec2};
-use oxidraft_commands::{COMMANDS, Engine};
+use oxidraft_commands::{COMMANDS, Engine, Named};
 use oxidraft_model::{EntityId, Geometry, Unused};
 
 use crate::{app::OxidraftApp, theme};
@@ -40,7 +40,106 @@ pub(crate) struct AliasDialog {
     command: String,
 }
 
+/// RENAME: the kind of named object, the one picked, the new name, and
+/// what went wrong last.
+pub(crate) struct RenameDialog {
+    kind: Named,
+    old: Option<String>,
+    new: String,
+    error: Option<String>,
+}
+
 impl OxidraftApp {
+    pub(crate) fn open_rename(&mut self) {
+        self.rename = Some(RenameDialog { kind: Named::Block, old: None, new: String::new(), error: None });
+    }
+
+    pub(crate) fn rename_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut d) = self.rename.take() else { return };
+        let (mut open, mut ok, mut cancel, mut rename) = (true, false, false, false);
+        let mut fields = Vec::new();
+        let names = d.kind.names(&self.doc);
+        egui::Window::new("Rename")
+            .id(egui::Id::unique("rename_dialog"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_pos([420.0, 160.0])
+            .constrain_to(self.dialog_area(ctx))
+            .show(ctx, |ui| {
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Named Objects").strong());
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.set_min_size(vec2(130.0, 200.0));
+                            for kind in Named::ALL {
+                                if ui.selectable_label(d.kind == kind, kind.plural()).clicked() && d.kind != kind {
+                                    (d.kind, d.old) = (kind, None);
+                                    d.new.clear();
+                                }
+                            }
+                        });
+                    });
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Items").strong());
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.set_min_size(vec2(200.0, 200.0));
+                            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                                if names.is_empty() {
+                                    ui.colored_label(theme::text_dim(), "None to rename.");
+                                }
+                                for n in &names {
+                                    let picked = d.old.as_ref().is_some_and(|o| o == n);
+                                    if ui.selectable_label(picked, n).clicked() {
+                                        d.old = Some(n.clone());
+                                        d.new = n.clone();
+                                    }
+                                }
+                            });
+                        });
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Old Name:");
+                    ui.label(d.old.as_deref().unwrap_or(""));
+                });
+                ui.horizontal(|ui| {
+                    let ready = d.old.is_some() && !d.new.trim().is_empty();
+                    rename = ui.add_enabled(ready, egui::Button::new("Rename To:")).clicked();
+                    let r = ui.add(egui::TextEdit::singleline(&mut d.new).desired_width(220.0));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "New name"));
+                    rename |= ready && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    fields.push(r.id);
+                });
+                if let Some(e) = &d.error {
+                    ui.colored_label(ui.visuals().error_fg_color, e);
+                }
+                let row = vec2(ui.available_width(), 24.0);
+                ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+                    cancel = ui.button("Cancel").clicked();
+                    ok = ui.button("OK").clicked();
+                });
+            });
+        self.text_fields.extend(fields);
+        if rename && let Some(old) = d.old.clone() {
+            self.doc.begin("RENAME");
+            match d.kind.rename(&mut self.doc, &old, &d.new) {
+                Ok(()) => {
+                    self.doc.commit();
+                    d.old = Some(d.new.trim().to_string());
+                    d.error = None;
+                }
+                Err(e) => {
+                    self.doc.rollback();
+                    d.error = Some(e);
+                }
+            }
+        }
+        if open && !ok && !cancel {
+            self.rename = Some(d);
+        }
+    }
+
     pub(crate) fn open_purge(&mut self) {
         let unused = self.doc.unused();
         let mut items: Vec<(Kind, String, bool)> = Vec::new();

@@ -1857,3 +1857,27 @@ fn drawing_units_dialog_sets_feet_and_inches() {
     h.state_mut().document_mut().undo();
     assert_eq!(h.state_mut().document_mut().units().length, oxidraft_model::LengthType::Decimal);
 }
+
+#[test]
+fn rename_dialog_renames_a_layer() {
+    let mut h = app_with_line();
+    h.state_mut().document_mut().add_layer(oxidraft_model::Layer::new("Walls", 1));
+    type_all(&mut h, &["ren"]);
+    h.run_steps(2);
+    h.get_by_label("Layers").click();
+    h.run_steps(2);
+    h.get_by_label("Walls").click();
+    h.run_steps(2);
+    let field = h.get_by_role_and_label(Role::TextInput, "New name").rect().center();
+    click(&mut h, field);
+    h.get_by_role_and_label(Role::TextInput, "New name").type_text(" outer");
+    h.run_steps(1);
+    let button = h.get_by_label("Rename To:").rect().center();
+    click(&mut h, button);
+    h.run_steps(2);
+    assert!(h.state_mut().document_mut().layer("Walls outer").is_some());
+    assert_eq!(h.query_all_by_label("Walls outer").count(), 2, "listed by its new name, and the old name shown");
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Rename To:").is_none());
+}
