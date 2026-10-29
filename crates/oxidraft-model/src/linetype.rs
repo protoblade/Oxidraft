@@ -118,6 +118,52 @@ pub fn dashes(path: &[Point], pattern: &[f64], scale: f64) -> Vec<Vec<Point>> {
     out
 }
 
+/// How see-through an object is (TRANSPARENCY): its layer's, its block
+/// reference's, or a percentage, 0 (opaque) to 90.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Transparency {
+    #[default]
+    ByLayer,
+    ByBlock,
+    Percent(u8),
+}
+
+impl Transparency {
+    /// DXF group 440: ByBlock 0x01000000, a value 0x02000000 plus its
+    /// opacity 0–255; ByLayer is written as no value at all (0).
+    pub fn to_dxf(self) -> i32 {
+        match self {
+            Transparency::ByLayer => 0,
+            Transparency::ByBlock => 0x0100_0000,
+            Transparency::Percent(p) => 0x0200_0000 | Self::opacity(p),
+        }
+    }
+
+    pub fn from_dxf(v: i32) -> Self {
+        match v {
+            0x0100_0000 => Transparency::ByBlock,
+            v if v & 0x0200_0000 != 0 => {
+                let alpha = f64::from(v & 0xFF);
+                Transparency::Percent(((1.0 - alpha / 255.0) * 100.0).round().clamp(0.0, 90.0) as u8)
+            }
+            _ => Transparency::ByLayer,
+        }
+    }
+
+    /// 0–255 opacity of a percentage of transparency.
+    pub fn opacity(percent: u8) -> i32 {
+        (255.0 * (100.0 - f64::from(percent.min(90))) / 100.0).round() as i32
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            Transparency::ByLayer => "ByLayer".into(),
+            Transparency::ByBlock => "ByBlock".into(),
+            Transparency::Percent(p) => p.to_string(),
+        }
+    }
+}
+
 /// Line weight as DXF stores it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Lineweight {

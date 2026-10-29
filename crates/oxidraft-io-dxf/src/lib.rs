@@ -737,6 +737,17 @@ fn read_text_styles(doc: &mut Document, drawing: &Drawing) {
     let _ = doc.set_current_text_style(&style_from_dxf(&drawing.header.text_style));
 }
 
+/// True if the drawing has what AutoCAD 2000's DXF can't hold: PDF
+/// underlays or transparency.
+pub fn needs_newer_version(doc: &Document) -> bool {
+    doc.image_defs().any(|d| d.is_pdf())
+        || doc.layers().iter().any(|l| l.transparency > 0)
+        || doc.all_entities().any(|e| e.transparency != oxidraft_model::Transparency::ByLayer)
+}
+
+/// The XDATA application a layer's transparency is kept under.
+const TRANSPARENCY_APP: &str = "AcCmTransparency";
+
 /// The XRECORD Oxidraft keeps its own settings in, in the root dictionary:
 /// key (1) and value (40) pairs.
 pub const SETTINGS_RECORD: &str = "OXIDRAFT_SETTINGS";
@@ -820,8 +831,8 @@ fn read_units(h: &dxf::Header) -> oxidraft_model::Units {
 fn build(doc: &Document) -> Built {
     let mut drawing = Drawing::new();
     // R2000 is the oldest version with lightweight polylines; PDF underlays
-    // need R2007 or later.
-    let pdfs = doc.image_defs().any(|d| d.is_pdf());
+    // need R2007 or later, and transparency R2004.
+    let pdfs = needs_newer_version(doc);
     drawing.header.version = if pdfs { AcadVersion::R2010 } else { AcadVersion::R2000 };
     drawing.header.line_type_scale = doc.ltscale();
     let dim = doc.dim_style();
@@ -877,10 +888,18 @@ fn build(doc: &Document) -> Built {
     for l in doc.layers().iter().filter(|l| !is_dependent(&l.name) || from_xref(&l.name)) {
         let known = doc.linetype(&l.linetype).is_some() && !is_dependent(&l.linetype);
         let line_type_name = if known { l.linetype.clone() } else { "Continuous".into() };
+        // A layer's transparency is XDATA, as AutoCAD keeps it.
+        let x_data = if l.transparency > 0 {
+            let value = oxidraft_model::Transparency::Percent(l.transparency).to_dxf();
+            vec![dxf::XData { application_name: TRANSPARENCY_APP.into(), items: vec![dxf::XDataItem::Long(value)] }]
+        } else {
+            Vec::new()
+        };
         if l.name == "0" {
             // Drawing::new() already has layer 0.
             if let Some(zero) = drawing.layers_mut().find(|z| z.name == "0") {
                 zero.line_type_name = line_type_name;
+                zero.x_data = x_data;
             }
             continue;
         }
@@ -889,6 +908,7 @@ fn build(doc: &Document) -> Built {
             color: DxfColor::from_index(l.color),
             line_type_name,
             is_layer_on: l.on,
+            x_data,
             ..Default::default()
         });
     }
@@ -939,6 +959,7 @@ fn build(doc: &Document) -> Built {
     let mut in_blocks: Vec<(String, usize, EntityId)> = Vec::new();
     for e in doc.space_in_draw_order(MODEL) {
         for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
+            de.common.transparency = e.transparency.to_dxf();
             add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
             entities.push((de, &e.geometry, e.id));
         }
@@ -951,6 +972,7 @@ fn build(doc: &Document) -> Built {
         let mut in_block = Vec::new();
         for e in doc.space_in_draw_order(layout.id) {
             for mut de in ex.entity(&e.geometry, &e.layer, e.color, &e.linetype, e.lineweight) {
+                de.common.transparency = e.transparency.to_dxf();
                 if i == 0 {
                     de.common.is_in_paper_space = true;
                     add_attributes(&mut drawing, &mut de, &e.geometry, &mut styles);
@@ -1396,6 +1418,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         color: from_dxf_color(&drawing.header.current_entity_color),
         linetype: linetype_from_dxf(&drawing.header.current_entity_line_type),
         lineweight: lineweight_from_dxf(drawing.header.new_object_line_weight.raw_value()),
+        transparency: oxidraft_model::Transparency::ByLayer,
     });
     let h = &drawing.header;
     let positive = |v: f64, default: f64| if v > 0.0 && v.is_finite() { v } else { default };
@@ -1434,6 +1457,14 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         }
         let weight = l.line_weight.raw_value();
         layer.lineweight = if weight >= 0 { Lineweight::Hundredths(weight as u16) } else { Lineweight::Default };
+        let transparency = l.x_data.iter().filter(|x| x.application_name == TRANSPARENCY_APP).flat_map(|x| &x.items);
+        for item in transparency {
+            if let dxf::XDataItem::Long(v) = item
+                && let oxidraft_model::Transparency::Percent(p) = oxidraft_model::Transparency::from_dxf(*v)
+            {
+                layer.transparency = p;
+            }
+        }
         // Frozen (1) and locked (4) are flags the dxf crate doesn't read.
         if let Some((_, flags)) = raw.layer_flags.iter().find(|(name, _)| name.eq_ignore_ascii_case(&l.name)) {
             layer.frozen = flags & 1 != 0;
@@ -1587,12 +1618,13 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                 style_attributes(&mut g, style, &e.common.layer);
                 attach_clip(&mut g, e, &raw.clips);
                 let (color, linetype) = (from_dxf_color(&e.common.color), linetype_from_dxf(&e.common.line_type_name));
-                let id = doc.add_styled(
+                let id = doc.add_with(
                     g,
                     &e.common.layer,
                     color,
                     &linetype,
                     lineweight_from_dxf(e.common.lineweight_enum_value),
+                    oxidraft_model::Transparency::from_dxf(e.common.transparency),
                 );
                 placed.push((e.common.handle.0, position as f64, id));
             }
@@ -1617,12 +1649,13 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                     wipeouts.mend(&mut g, e.common.handle.0);
                     style_attributes(&mut g, None, &e.common.layer);
                     attach_clip(&mut g, e, &raw.clips);
-                    let id = doc.add_styled(
+                    let id = doc.add_with(
                         g,
                         &e.common.layer,
                         from_dxf_color(&e.common.color),
                         &linetype_from_dxf(&e.common.line_type_name),
                         lineweight_from_dxf(e.common.lineweight_enum_value),
+                        oxidraft_model::Transparency::from_dxf(e.common.transparency),
                     );
                     placed.push((e.common.handle.0, f64::from(u32::MAX), id));
                 }

@@ -31,7 +31,7 @@ pub use entity::{
 };
 pub use hatch::HatchPattern;
 pub use layout::{MODEL, Paper, Space};
-pub use linetype::{Linetype, Lineweight};
+pub use linetype::{Linetype, Lineweight, Transparency};
 pub use oxidraft_geom::{ellipse::Ellipse, spline::Spline};
 pub use palette::aci_rgb;
 pub use purge::Unused;

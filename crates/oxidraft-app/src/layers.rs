@@ -322,8 +322,10 @@ impl OxidraftApp {
         let name_width = layers.iter().map(|l| text_width(ui, &l.name)).fold(0.0, f32::max).clamp(112.0, 360.0) + 10.0;
         let in_use = layers.iter().map(|l| l.linetype.as_str());
         let linetype_width = in_use.map(|n| text_width(ui, n)).fold(0.0, f32::max).clamp(96.0, 300.0) + 12.0;
-        egui::Grid::new("layer_table").striped(true).num_columns(7).spacing([12.0, 4.0]).show(ui, |ui| {
-            for title in ["Status", "Name", "On  Freeze  Lock", "Color", "Linetype", "Lineweight", "Objects"] {
+        egui::Grid::new("layer_table").striped(true).num_columns(8).spacing([12.0, 4.0]).show(ui, |ui| {
+            for title in
+                ["Status", "Name", "On  Freeze  Lock", "Color", "Linetype", "Lineweight", "Transparency", "Objects"]
+            {
                 ui.colored_label(theme::text_dim(), title);
             }
             ui.end_row();
@@ -368,6 +370,14 @@ impl OxidraftApp {
                     lineweight_menu(ui, Some(layer.lineweight), &[Lineweight::Default], salt, 90.0, "Lineweight")
                 {
                     self.change_layers(&layer.name, |l| l.lineweight = lineweight);
+                }
+                let mut transparency = layer.transparency;
+                let r = ui.add(egui::DragValue::new(&mut transparency).range(0..=90).speed(0.5));
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::SpinButton, true, format!("Transparency: {}", layer.name))
+                });
+                if r.changed() {
+                    self.change_layers(&layer.name, |l| l.transparency = transparency);
                 }
                 ui.label(self.doc.layer_usage(&layer.name).to_string());
                 ui.end_row();

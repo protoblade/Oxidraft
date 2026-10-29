@@ -1478,6 +1478,8 @@ pub struct Entity {
     /// A linetype name, or ByLayer / ByBlock (see [`crate::linetype`]).
     pub linetype: String,
     pub lineweight: Lineweight,
+    /// How see-through it is.
+    pub transparency: crate::linetype::Transparency,
     pub geometry: Geometry,
 }
 

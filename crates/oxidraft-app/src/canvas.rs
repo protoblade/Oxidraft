@@ -716,8 +716,13 @@ impl OxidraftApp {
             let compared = self.comparison.as_ref().filter(|_| space == MODEL);
             let compare_color =
                 compared.map(|c| if c.only_here.contains(&e.id) { crate::compare::HERE } else { crate::compare::BOTH });
+            // TRANSPARENCY: see-through by its own or its layer's.
+            let opacity = 1.0 - f32::from(self.doc.transparency_of(e)) / 100.0;
             for s in self.doc.expanded_styled(e) {
                 let mut color = compare_color.unwrap_or_else(|| theme::aci(s.color));
+                if opacity < 1.0 {
+                    color = color.gamma_multiply(opacity);
+                }
                 // Locked layers draw faded (AutoCAD's LAYLOCKFADECTL).
                 if self.doc.layer(&s.layer).is_some_and(|l| l.locked) {
                     color = color.gamma_multiply(0.45);

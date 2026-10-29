@@ -2198,3 +2198,23 @@ fn block_attribute_manager_reorders_and_syncs() {
         .unwrap();
     assert_eq!(on_reference, ["WIDTH", "NUMBER"], "the reference was synced");
 }
+
+#[test]
+fn transparency_from_the_properties_palette() {
+    let mut h = app_with_line();
+    let wall = screen(&h, 50.0, 0.0);
+    click(&mut h, wall);
+    h.state_mut().type_command("pr");
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::ComboBox, "Transparency").click();
+    h.run_steps(2);
+    h.get_by_label("ByBlock").click();
+    h.run_steps(2);
+    let t = h
+        .state_mut()
+        .document_mut()
+        .entities()
+        .find(|e| matches!(e.geometry, Geometry::Line { start, .. } if start.y == 0.0))
+        .map(|e| e.transparency);
+    assert_eq!(t, Some(oxidraft_model::Transparency::ByBlock));
+}

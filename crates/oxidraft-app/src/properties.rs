@@ -4,7 +4,7 @@
 use eframe::egui::{self, Align, CursorIcon, Frame, Id, Layout, Margin, RichText, Sense, Stroke, Ui, vec2};
 use oxidraft_geom::{Point, curve::ArcSeg};
 use oxidraft_model::{
-    Color, CurrentProps, Entity, EntityId, Geometry, HatchPattern, Lineweight,
+    Color, CurrentProps, Entity, EntityId, Geometry, HatchPattern, Lineweight, Transparency,
     annotation::{angular_measurement, format_angle, format_measurement, measurement, radial_value},
     hatch, linetype,
 };
@@ -307,6 +307,47 @@ impl OxidraftApp {
             match lineweight_menu(ui, common_weight, &special, "props_lineweight", width, "Lineweight") {
                 Some(lineweight) if none => self.set_current(CurrentProps { lineweight, ..current.clone() }),
                 Some(lineweight) => self.edit(selected.iter().map(|e| e.id), |e| e.lineweight = lineweight),
+                None => {}
+            }
+            ui.end_row();
+
+            // Transparency: ByLayer, ByBlock, or a percentage.
+            label_cell(ui, "Transparency");
+            let common_transparency =
+                if none { Some(current.transparency) } else { common(selected.iter().map(|e| e.transparency)) };
+            let mut chosen = None;
+            ui.horizontal(|ui| {
+                let shown = common_transparency.map_or(VARIES.to_string(), |t| match t {
+                    Transparency::Percent(_) => "Value".to_string(),
+                    t => t.label(),
+                });
+                let r = egui::ComboBox::from_id_salt("props_transparency")
+                    .width(width * 0.55)
+                    .selected_text(shown)
+                    .show_ui(ui, |ui| {
+                        for (t, name) in [(Transparency::ByLayer, "ByLayer"), (Transparency::ByBlock, "ByBlock")] {
+                            if ui.selectable_label(common_transparency == Some(t), name).clicked() {
+                                chosen = Some(t);
+                            }
+                        }
+                        let value = matches!(common_transparency, Some(Transparency::Percent(_)));
+                        if ui.selectable_label(value, "Value").clicked() && !value {
+                            chosen = Some(Transparency::Percent(0));
+                        }
+                    });
+                r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Transparency"));
+                if let Some(Transparency::Percent(p)) = common_transparency {
+                    let mut p = p;
+                    let r = ui.add(egui::DragValue::new(&mut p).range(0..=90).speed(0.5));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::SpinButton, true, "Transparency value"));
+                    if r.changed() {
+                        chosen = Some(Transparency::Percent(p));
+                    }
+                }
+            });
+            match chosen {
+                Some(transparency) if none => self.set_current(CurrentProps { transparency, ..current.clone() }),
+                Some(transparency) => self.edit(selected.iter().map(|e| e.id), |e| e.transparency = transparency),
                 None => {}
             }
             ui.end_row();

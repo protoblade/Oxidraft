@@ -36,6 +36,8 @@ pub struct Layer {
     pub linetype: String,
     /// Lineweight of objects drawn ByLayer (Default, or a weight).
     pub lineweight: Lineweight,
+    /// Transparency of objects drawn ByLayer, 0 to 90 percent.
+    pub transparency: u8,
 }
 
 impl Layer {
@@ -48,6 +50,7 @@ impl Layer {
             locked: false,
             linetype: CONTINUOUS.into(),
             lineweight: Lineweight::Default,
+            transparency: 0,
         }
     }
 
@@ -387,11 +390,18 @@ pub struct CurrentProps {
     pub color: Color,
     pub linetype: String,
     pub lineweight: Lineweight,
+    /// CETRANSPARENCY.
+    pub transparency: crate::linetype::Transparency,
 }
 
 impl CurrentProps {
     pub fn by_layer() -> Self {
-        Self { color: Color::ByLayer, linetype: linetype::BYLAYER.into(), lineweight: Lineweight::ByLayer }
+        Self {
+            color: Color::ByLayer,
+            linetype: linetype::BYLAYER.into(),
+            lineweight: Lineweight::ByLayer,
+            transparency: crate::linetype::Transparency::ByLayer,
+        }
     }
 }
 
@@ -689,6 +699,16 @@ impl Document {
             self.define_block(b);
         }
         Ok(())
+    }
+
+    /// How see-through `e` draws, 0 to 90 percent: its own, or its layer's
+    /// (ByBlock: opaque at the top level).
+    pub fn transparency_of(&self, e: &Entity) -> u8 {
+        match e.transparency {
+            crate::linetype::Transparency::Percent(p) => p.min(90),
+            crate::linetype::Transparency::ByLayer => self.layer(&e.layer).map_or(0, |l| l.transparency.min(90)),
+            crate::linetype::Transparency::ByBlock => 0,
+        }
     }
 
     /// Loads a linetype into the drawing (LINETYPE's Load), undoably.
@@ -1693,13 +1713,12 @@ impl Document {
 
     // ---- edits ---------------------------------------------------------
 
-    /// Adds an entity on the current layer.
     /// Adds an entity on the current layer with the current color,
-    /// linetype and lineweight.
+    /// linetype, lineweight and transparency.
     pub fn add(&mut self, geometry: Geometry) -> EntityId {
         let layer = self.table.current.clone();
-        let CurrentProps { color, linetype, lineweight } = self.current.clone();
-        self.add_styled(geometry, &layer, color, &linetype, lineweight)
+        let CurrentProps { color, linetype, lineweight, transparency } = self.current.clone();
+        self.add_with(geometry, &layer, color, &linetype, lineweight, transparency)
     }
 
     /// Adds an entity on a specific layer (created with color 7 if missing).
@@ -1717,6 +1736,19 @@ impl Document {
         linetype: &str,
         lineweight: Lineweight,
     ) -> EntityId {
+        self.add_with(geometry, layer, color, linetype, lineweight, crate::linetype::Transparency::ByLayer)
+    }
+
+    /// [`Document::add_styled`], with a transparency too.
+    pub fn add_with(
+        &mut self,
+        geometry: Geometry,
+        layer: &str,
+        color: Color,
+        linetype: &str,
+        lineweight: Lineweight,
+        transparency: crate::linetype::Transparency,
+    ) -> EntityId {
         let layer = match self.layer(layer) {
             Some(l) => l.name.clone(),
             None => {
@@ -1726,8 +1758,16 @@ impl Document {
         };
         let id = EntityId(self.next_id);
         self.next_id += 1;
-        let entity =
-            Entity { id, space: self.space, layer, color, linetype: linetype.to_string(), lineweight, geometry };
+        let entity = Entity {
+            id,
+            space: self.space,
+            layer,
+            color,
+            linetype: linetype.to_string(),
+            lineweight,
+            transparency,
+            geometry,
+        };
         // Something was brought to the front: new objects go above it, in
         // the same undo step.
         let over_top = self.top >= id.0 as f64;
@@ -1862,7 +1902,7 @@ impl Document {
     /// Adds an entity with the layer, color, linetype and lineweight of
     /// `like` (copies, offsets, pieces of a broken object).
     pub fn add_like(&mut self, geometry: Geometry, like: &Entity) -> EntityId {
-        self.add_styled(geometry, &like.layer, like.color, &like.linetype, like.lineweight)
+        self.add_with(geometry, &like.layer, like.color, &like.linetype, like.lineweight, like.transparency)
     }
 
     /// Removes an entity. Returns false if it doesn't exist.

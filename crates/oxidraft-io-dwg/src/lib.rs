@@ -125,8 +125,8 @@ pub fn write(doc: &Document, version: Version) -> Result<Vec<u8>, Error> {
 /// (2007 is the first to have them). Written by acadrust, which also
 /// writes the layouts' page setups and viewports.
 pub fn write_dxf(doc: &Document) -> Result<Vec<u8>, Error> {
-    let pdfs = doc.image_defs().any(|d| d.is_pdf());
-    let version = if pdfs { DxfVersion::AC1024 } else { DxfVersion::AC1015 };
+    let newer = oxidraft_io_dxf::needs_newer_version(doc);
+    let version = if newer { DxfVersion::AC1024 } else { DxfVersion::AC1015 };
     let mut cad = cad(doc)?;
     cad.version = version;
     DxfWriter::new(&cad).with_version(version).write_to_vec().map_err(|e| e.to_string())
@@ -485,6 +485,7 @@ mod tests {
             color: oxidraft_model::Color::Index(3),
             linetype: "HIDDEN".into(),
             lineweight: oxidraft_model::Lineweight::Hundredths(35),
+            transparency: oxidraft_model::Transparency::ByLayer,
         };
         doc.set_current_props(current.clone());
         let dxf = oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document;
@@ -675,6 +676,27 @@ mod tests {
         // AutoCAD 2000's DWG predates gradients: a solid fill there.
         let old = read(&write(&doc, Version::R2000).unwrap()).unwrap().imported.document;
         assert!(old.entities().any(|e| matches!(e.geometry, Geometry::Hatch { pattern: HatchPattern::Solid, .. })));
+    }
+
+    #[test]
+    fn transparency_survives() {
+        use oxidraft_model::{Color, Layer, Lineweight, Transparency};
+        let mut doc = Document::new();
+        doc.add_layer(Layer { transparency: 30, ..Layer::new("Glass", 4) });
+        let line = Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) };
+        doc.add_with(line.clone(), "Glass", Color::ByLayer, "ByLayer", Lineweight::ByLayer, Transparency::Percent(40));
+        doc.add_with(line, "0", Color::ByLayer, "ByLayer", Lineweight::ByLayer, Transparency::ByBlock);
+        let check = |back: &Document, how: &str| {
+            let mut got: Vec<Transparency> = back.entities().map(|e| e.transparency).collect();
+            got.sort_by_key(|t| format!("{t:?}"));
+            assert_eq!(got, [Transparency::ByBlock, Transparency::Percent(40)], "{how}");
+            assert_eq!(back.layer("Glass").map(|l| l.transparency), Some(30), "{how}");
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        check(&oxidraft_io_dxf::read(&mut write_dxf(&doc).unwrap().as_slice()).unwrap().document, "DXF");
+        check(&read(&write(&doc, Version::R2018).unwrap()).unwrap().imported.document, "R2018");
     }
 
     #[test]

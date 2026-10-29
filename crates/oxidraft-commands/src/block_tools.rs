@@ -154,6 +154,7 @@ impl NCopy {
             color: Color::Index(part.color),
             linetype: part.linetype,
             lineweight: part.lineweight,
+            transparency: e.transparency,
             geometry: part.geometry,
         })
     }
