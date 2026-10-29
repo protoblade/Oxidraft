@@ -19,6 +19,7 @@ mod plot;
 mod properties;
 mod publish;
 mod qselect;
+mod quickcalc;
 mod settings;
 mod shortcut_menu;
 mod styles;

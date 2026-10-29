@@ -18,6 +18,7 @@ use crate::{
     block::InsertBlock,
     break_join::Break,
     break_join::Join,
+    calc::Cal,
     chamfer::Chamfer,
     circle::Circle,
     cleanup::{Audit, Count, Overkill, Purge},
@@ -448,6 +449,13 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Write a block, the selected objects or the whole drawing to a drawing file",
         make: None,
     },
+    CommandInfo {
+        name: "CAL",
+        aliases: &[],
+        description: "Work out an expression at the command line",
+        make: Some(|| Box::new(Cal)),
+    },
+    CommandInfo { name: "QUICKCALC", aliases: &["QC"], description: "Show the QuickCalc calculator", make: None },
     CommandInfo {
         name: "EXPORTPDF",
         aliases: &[],

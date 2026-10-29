@@ -487,6 +487,7 @@ impl OxidraftApp {
                     "Opens the External References palette",
                 ),
                 tool(Icon::InsertBlock, "Blocks", Some("BLOCKSPALETTE"), "Opens the Blocks palette"),
+                tool(Icon::Calculator, "QuickCalc", Some("QUICKCALC"), "Opens the QuickCalc calculator (QC, Cmd+8)"),
             ] {
                 self.large_tool(ui, &t);
             }

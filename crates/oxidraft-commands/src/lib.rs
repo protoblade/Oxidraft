@@ -14,6 +14,7 @@ mod attdef;
 mod attribute;
 mod block;
 mod break_join;
+pub mod calc;
 mod chamfer;
 mod circle;
 mod cleanup;

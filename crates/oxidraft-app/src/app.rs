@@ -118,6 +118,7 @@ pub struct OxidraftApp {
     pub(crate) units_dialog: Option<oxidraft_model::Units>,
     pub(crate) rename: Option<crate::manage::RenameDialog>,
     pub(crate) wblock: Option<crate::wblock::WblockDialog>,
+    pub(crate) quickcalc: Option<crate::quickcalc::QuickCalc>,
     pub(crate) from_template: Option<crate::layouts::FromTemplate>,
     /// The space the ribbon last saw: a layout brings its Layout tab up.
     pub(crate) ribbon_space: oxidraft_model::Space,
@@ -262,6 +263,7 @@ impl OxidraftApp {
             units_dialog: None,
             rename: None,
             wblock: None,
+            quickcalc: None,
             from_template: None,
             ribbon_space: oxidraft_model::MODEL,
             loader: Default::default(),
@@ -370,6 +372,11 @@ impl OxidraftApp {
     /// Puts text on the command line without pressing Enter.
     pub fn set_command_text(&mut self, text: &str) {
         self.command_text = text.to_string();
+    }
+
+    /// What's typed on the command line, not yet entered.
+    pub fn command_text(&self) -> &str {
+        &self.command_text
     }
 
     /// Zooms so the window between two corners fills the view.
@@ -569,6 +576,7 @@ impl OxidraftApp {
             "UNITS" | "UN" => self.open_units(),
             "RENAME" | "REN" => self.open_rename(),
             "WBLOCK" | "W" => self.open_wblock(),
+            "QUICKCALC" | "QC" => self.open_quickcalc(),
             "COMPARE" => self.compare_command(),
             "DIMSTYLE" | "D" | "DST" => self.open_dim_style(),
             "FIND" => self.find_replace = Some(Default::default()),
@@ -746,6 +754,9 @@ impl OxidraftApp {
         }
         if ctx.input_mut(|i| i.consume_key(cmd, Key::Num1)) {
             self.properties_open = !self.properties_open;
+        }
+        if ctx.input_mut(|i| i.consume_key(cmd, Key::Num8)) {
+            self.toggle_quickcalc();
         }
         // The Plot dialog and its preview keep Esc and Enter to themselves.
         if self.plot_keys(ctx) {
@@ -925,6 +936,7 @@ impl eframe::App for OxidraftApp {
         self.units_dialog(&ctx);
         self.rename_dialog(&ctx);
         self.wblock_dialog(&ctx);
+        self.quickcalc_palette(&ctx);
         self.insert_layouts_dialog(&ctx);
         self.delete_layout_dialog(&ctx);
         self.block_edit_dialog(&ctx);

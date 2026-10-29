@@ -106,6 +106,7 @@ pub enum Icon {
     Count,
     Group,
     Ungroup,
+    Calculator,
 }
 
 /// Accent colors used inside icons, as in AutoCAD's icon set.
@@ -465,6 +466,16 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, enabled:
             pen.line(&[(0.7, 0.12), (0.62, 0.88)], c);
             pen.line(&[(0.15, 0.36), (0.88, 0.36)], blue);
             pen.line(&[(0.12, 0.64), (0.85, 0.64)], blue);
+        }
+        // A calculator: its display, and keys.
+        Icon::Calculator => {
+            pen.closed(&[(0.2, 0.08), (0.8, 0.08), (0.8, 0.92), (0.2, 0.92)], c);
+            pen.closed(&[(0.3, 0.18), (0.7, 0.18), (0.7, 0.36), (0.3, 0.36)], blue);
+            for y in [0.52, 0.66, 0.8] {
+                for x in [0.34, 0.5, 0.66] {
+                    pen.line(&[(x - 0.04, y), (x + 0.04, y)], c);
+                }
+            }
         }
         // Two shapes in a dashed box; ungrouped, the box broken.
         Icon::Group | Icon::Ungroup => {

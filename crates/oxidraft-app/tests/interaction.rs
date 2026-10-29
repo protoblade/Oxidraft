@@ -1936,3 +1936,22 @@ fn write_block_writes_blocks_objects_and_the_drawing() {
     assert!(h.query_by_label("1 objects selected").is_some());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn quickcalc_works_out_and_pastes_to_the_command_line() {
+    let mut h = app_with_line();
+    h.get_by_role_and_label(Role::Tab, "View").click();
+    h.run_steps(2);
+    h.get_by_label("QuickCalc").click();
+    h.run_steps(2);
+    for key in ["7", "*", "6"] {
+        h.get_by_role_and_label(Role::Button, key).click();
+        h.run_steps(1);
+    }
+    h.get_by_role_and_label(Role::Button, "=").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("7*6 = 42").is_some(), "in the history");
+    h.get_by_label("Paste value to command line").click();
+    h.run_steps(2);
+    assert_eq!(h.state().command_text(), "42");
+}
