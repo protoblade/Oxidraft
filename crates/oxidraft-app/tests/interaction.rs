@@ -1132,6 +1132,12 @@ fn working_in_a_viewport_and_back_on_the_sheet() {
     h.run_steps(2);
     assert_eq!(h.state_mut().document_mut().space(), layout);
     assert_eq!(the_viewport(&mut h).2, now_height);
+
+    // MVIEW from inside a viewport makes the next one on the sheet.
+    type_all(&mut h, &["ms", "mv", "f"]);
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.space(), layout);
+    assert_eq!(doc.entities().filter(|e| matches!(e.geometry, Geometry::Viewport { .. })).count(), 2);
 }
 
 #[test]

@@ -485,6 +485,11 @@ impl OxidraftApp {
             "PSPACE" | "PS" => self.paper_space_command(false),
             "VPMIN" => self.paper_space_command(true),
             "VPMAX" => return self.maximize_command(),
+            // Viewports are made on the sheet: out of the one worked in first.
+            "MVIEW" | "MV" => {
+                self.leave_viewport();
+                return false;
+            }
             _ => return false,
         }
         true
