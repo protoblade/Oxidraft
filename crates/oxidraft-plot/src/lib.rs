@@ -2,6 +2,7 @@
 //! out on the sheet as strokes, fills and text, and that sheet as PDF.
 
 pub mod ctb;
+pub mod dwf;
 pub mod dwfx;
 pub mod font;
 pub mod pdf;

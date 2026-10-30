@@ -149,25 +149,29 @@ impl OxidraftApp {
         let Some(mut d) = self.export_pdf.take() else { return };
         let (mut open, mut save, mut cancel) = (true, false, false);
         let model = self.shown_space() == MODEL;
-        egui::Window::new(if d.plotter == Plotter::Dwfx { "Save As DWFx" } else { "Save As PDF" })
-            .id(egui::Id::unique("export_pdf"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .default_pos([420.0, 160.0])
-            .constrain_to(self.dialog_area(ctx))
-            .show(ctx, |ui| {
-                ui.label(RichText::new("Export").strong());
-                let current = if model { "What PLOT plots (Model)" } else { "Current Layout" };
-                ui.radio_value(&mut d.all, false, current);
-                ui.radio_value(&mut d.all, true, format!("All Layouts ({})", self.doc.layouts().len()));
-                ui.colored_label(theme::text_dim(), "Page setup: each layout's own; Model uses the last plot's.");
-                let row = vec2(ui.available_width().max(260.0), 24.0);
-                ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
-                    cancel = ui.button("Cancel").clicked();
-                    save = ui.button("Save").clicked();
-                });
+        egui::Window::new(match d.plotter {
+            Plotter::Dwfx => "Save As DWFx",
+            Plotter::Dwf6 => "Save As DWF",
+            _ => "Save As PDF",
+        })
+        .id(egui::Id::unique("export_pdf"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .default_pos([420.0, 160.0])
+        .constrain_to(self.dialog_area(ctx))
+        .show(ctx, |ui| {
+            ui.label(RichText::new("Export").strong());
+            let current = if model { "What PLOT plots (Model)" } else { "Current Layout" };
+            ui.radio_value(&mut d.all, false, current);
+            ui.radio_value(&mut d.all, true, format!("All Layouts ({})", self.doc.layouts().len()));
+            ui.colored_label(theme::text_dim(), "Page setup: each layout's own; Model uses the last plot's.");
+            let row = vec2(ui.available_width().max(260.0), 24.0);
+            ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+                cancel = ui.button("Cancel").clicked();
+                save = ui.button("Save").clicked();
             });
+        });
         if save {
             if let Some(path) = self.plot_file_path(d.plotter)
                 && let Err(e) = self.export_to_with(&path, d.all, d.plotter)
@@ -239,6 +243,7 @@ impl OxidraftApp {
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut d.plotter, Plotter::Pdf, "PDF");
                             ui.selectable_value(&mut d.plotter, Plotter::Dwfx, "DWFX");
+                            ui.selectable_value(&mut d.plotter, Plotter::Dwf6, "DWF");
                         });
                     r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Publish to"));
                 });

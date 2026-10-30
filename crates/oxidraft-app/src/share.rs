@@ -81,7 +81,7 @@ impl OxidraftApp {
     pub(crate) fn markup_import(&mut self) {
         let Some(file) = rfd::FileDialog::new()
             .set_title("Markup Import: the marked-up plot")
-            .add_filter("PDF, DWFx or image", &["pdf", "dwfx", "png", "jpg", "jpeg", "tif", "tiff", "bmp"])
+            .add_filter("PDF, DWF or image", &["pdf", "dwf", "dwfx", "png", "jpg", "jpeg", "tif", "tiff", "bmp"])
             .pick_file()
         else {
             return;
@@ -105,9 +105,9 @@ impl OxidraftApp {
         };
         let layout = settings.layout(&self.doc, space).ok_or("There's no sheet here to lay it over.")?;
         // A DWFx markup: its lines and text, in red on layer MARKUP.
-        if file.extension().is_some_and(|e| e.eq_ignore_ascii_case("dwfx") || e.eq_ignore_ascii_case("xps")) {
+        if file.extension().is_some_and(|e| ["dwfx", "dwf", "xps"].iter().any(|x| e.eq_ignore_ascii_case(x))) {
             let data = std::fs::read(file).map_err(|e| format!("Could not read {}: {e}", file.display()))?;
-            let objects = crate::dwf_in::read_dwfx(&data)?;
+            let objects = crate::dwf_in::read_any_dwf(&data)?;
             let origin = layout.window.min - layout.origin * (1.0 / layout.scale);
             let placement =
                 oxidraft_model::Placement { position: origin, scale: 1.0 / layout.scale, rotation: 0.0, mirror: false };

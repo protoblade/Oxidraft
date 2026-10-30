@@ -75,6 +75,7 @@ mod underlay;
 pub mod update;
 mod view;
 mod viewport;
+mod w2d;
 mod wblock;
 mod xref;
 

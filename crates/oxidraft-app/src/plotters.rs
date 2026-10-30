@@ -33,6 +33,7 @@ impl OxidraftApp {
         match plotter {
             Plotter::Pdf | Plotter::Printer(_) => Ok(oxidraft_plot::pdf_pages(sheets, &title)),
             Plotter::Dwfx => Ok(oxidraft_plot::dwfx::dwfx(sheets, &title)),
+            Plotter::Dwf6 => Ok(oxidraft_plot::dwf::dwf(sheets, &title)),
             Plotter::Png | Plotter::Jpg => {
                 let sheet = sheets.first().ok_or("There's nothing to plot.")?;
                 let pdf = oxidraft_plot::pdf(sheet, &title);

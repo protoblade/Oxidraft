@@ -793,10 +793,7 @@ impl OxidraftApp {
             "LAYWALK" => self.open_layer_walk(),
             "EXPORTPDF" => self.open_export_pdf(),
             "EXPORTDWFX" => self.open_export(oxidraft_plot::Plotter::Dwfx),
-            "EXPORTDWF" => {
-                self.engine.log("DWF6 isn't written: the sheets go to DWFx, which DWF viewers open.");
-                self.open_export(oxidraft_plot::Plotter::Dwfx);
-            }
+            "EXPORTDWF" => self.open_export(oxidraft_plot::Plotter::Dwf6),
             "PLOTTERMANAGER" => self.open_plotter_manager(),
             "CUI" => self.open_cui(),
             "UNISOLATEOBJECTS" | "UNHIDE" => {

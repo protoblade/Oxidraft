@@ -2,7 +2,7 @@
 //! paths and glyphs, through nested canvases' transforms — as lines,
 //! polylines, solid fills and text in millimeters from the sheet's lower
 //! left. DWFATTACH places one as a block reference; MARKUP takes DWFx
-//! markups too. (DWF6 files, which aren't XPS, aren't read.)
+//! markups too. DWF 6 files go through [`crate::w2d`].
 
 use std::path::Path;
 
@@ -279,11 +279,16 @@ pub fn page_objects(xml: &str) -> Vec<(Geometry, [u8; 3])> {
     out
 }
 
+/// A DWF, DWFx or XPS file's first sheet's drawing.
+pub fn read_any_dwf(data: &[u8]) -> Result<Vec<(Geometry, [u8; 3])>, String> {
+    if data.starts_with(b"(DWF V") { crate::w2d::read_dwf(data) } else { read_dwfx(data) }
+}
+
 /// A DWFx (or XPS) file's first page's drawing.
 pub fn read_dwfx(data: &[u8]) -> Result<Vec<(Geometry, [u8; 3])>, String> {
     let files = crate::datalink::unzip(data);
     if files.is_empty() {
-        return Err("Not a DWFx file (DWF6 files aren't read; save as DWFx).".into());
+        return Err("Not a DWF or DWFx file.".into());
     }
     let mut pages: Vec<&(String, Vec<u8>)> =
         files.iter().filter(|(n, _)| n.to_ascii_lowercase().ends_with(".fpage")).collect();
@@ -295,7 +300,7 @@ pub fn read_dwfx(data: &[u8]) -> Result<Vec<(Geometry, [u8; 3])>, String> {
 impl OxidraftApp {
     /// DWFATTACH: a DWFx sheet picked, placed at 0,0 as a block reference.
     pub(crate) fn dwf_attach(&mut self) {
-        let Some(file) = rfd::FileDialog::new().add_filter("DWFx", &["dwfx", "xps"]).pick_file() else { return };
+        let Some(file) = rfd::FileDialog::new().add_filter("DWF", &["dwf", "dwfx", "xps"]).pick_file() else { return };
         match self.dwf_attach_file(&file) {
             Ok(n) => self.engine.log(format!(
                 "{} attached at 0,0 in millimeters: {n} objects. MOVE or SCALE it into place.",
@@ -307,7 +312,7 @@ impl OxidraftApp {
 
     pub fn dwf_attach_file(&mut self, file: &Path) -> Result<usize, String> {
         let data = std::fs::read(file).map_err(|e| format!("Could not read {}: {e}", file.display()))?;
-        let objects = read_dwfx(&data)?;
+        let objects = read_any_dwf(&data)?;
         let stem = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let base = oxidraft_model::sanitize_name(&format!("DWF-{stem}"));
         let name = (1..)

@@ -84,6 +84,7 @@ pub enum Plotter {
     #[default]
     Pdf,
     Dwfx,
+    Dwf6,
     Png,
     Jpg,
     /// A printer, by its number in [`printers`].
@@ -91,13 +92,14 @@ pub enum Plotter {
 }
 
 impl Plotter {
-    pub const ALL: [Plotter; 4] = [Plotter::Pdf, Plotter::Dwfx, Plotter::Png, Plotter::Jpg];
+    pub const ALL: [Plotter; 5] = [Plotter::Pdf, Plotter::Dwfx, Plotter::Dwf6, Plotter::Png, Plotter::Jpg];
 
     /// Its configuration's name, as AutoCAD's.
     pub fn name(self) -> &'static str {
         match self {
             Plotter::Pdf => "DWG To PDF.pc3",
             Plotter::Dwfx => "DWFx ePlot (XPS Compatible).pc3",
+            Plotter::Dwf6 => "DWF6 ePlot.pc3",
             Plotter::Png => "PublishToWeb PNG.pc3",
             Plotter::Jpg => "PublishToWeb JPG.pc3",
             Plotter::Printer(i) => printers().get(i as usize).copied().unwrap_or("Printer"),
@@ -108,6 +110,7 @@ impl Plotter {
         match self {
             Plotter::Pdf | Plotter::Printer(_) => "pdf",
             Plotter::Dwfx => "dwfx",
+            Plotter::Dwf6 => "dwf",
             Plotter::Png => "png",
             Plotter::Jpg => "jpg",
         }
@@ -117,6 +120,7 @@ impl Plotter {
         match self {
             Plotter::Pdf => "Writes a PDF file: lines as vectors, text you can search.",
             Plotter::Dwfx => "Writes a DWFx file (XPS compatible): vectors and text, for DWF and XPS viewers.",
+            Plotter::Dwf6 => "Writes a DWF 6 file: its sheets' vectors, fills, text and pictures, for DWF viewers.",
             Plotter::Png => "Writes a PNG image of the sheet.",
             Plotter::Jpg => "Writes a JPEG image of the sheet.",
             Plotter::Printer(_) => "Prints on this printer, through the computer's print queue.",
@@ -410,7 +414,7 @@ mod tests {
         let printer = all.iter().find(|p| p.name() == "Test Office Printer").copied().unwrap();
         assert!(matches!(printer, Plotter::Printer(_)));
         assert_eq!(all.iter().filter(|p| p.name() == "Test Office Printer").count(), 1, "listed once");
-        assert_eq!(&all[..4], &Plotter::ALL);
+        assert_eq!(&all[..Plotter::ALL.len()], &Plotter::ALL);
         assert_eq!(printer.extension(), "pdf");
         assert!(!printer.is_raster());
     }
