@@ -39,6 +39,11 @@ pub struct FieldEnv {
     pub saved: Option<Moment>,
     pub plotted: Option<Moment>,
     pub login: String,
+    /// The sheet set open: its Name, Description and custom properties.
+    pub sheet_set: Vec<(String, String)>,
+    /// The sheet the layout shown or plotted is: its Number, Title and
+    /// custom properties.
+    pub sheet: Vec<(String, String)>,
 }
 
 thread_local! {
@@ -146,6 +151,18 @@ pub fn value(code: &str, doc: &Document) -> Option<String> {
                 "ltscale" => number(doc.ltscale(), format, false),
                 _ => return None,
             })
+        }
+        // Sheet set fields: `\AcSm SheetSet.Name`, `\AcSm Sheet.Number`,
+        // a custom property by its name.
+        "AcSm" => {
+            let (scope, property) = name.split_once('.')?;
+            let list = match scope.to_ascii_lowercase().as_str() {
+                "sheetset" => &env.sheet_set,
+                "sheet" => &env.sheet,
+                _ => return None,
+            };
+            let property = property.trim().trim_start_matches("CustomProperty").trim();
+            list.iter().find(|(k, _)| k.eq_ignore_ascii_case(property)).map(|(_, v)| text_case(v, format))
         }
         "AcObjProp" => {
             let id = object_id(name)?;
@@ -386,6 +403,16 @@ mod tests {
         assert_eq!(evaluate(r#"%<\AcVar Title \f "%tc4">%"#, &doc), "Ground Floor");
         assert_eq!(evaluate(r#"%<\AcVar Filename>%"#, &doc), format!("/plans{}House.dwg", std::path::MAIN_SEPARATOR));
         assert_eq!(evaluate(r#"by %<\AcVar Login>%: %<\AcVar Nothing>%"#, &doc), "by pat: ####");
+        set_env(FieldEnv {
+            sheet_set: vec![("Name".into(), "Hillside House".into()), ("Client".into(), "Ada".into())],
+            sheet: vec![("Number".into(), "A-101".into()), ("Title".into(), "Ground Floor".into())],
+            ..env()
+        });
+        assert_eq!(
+            evaluate(r#"%<\AcSm SheetSet.Name>%, %<\AcSm Sheet.Number>% %<\AcSm Sheet.Title \f "%tc1">%"#, &doc),
+            "Hillside House, A-101 GROUND FLOOR"
+        );
+        assert_eq!(evaluate(r#"%<\AcSm SheetSet.client>% %<\AcSm Sheet.Scale>%"#, &doc), "Ada ####");
         assert_eq!(evaluate("no fields", &doc), "no fields");
     }
 

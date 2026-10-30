@@ -2,8 +2,11 @@
 //! layouts of drawings, each with its number and title — kept in a sheet
 //! set file (.oxss, JSON) beside them. The palette adds a drawing's
 //! layouts, removes and reorders sheets, opens one's drawing in a tab,
-//! publishes the set to one PDF, and ARCHIVE copies the set with its
-//! drawings and the files they use into a folder.
+//! publishes the set (or the sheets ticked, a sheet selection saved by
+//! name) to one PDF, places a sheet list table, and ARCHIVE copies the set
+//! with its drawings and the files they use into a folder. Custom
+//! properties of the set and of each sheet show in fields
+//! (`%<\AcSm SheetSet.Client>%`, `%<\AcSm Sheet.Number>%`).
 
 use std::path::{Path, PathBuf};
 
@@ -22,6 +25,17 @@ pub struct SheetRef {
     pub title: String,
     pub drawing: String,
     pub layout: String,
+    /// Its own custom properties: name and value.
+    pub properties: Vec<(String, String)>,
+}
+
+/// Sheets kept together under a name, to publish together.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SheetSelection {
+    pub name: String,
+    /// Each sheet's drawing and layout.
+    pub sheets: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -30,6 +44,30 @@ pub struct SheetSet {
     pub name: String,
     pub description: String,
     pub sheets: Vec<SheetRef>,
+    /// The set's custom properties: name and value.
+    pub properties: Vec<(String, String)>,
+    pub selections: Vec<SheetSelection>,
+}
+
+impl SheetSet {
+    /// The sheets in selection `name`, by number in the list.
+    pub fn selection(&self, name: &str) -> Vec<usize> {
+        let Some(s) = self.selections.iter().find(|s| s.name == name) else { return Vec::new() };
+        self.sheets
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| s.sheets.iter().any(|(d, l)| *d == r.drawing && l.eq_ignore_ascii_case(&r.layout)))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Saves the sheets `ticked` as selection `name` (in place of one so named).
+    pub fn save_selection(&mut self, name: &str, ticked: &[usize]) {
+        let sheets =
+            ticked.iter().filter_map(|i| self.sheets.get(*i)).map(|r| (r.drawing.clone(), r.layout.clone())).collect();
+        self.selections.retain(|s| s.name != name);
+        self.selections.push(SheetSelection { name: name.into(), sheets });
+    }
 }
 
 /// The Sheet Set Manager: the set open, where its file is, the sheet picked.
@@ -37,6 +75,45 @@ pub(crate) struct SheetSetPalette {
     pub(crate) path: Option<PathBuf>,
     pub(crate) set: SheetSet,
     selected: Option<usize>,
+    /// The sheets ticked to publish.
+    ticked: Vec<usize>,
+    /// The name a new sheet selection gets.
+    selection_name: String,
+}
+
+impl SheetSetPalette {
+    fn new(path: Option<PathBuf>, set: SheetSet) -> Self {
+        Self { path, set, selected: None, ticked: Vec::new(), selection_name: String::new() }
+    }
+}
+
+/// Custom properties, editable: name and value, removable, one to add.
+fn property_rows(ui: &mut egui::Ui, id: &str, properties: &mut Vec<(String, String)>) -> bool {
+    let mut changed = false;
+    let mut remove = None;
+    egui::Grid::new(id).num_columns(3).spacing([4.0, 2.0]).show(ui, |ui| {
+        for (i, (name, value)) in properties.iter_mut().enumerate() {
+            let r = ui.add(egui::TextEdit::singleline(name).desired_width(90.0));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Property name"));
+            changed |= r.changed();
+            let r = ui.add(egui::TextEdit::singleline(value).desired_width(130.0));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Property value"));
+            changed |= r.changed();
+            if ui.small_button("✕").on_hover_text("Remove the property").clicked() {
+                remove = Some(i);
+            }
+            ui.end_row();
+        }
+    });
+    if let Some(i) = remove {
+        properties.remove(i);
+        changed = true;
+    }
+    if ui.small_button("Add Property").clicked() {
+        properties.push((format!("Property{}", properties.len() + 1), String::new()));
+        changed = true;
+    }
+    changed
 }
 
 impl SheetSet {
@@ -69,14 +146,14 @@ fn drawing_path(set: Option<&Path>, sheet: &SheetRef) -> PathBuf {
 impl OxidraftApp {
     pub(crate) fn toggle_sheet_set(&mut self) {
         if self.sheet_set.take().is_none() {
-            self.sheet_set = Some(SheetSetPalette { path: None, set: SheetSet::default(), selected: None });
+            self.sheet_set = Some(SheetSetPalette::new(None, SheetSet::default()));
         }
     }
 
     /// Opens the sheet set file at `path` in the Sheet Set Manager.
     pub fn open_sheet_set(&mut self, path: &Path) -> Result<(), String> {
         let set = SheetSet::load(path)?;
-        self.sheet_set = Some(SheetSetPalette { path: Some(path.to_path_buf()), set, selected: None });
+        self.sheet_set = Some(SheetSetPalette::new(Some(path.to_path_buf()), set));
         Ok(())
     }
 
@@ -84,7 +161,7 @@ impl OxidraftApp {
     pub fn new_sheet_set(&mut self, path: &Path, name: &str) -> Result<(), String> {
         let set = SheetSet { name: name.into(), ..Default::default() };
         set.save(path)?;
-        self.sheet_set = Some(SheetSetPalette { path: Some(path.to_path_buf()), set, selected: None });
+        self.sheet_set = Some(SheetSetPalette::new(Some(path.to_path_buf()), set));
         Ok(())
     }
 
@@ -102,6 +179,7 @@ impl OxidraftApp {
                 title: l.name.clone(),
                 drawing: name.clone(),
                 layout: l.name.clone(),
+                properties: Vec::new(),
             });
             added += 1;
         }
@@ -109,12 +187,82 @@ impl OxidraftApp {
         Ok(added)
     }
 
-    /// The set's sheets plotted, each on its layout's page setup.
+    /// The sheet set open in the Sheet Set Manager.
+    pub fn sheet_set_mut(&mut self) -> Option<&mut SheetSet> {
+        self.sheet_set.as_mut().map(|p| &mut p.set)
+    }
+
+    /// Ticks sheets (by number in the list) for publishing; none: all.
+    pub fn tick_sheets(&mut self, which: &[usize]) {
+        if let Some(p) = &mut self.sheet_set {
+            p.ticked = which.to_vec();
+        }
+    }
+
+    /// Keeps the sheets ticked as sheet selection `name`, in the set's file.
+    pub fn save_sheet_selection(&mut self, name: &str) -> Result<(), String> {
+        let p = self.sheet_set.as_mut().ok_or("No sheet set is open.")?;
+        let ticked = p.ticked.clone();
+        p.set.save_selection(name, &ticked);
+        match &p.path {
+            Some(path) => p.set.save(path),
+            None => Ok(()),
+        }
+    }
+
+    /// Ticks the sheets of selection `name`.
+    pub fn choose_sheet_selection(&mut self, name: &str) {
+        if let Some(p) = &mut self.sheet_set {
+            p.ticked = p.set.selection(name);
+        }
+    }
+
+    /// The set's sheet set fields: its Name, Description and properties.
+    pub(crate) fn sheet_set_fields(&self) -> Vec<(String, String)> {
+        let Some(p) = &self.sheet_set else { return Vec::new() };
+        let set = &p.set;
+        [("Name".to_string(), set.name.clone()), ("Description".to_string(), set.description.clone())]
+            .into_iter()
+            .chain(set.properties.iter().cloned())
+            .collect()
+    }
+
+    /// The sheet fields of the sheet this drawing's layout `space` is.
+    pub(crate) fn sheet_fields(&self, space: oxidraft_model::Space) -> Vec<(String, String)> {
+        let (Some(p), Some(file), Some(layout)) = (&self.sheet_set, &self.path, self.doc.layout(space)) else {
+            return Vec::new();
+        };
+        let sheet = p
+            .set
+            .sheets
+            .iter()
+            .find(|s| drawing_path(p.path.as_deref(), s) == *file && s.layout.eq_ignore_ascii_case(&layout.name));
+        sheet.map_or_else(Vec::new, |s| {
+            [("Number".to_string(), s.number.clone()), ("Title".to_string(), s.title.clone())]
+                .into_iter()
+                .chain(s.properties.iter().cloned())
+                .collect()
+        })
+    }
+
+    /// The set's sheets plotted, each on its layout's page setup: those
+    /// ticked, or all when none are.
     fn sheet_set_sheets(&self) -> Result<Vec<Sheet>, String> {
         let p = self.sheet_set.as_ref().ok_or("No sheet set is open.")?;
         let settings = PlotSettings { area: PlotArea::Layout, ..self.plot_settings };
         let mut sheets = Vec::new();
-        for s in &p.set.sheets {
+        let env = oxidraft_model::field::env();
+        for (i, s) in p.set.sheets.iter().enumerate() {
+            if !p.ticked.is_empty() && !p.ticked.contains(&i) {
+                continue;
+            }
+            // Its sheet fields while it plots.
+            let fields = [("Number".to_string(), s.number.clone()), ("Title".to_string(), s.title.clone())];
+            oxidraft_model::field::set_env(oxidraft_model::field::FieldEnv {
+                sheet_set: self.sheet_set_fields(),
+                sheet: fields.into_iter().chain(s.properties.iter().cloned()).collect(),
+                ..env.clone()
+            });
             let file = drawing_path(p.path.as_deref(), s);
             // This drawing as it is now, else its file.
             let read;
@@ -132,7 +280,34 @@ impl OxidraftApp {
                 .id;
             sheets.extend(oxidraft_plot::render(doc, layout, &settings));
         }
+        oxidraft_model::field::set_env(env);
         Ok(sheets)
+    }
+
+    /// The Sheet List Table: the set's sheets' numbers and titles, as a
+    /// table to place.
+    pub fn insert_sheet_list(&mut self) -> Result<(), String> {
+        let p = self.sheet_set.as_ref().ok_or("No sheet set is open.")?;
+        if p.set.sheets.is_empty() {
+            return Err("The sheet set has no sheets to list.".into());
+        }
+        let rows: Vec<Vec<String>> = std::iter::once(vec!["Sheet Number".to_string(), "Sheet Title".to_string()])
+            .chain(p.set.sheets.iter().map(|s| vec![s.number.clone(), s.title.clone()]))
+            .collect();
+        let title = if p.set.name.is_empty() { "Sheet List".to_string() } else { format!("{} Sheet List", p.set.name) };
+        let text_height = self.doc.table_style().text_height;
+        let (widths, heights, cells) = crate::datalink::table_parts(&title, &rows, text_height);
+        let table = oxidraft_model::Geometry::Table {
+            position: oxidraft_geom::Point::ORIGIN,
+            rotation: 0.0,
+            widths,
+            heights,
+            cells,
+            text_height,
+            formats: Vec::new(),
+        };
+        self.engine.insert_table(table, &mut self.doc);
+        Ok(())
     }
 
     /// Publishes the set's sheets to one PDF at `path`; how many pages.
@@ -220,6 +395,7 @@ impl OxidraftApp {
         let mut open = true;
         let (mut new, mut load, mut add, mut publish, mut archive, mut open_drawing) =
             (false, false, false, false, false, None);
+        let mut sheet_list = false;
         let mut changed = false;
         egui::Window::new("SHEET SET MANAGER")
             .id(egui::Id::unique("sheet_set"))
@@ -242,7 +418,21 @@ impl OxidraftApp {
                 egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
                     for (i, s) in p.set.sheets.iter().enumerate() {
                         let label = format!("{} - {}", s.number, s.title);
-                        let r = ui.selectable_label(p.selected == Some(i), &label);
+                        let mut ticked = p.ticked.contains(&i);
+                        let r = ui
+                            .horizontal(|ui| {
+                                let t = ui.checkbox(&mut ticked, "").on_hover_text("Publish this sheet");
+                                t.widget_info(|| egui::WidgetInfo::labeled(egui::Role::CheckBox, true, &label));
+                                if t.changed() {
+                                    if ticked {
+                                        p.ticked.push(i);
+                                    } else {
+                                        p.ticked.retain(|x| *x != i);
+                                    }
+                                }
+                                ui.selectable_label(p.selected == Some(i), &label)
+                            })
+                            .inner;
                         let r = r.on_hover_text(format!("{} / {}", s.drawing, s.layout));
                         if r.clicked() {
                             p.selected = Some(i);
@@ -281,17 +471,72 @@ impl OxidraftApp {
                         if ui.button("Remove").clicked() {
                             p.set.sheets.remove(i);
                             p.selected = None;
+                            p.ticked.clear();
                             changed = true;
                         }
                     });
+                    if let Some(s) = p.set.sheets.get_mut(i) {
+                        egui::CollapsingHeader::new("Sheet Properties").id_salt("sheet_props").show(ui, |ui| {
+                            changed |= property_rows(ui, "sheet_props_grid", &mut s.properties);
+                        });
+                    }
                 }
+                egui::CollapsingHeader::new("Sheet Set Properties").id_salt("set_props").show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Description:");
+                        let r = ui.text_edit_singleline(&mut p.set.description);
+                        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Description"));
+                        changed |= r.changed();
+                    });
+                    changed |= property_rows(ui, "set_props_grid", &mut p.set.properties);
+                });
+                // Sheet selections: the sheets ticked, kept by name.
+                ui.horizontal(|ui| {
+                    ui.label("Sheet Selections:");
+                    let mut chosen = None;
+                    let r =
+                        egui::ComboBox::from_id_salt("sheet_selections").selected_text("Choose...").show_ui(ui, |ui| {
+                            for s in &p.set.selections {
+                                if ui.selectable_label(false, &s.name).clicked() {
+                                    chosen = Some(s.name.clone());
+                                }
+                            }
+                            if ui.selectable_label(false, "All sheets").clicked() {
+                                chosen = Some(String::new());
+                            }
+                        });
+                    r.response
+                        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Sheet selections"));
+                    if let Some(name) = chosen {
+                        p.ticked = if name.is_empty() { Vec::new() } else { p.set.selection(&name) };
+                    }
+                });
+                ui.horizontal(|ui| {
+                    let r = ui
+                        .add(egui::TextEdit::singleline(&mut p.selection_name).hint_text("Name").desired_width(120.0));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Selection name"));
+                    let can = !p.ticked.is_empty() && !p.selection_name.trim().is_empty();
+                    if ui.add_enabled(can, egui::Button::new("Save Selection")).clicked() {
+                        let name = p.selection_name.trim().to_string();
+                        let ticked = p.ticked.clone();
+                        p.set.save_selection(&name, &ticked);
+                        p.selection_name.clear();
+                        changed = true;
+                    }
+                });
                 ui.separator();
                 let row = vec2(ui.available_width(), 24.0);
                 ui.allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
                     add = ui.button("Add Sheets...").on_hover_text("Adds a drawing's layouts").clicked();
-                    publish = ui.button("Publish to PDF...").clicked();
+                    let what = if p.ticked.is_empty() {
+                        "the sheet set".to_string()
+                    } else {
+                        format!("{} sheet(s) ticked", p.ticked.len())
+                    };
+                    publish = ui.button("Publish to PDF...").on_hover_text(format!("Publishes {what}")).clicked();
                     archive = ui.button("Archive...").clicked();
                 });
+                sheet_list = ui.button("Insert Sheet List").on_hover_text("A table of the sheets, to place").clicked();
             });
         if changed
             && let Some(path) = &p.path
@@ -332,6 +577,9 @@ impl OxidraftApp {
         }
         if archive {
             self.archive_command();
+        }
+        if sheet_list && let Err(e) = self.insert_sheet_list() {
+            self.engine.log(e);
         }
         if let Some(file) = sheet {
             self.tab_request = Some(crate::drawings::TabRequest::Open(file));

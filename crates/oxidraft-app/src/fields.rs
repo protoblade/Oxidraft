@@ -156,6 +156,8 @@ impl OxidraftApp {
             saved: self.file_times.saved,
             plotted: None,
             login,
+            sheet_set: self.sheet_set_fields(),
+            sheet: self.sheet_fields(self.shown_space()),
         }
     }
 

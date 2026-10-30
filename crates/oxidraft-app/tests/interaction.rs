@@ -2990,6 +2990,49 @@ fn sheet_sets_share_and_markup() {
     let pdf = dir.join("Project.pdf");
     assert_eq!(app.publish_sheet_set(&pdf), Ok(2));
     assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
+    // A sheet selection publishes its sheets, and is kept in the set's file.
+    app.tick_sheets(&[1]);
+    assert_eq!(app.publish_sheet_set(&pdf), Ok(1));
+    app.save_sheet_selection("Details only").unwrap();
+    app.tick_sheets(&[]);
+    assert_eq!(app.publish_sheet_set(&pdf), Ok(2), "none ticked: all");
+    app.choose_sheet_selection("Details only");
+    assert_eq!(app.publish_sheet_set(&pdf), Ok(1));
+    app.tick_sheets(&[]);
+    assert!(std::fs::read_to_string(&set).unwrap().contains("Details only"));
+    // A custom property, in a field.
+    app.sheet_set_mut().unwrap().properties.push(("Client".into(), "Ada".into()));
+    let note = app.document_mut().add(Geometry::Text {
+        look: Default::default(),
+        position: Point::new(0.0, -20.0),
+        height: 2.5,
+        rotation: 0.0,
+        width: 0.0,
+        attach: oxidraft_model::annotation::Attach::BottomLeft,
+        content: "For %<\\AcSm SheetSet.Client>% (%<\\AcSm SheetSet.Name>%)".into(),
+    });
+    h.run();
+    let doc = h.state_mut().document_mut();
+    let shown = doc.expanded(doc.entity(note).unwrap());
+    assert!(
+        shown.iter().any(|g| matches!(g, Geometry::Text { content, .. } if content == "For Ada (Project)")),
+        "{shown:?}"
+    );
+    // The Sheet List Table, placed.
+    let app = h.state_mut();
+    app.insert_sheet_list().unwrap();
+    app.type_command("200,200");
+    let table = app.document_mut().entities().find_map(|e| match &e.geometry {
+        Geometry::Table { cells, .. } => Some(cells.clone()),
+        _ => None,
+    });
+    let cells = table.expect("a table");
+    assert!(
+        cells.iter().any(|r| r.iter().any(|c| c == "Sheet Number"))
+            && cells.iter().any(|r| r.contains(&"Details".to_string())),
+        "{cells:?}"
+    );
+    let app = h.state_mut();
     // ARCHIVE: the set, its drawing and a report.
     let archive = dir.join("archive");
     let archived = app.archive_sheet_set(&archive);
