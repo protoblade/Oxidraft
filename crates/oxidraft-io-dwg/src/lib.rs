@@ -13,6 +13,7 @@ mod dimassoc;
 mod fields;
 mod groups;
 mod layouts;
+mod mleaders;
 mod settings;
 
 pub type Error = String;
@@ -91,8 +92,14 @@ pub fn read(bytes: &[u8]) -> Result<Opened, Error> {
         .read()
         .map_err(|e| format!("not a readable DWG file ({e})"))?;
     let version = Version::of(cad.version);
-    // Oxidraft keeps no other extended data than hyperlinks and what it
-    // adds to dimensions, and some trips up the DXF reader.
+    keep_known_xdata(&mut cad);
+    let imported = imported_from(&mut cad)?;
+    Ok(Opened { imported, version })
+}
+
+/// Oxidraft keeps no other extended data than hyperlinks and what it adds
+/// to its objects and dimensions, and some trips up the DXF reader.
+fn keep_known_xdata(cad: &mut CadDocument) {
     for e in cad.entities_mut() {
         let dimension = matches!(e, acadrust::EntityType::Dimension(_));
         let data = &mut e.common_mut().extended_data;
@@ -119,15 +126,29 @@ pub fn read(bytes: &[u8]) -> Result<Opened, Error> {
             data.add_record(r);
         }
     }
-    let dxf = DxfWriter::new(&cad).with_version(DxfVersion::AC1032).write_to_vec().map_err(|e| e.to_string())?;
-    let mut imported = oxidraft_io_dxf::read(&mut dxf.as_slice()).map_err(|e| e.to_string())?;
-    fields::restore(&cad, &mut imported);
-    dimassoc::restore(&cad, &mut imported);
-    Ok(Opened { imported, version })
 }
 
-/// A DXF file, its texts' AutoCAD fields brought back as field codes.
+/// What acadrust read, through DXF in memory: multileaders made LEADERs
+/// the DXF reader knows, fields and associations brought back after.
+fn imported_from(cad: &mut CadDocument) -> Result<Imported, Error> {
+    mleaders::unpack(cad);
+    let dxf = DxfWriter::new(cad).with_version(DxfVersion::AC1032).write_to_vec().map_err(|e| e.to_string())?;
+    let mut imported = oxidraft_io_dxf::read(&mut dxf.as_slice()).map_err(|e| e.to_string())?;
+    fields::restore(cad, &mut imported);
+    dimassoc::restore(cad, &mut imported);
+    Ok(imported)
+}
+
+/// A DXF file, its texts' AutoCAD fields brought back as field codes. One
+/// with multileaders, which the DXF reader doesn't know, is read by
+/// acadrust, as a DWG is.
 pub fn read_dxf(bytes: &[u8]) -> Result<Imported, Error> {
+    if bytes.windows(11).any(|w| w == b"MULTILEADER")
+        && let Ok(mut cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
+    {
+        keep_known_xdata(&mut cad);
+        return imported_from(&mut cad);
+    }
     let mut imported = oxidraft_io_dxf::read(&mut &bytes[..]).map_err(|e| e.to_string())?;
     if bytes.windows(10).any(|w| w == b"ACAD_FIELD")
         && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
@@ -155,6 +176,9 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
     layouts::finish(&mut cad, doc);
     groups::finish(&mut cad, doc, &handles);
     settings::finish(&mut cad, doc);
+    if version >= DxfVersion::AC1021 {
+        mleaders::finish(&mut cad, doc, &handles);
+    }
     cad.version = version;
     dimassoc::finish(&mut cad, doc, &handles);
     if version >= DxfVersion::AC1018 {
@@ -181,7 +205,9 @@ pub fn write(doc: &Document, version: Version) -> Result<Vec<u8>, Error> {
 /// (2007 is the first to have them). Written by acadrust, which also
 /// writes the layouts' page setups and viewports.
 pub fn write_dxf(doc: &Document) -> Result<Vec<u8>, Error> {
-    let newer = oxidraft_io_dxf::needs_newer_version(doc);
+    // Multileaders need AutoCAD 2007's MULTILEADER.
+    let leaders = doc.all_entities().any(|e| matches!(e.geometry, oxidraft_model::Geometry::Leader { .. }));
+    let newer = oxidraft_io_dxf::needs_newer_version(doc) || leaders;
     let version = if newer { DxfVersion::AC1024 } else { DxfVersion::AC1015 };
     let cad = cad(doc, version)?;
     DxfWriter::new(&cad).with_version(version).write_to_vec().map_err(|e| e.to_string())
@@ -886,9 +912,42 @@ mod tests {
         let mut ours = Vec::new();
         oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
         check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
-        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        let dxf = write_dxf(&doc).unwrap();
+        check(&read_dxf(&dxf).unwrap().document, "DXF");
         for version in [Version::R2018, Version::R2000] {
             check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    /// A multileader as AutoCAD makes it, without Oxidraft's data: one
+    /// multileader with its text, at the text's height.
+    #[test]
+    fn autocads_multileaders_come_in_whole() {
+        use acadrust::entities::MultiLeader;
+        use acadrust::types::Vector3;
+        let mut cad = CadDocument::new();
+        let mut m = MultiLeader::with_text(
+            "SEE DETAIL",
+            Vector3::new(12.0, 11.0, 0.0),
+            vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 10.0, 0.0)],
+        );
+        m.context.text_height = 5.0;
+        m.context.leader_roots[0].create_line(vec![Vector3::new(20.0, 0.0, 0.0), Vector3::new(10.0, 10.0, 0.0)]);
+        cad.add_entity(acadrust::EntityType::MultiLeader(Box::new(m))).unwrap();
+        let dxf = DxfWriter::new(&cad).with_version(DxfVersion::AC1024).write_to_vec().unwrap();
+        let mut dwg = Cursor::new(Vec::new());
+        cad.version = DxfVersion::AC1032;
+        DwgWriter::write_to_writer(&mut dwg, &cad).unwrap();
+        let dwg = dwg.into_inner();
+        for (how, doc) in [("DXF", read_dxf(&dxf).unwrap().document), ("DWG", read(&dwg).unwrap().imported.document)] {
+            let leaders: Vec<&Geometry> = doc.entities().map(|e| &e.geometry).collect();
+            assert_eq!(leaders.len(), 1, "{how}: {leaders:?}");
+            let Geometry::Leader { points, content, scale, more, .. } = leaders[0] else { panic!("{how}") };
+            assert_eq!(content, "SEE DETAIL", "{how}");
+            assert_eq!(points, &[Point::new(0.0, 0.0), Point::new(10.0, 10.0)], "{how}");
+            assert_eq!(more, &[Point::new(20.0, 0.0)], "{how}: the second leader line");
+            let height = oxidraft_model::annotation::DEFAULT_LEADER_STYLE.text_height * scale;
+            assert!((height - 5.0).abs() < 1e-9, "{how}: {height}");
         }
     }
 
@@ -1122,10 +1181,24 @@ mod tests {
         let mut ours = Vec::new();
         oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
         check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
-        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        let dxf = write_dxf(&doc).unwrap();
+        check(&read_dxf(&dxf).unwrap().document, "DXF");
         for version in [Version::R2018, Version::R2000] {
             check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
         }
+        // AutoCAD sees MULTILEADERs, the parts gone.
+        let kinds = |cad: &CadDocument| {
+            let count = |f: fn(&acadrust::EntityType) -> bool| cad.entities().filter(|e| f(e)).count();
+            (
+                count(|e| matches!(e, acadrust::EntityType::MultiLeader(_))),
+                count(|e| matches!(e, acadrust::EntityType::Leader(_) | acadrust::EntityType::MText(_))),
+            )
+        };
+        let cad = DxfReader::from_reader(Cursor::new(dxf)).and_then(|r| r.read()).unwrap();
+        assert_eq!(kinds(&cad), (2, 0), "DXF");
+        let dwg = write(&doc, Version::R2018).unwrap();
+        let cad = DwgReader::from_stream(Cursor::new(dwg)).read().unwrap();
+        assert_eq!(kinds(&cad), (2, 0), "DWG");
     }
 
     #[test]
