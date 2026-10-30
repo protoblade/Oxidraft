@@ -135,6 +135,13 @@ pub struct OxidraftApp {
     pub(crate) font_map: String,
     /// The fonts MTEXT names inline, as of a revision of the drawing.
     pub(crate) inline_fonts: (Option<u64>, Vec<String>),
+    /// The Traces palette, the trace being drawn in (and the layer that was
+    /// current), how opaque the tracing paper is (TRACEPAPERCTL), and
+    /// whether traces are in front of the drawing (TRACEFRONT).
+    pub(crate) traces_palette: Option<crate::traces::TracesPalette>,
+    pub(crate) trace_open: Option<(String, String)>,
+    pub(crate) trace_paper: u8,
+    pub(crate) trace_front: bool,
     /// AutoLISP: what APPLOAD and the command line defined.
     pub(crate) lisp: crate::lisp_host::LispThread,
     /// VSLIDE's slide, shown until REDRAW.
@@ -370,6 +377,10 @@ impl OxidraftApp {
             plot_stamp: false,
             font_map: String::new(),
             inline_fonts: (None, Vec::new()),
+            traces_palette: None,
+            trace_open: None,
+            trace_paper: 50,
+            trace_front: true,
             lisp: Default::default(),
             slide: None,
             pending_data_link: None,
@@ -874,6 +885,14 @@ impl OxidraftApp {
             | "TARGETPOINT" => self.engine.log(not_applicable(name)),
             "EXPORTTOAUTOCAD" | "AECTOACAD" => self.export(false),
             "SHEETSET" | "SSM" => self.toggle_sheet_set(),
+            "TRACES" => {
+                self.traces_palette = match self.traces_palette.take() {
+                    Some(_) => None,
+                    None => Some(Default::default()),
+                }
+            }
+            "TRACEFRONT" => self.trace_front = true,
+            "TRACEBACK" => self.trace_front = false,
             "SHEETSETHIDE" => self.sheet_set = None,
             "OPENSHEETSET" => {
                 if let Some(path) = rfd::FileDialog::new().add_filter("Sheet set", &["oxss"]).pick_file()
@@ -1391,6 +1410,7 @@ impl eframe::App for OxidraftApp {
         self.plotter_manager_dialog(&ctx);
         self.cui_dialog(&ctx);
         self.sheet_set_palette(&ctx);
+        self.traces_palette(&ctx);
         self.quick_view_layouts(&ctx);
         self.drawing_recovery(&ctx);
         self.autosave_tick();

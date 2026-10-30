@@ -1150,6 +1150,14 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { name: "DGNADJUST", aliases: &[], description: "How an attached DGN file shows", make: None },
     CommandInfo { name: "MSLIDE", aliases: &[], description: "Save the view as a slide (.sld)", make: None },
     CommandInfo { name: "APPLOAD", aliases: &["AP"], description: "Load an AutoLISP file (.lsp)", make: None },
+    CommandInfo {
+        name: "TRACES",
+        aliases: &[],
+        description: "The Traces palette: markup over the drawing",
+        make: None,
+    },
+    CommandInfo { name: "TRACEFRONT", aliases: &[], description: "Traces in front of the drawing", make: None },
+    CommandInfo { name: "TRACEBACK", aliases: &[], description: "The drawing in front of traces", make: None },
     CommandInfo { name: "VSLIDE", aliases: &[], description: "Show a slide (.sld) until REDRAW", make: None },
     CommandInfo {
         name: "CENTERDISASSOCIATE",

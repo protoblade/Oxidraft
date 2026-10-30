@@ -431,6 +431,10 @@ fn vars() -> Vec<Var> {
             }
             Ok(())
         }),
+        var!("TRACEPAPERCTL", |a| a.trace_paper.to_string(), |a, v| {
+            a.trace_paper = parse_int(v, 0, 100)? as u8;
+            Ok(())
+        }),
         var!("VIEWCTR", |a| point(a.view.center)),
         var!("VIEWSIZE", |a| number(f64::from(a.drawing_rect.height()) / a.view.scale)),
         var!("WIPEOUTFRAME", |a| a.doc.wipeout_frame().to_string(), |a, v| {

@@ -841,7 +841,22 @@ impl OxidraftApp {
             _ if space != MODEL => Some(1.0),
             _ => None,
         };
-        for e in self.doc.space_in_draw_order(space) {
+        // Traces in front: the drawing, then the tracing paper, then them.
+        let ordered = self.doc.space_in_draw_order(space);
+        let (mut ordered, traces): (Vec<_>, Vec<_>) = if self.trace_front {
+            ordered.into_iter().partition(|e| !crate::traces::is_trace_layer(&e.layer))
+        } else {
+            (ordered, Vec::new())
+        };
+        let paper_at = ordered.len();
+        let paper =
+            !self.capturing_image() && self.trace_paper > 0 && traces.iter().any(|e| self.shows_layer(&e.layer));
+        ordered.extend(traces);
+        for (i, e) in ordered.into_iter().enumerate() {
+            if i == paper_at && paper {
+                let alpha = (f32::from(self.trace_paper) / 100.0 * 200.0) as u8;
+                painter.rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha));
+            }
             let Some(e) = self.doc.shown_at(e, anno) else { continue };
             let e = e.as_ref();
             if !self.shows_layer(&e.layer) || !self.doc.object_shown(e) || !on_screen(&self.doc.entity_bounds(e), &view)

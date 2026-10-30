@@ -3580,3 +3580,37 @@ fn autolisp_dcl_dialogs() {
     assert_eq!(h.state_mut().engine_mut().history().last().map(String::as_str), Some("0"));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn traces_markup_over_the_drawing() {
+    let mut h = app_with_line();
+    type_all(&mut h, &["traces"]);
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Trace name").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(Role::TextInput, "Trace name").type_text("Review");
+    h.run_steps(1);
+    h.get_by_label("Create Trace").click();
+    h.run_steps(2);
+    assert_eq!(h.state().traces(), ["Review"]);
+    assert_eq!(h.state().trace_open(), Some("Review"));
+    // Drawn while it's open: in the trace.
+    type_all(&mut h, &["line", "0,30", "50,30", ""]);
+    let on_trace = |h: &mut Harness<'_, OxidraftApp>| {
+        h.state_mut().document_mut().entities().filter(|e| e.layer == "TRACE$Review").count()
+    };
+    assert_eq!(on_trace(&mut h), 1);
+    h.get_by_label("Close Trace").click();
+    h.run_steps(2);
+    assert_eq!(h.state().trace_open(), None);
+    assert_eq!(h.state_mut().document_mut().current_layer(), "0", "back on the layer that was current");
+    // Copied into the drawing; hidden; TRACEPAPERCTL.
+    assert_eq!(h.state_mut().copy_trace_to_drawing("Review", "0"), 1);
+    assert_eq!(h.state_mut().document_mut().entities().filter(|e| e.layer == "0").count(), 3);
+    h.state_mut().set_trace_shown("Review", false);
+    assert!(h.state_mut().document_mut().layer("TRACE$Review").is_some_and(|l| !l.on));
+    type_all(&mut h, &["tracepaperctl", "80"]);
+    h.run_steps(1);
+    h.state_mut().delete_trace("Review");
+    assert!(h.state().traces().is_empty() && on_trace(&mut h) == 0);
+}

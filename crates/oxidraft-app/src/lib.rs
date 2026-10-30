@@ -65,6 +65,7 @@ pub mod theme;
 mod tiles;
 mod tolerance;
 pub mod tool_palettes;
+mod traces;
 mod ucs_dialog;
 mod ulayers;
 mod underlay;
