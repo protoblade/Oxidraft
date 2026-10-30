@@ -58,7 +58,7 @@ What AutoCAD LT has that Oxidraft doesn't, yet:
 - **Associative arrays:** AutoCAD sees an array as a block reference.
 - **Multileaders** saved as AutoCAD 2004 or older (which has none) are LEADERs with their text or blocks.
 - **Export:** `INSERTOBJ` links other files rather than embedding them as OLE objects.
-- **Sheet sets:** a .dst doesn't keep the sheet selections saved in Oxidraft, and AutoCAD's own aren't read.
+- **Sheet sets:** sheet selections saved in Oxidraft aren't written into a .dst (AutoCAD's own are read and kept).
 - **Interface:** a .cuix's workspaces aren't taken in, nor the images AutoCAD keeps in its own resource files (a button for one of AutoCAD's commands shows the ribbon's icon for it, where there is one).
 - **Autodesk's cloud:** `SHARE` makes a package rather than a link; Markup Assist; traces made in AutoCAD (web or desktop) aren't read, being kept in Autodesk's own data.
 - **Saved for AutoCAD in Oxidraft's own data:** dimension breaks and inspection, annotative scales and drawing settings round-trip in Oxidraft but show plain in AutoCAD. Fields naming objects come back as fields only with those objects.

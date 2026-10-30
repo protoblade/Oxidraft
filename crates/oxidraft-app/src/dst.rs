@@ -71,8 +71,45 @@ pub fn read_dst(path: &Path) -> Result<SheetSet, String> {
         }
     }
     walk(&db, root, "", path, &mut set);
+    set.selections = selections(&db, path);
     set.dst = Some(Box::new(db));
     Ok(set)
+}
+
+/// AutoCAD's sheet selections: each named one in the set's SheetSelSets,
+/// with the sheets it names (by their IDs, wherever in it they're named).
+fn selections(db: &SheetSetDatabase, path: &Path) -> Vec<crate::sheet_set::SheetSelection> {
+    let sheets: Vec<(String, (String, String))> = db
+        .sheets()
+        .iter()
+        .filter_map(|s| {
+            let layout = db.layout_reference(s.id(), "Layout")?;
+            Some((s.id().to_string(), (relative(path, Path::new(&layout.file_name)), layout.name)))
+        })
+        .collect();
+    fn named(el: &Element, sheets: &[(String, (String, String))], out: &mut Vec<(String, String)>) {
+        let mut values: Vec<&str> = el.attrs.iter().filter(|(k, _)| k != "ID").map(|(_, v)| v.as_str()).collect();
+        values.push(el.text.as_str());
+        for v in values {
+            if let Some((_, sheet)) = sheets.iter().find(|(id, _)| id.eq_ignore_ascii_case(v.trim())) {
+                out.push(sheet.clone());
+            }
+        }
+        for c in &el.children {
+            named(c, sheets, out);
+        }
+    }
+    let Some(sets) = db.sheet_set().named("SheetSelSets") else { return Vec::new() };
+    sets.children
+        .iter()
+        .filter_map(|s| {
+            let name = s.prop("Name")?.to_string();
+            let mut picked = Vec::new();
+            named(s, &sheets, &mut picked);
+            picked.dedup();
+            Some(crate::sheet_set::SheetSelection { name, sheets: picked })
+        })
+        .collect()
 }
 
 /// The sheets in `el` and its subsets, taken out: each with its key.
@@ -225,8 +262,21 @@ mod tests {
         set.sheets.swap(0, 1);
         set.sheets[0].title = "New".into();
         set.sheets[0].subset.clear();
-        let db = write_dst(&set, &path).unwrap();
+        let mut db = write_dst(&set, &path).unwrap();
+        // A selection AutoCAD keeps: its name and the sheets it refers to.
+        let first = db.sheets()[0].id().to_string();
+        let sets = db.sheet_set_mut().named_mut("SheetSelSets").unwrap();
+        let mut selection = dst::object("AcSmSheetSelSet", "g00000000-0000-0000-0000-000000000000", None);
+        selection.set_prop("Name", "Issued");
+        let mut reference = dst::object("AcSmObjectReference", dst::CLSID_OBJECT_REFERENCE, None);
+        reference.set_prop_vt("ReferencedObject", -1, &first);
+        selection.children.push(reference);
+        sets.children.push(selection);
+        db.write(&path.to_string_lossy()).unwrap();
         let again = read_dst(&path).unwrap();
+        assert_eq!(again.selections.len(), 1);
+        assert_eq!(again.selections[0].name, "Issued");
+        assert_eq!(again.selections[0].sheets, [(again.sheets[0].drawing.clone(), again.sheets[0].layout.clone())]);
         assert_eq!(again.sheets, set.sheets, "in the new order, the one retitled out of its subset");
         assert_eq!(id(&again).len(), 2);
         assert!(ids.iter().all(|i| db.find(i).is_some()), "the same sheets, moved");
