@@ -121,6 +121,17 @@ pub(crate) fn proxy_graphics(parts: &[Geometry]) -> ProxyGraphics {
     for g in parts {
         match g {
             Geometry::Line { start, end } => points_record(6, &[*start, *end]),
+            // Circles and arcs, as 32-sided polylines.
+            Geometry::Circle { center, radius } => points_record(
+                6,
+                &(0..=32).map(|k| center.polar(*radius, f64::from(k) * 360.0 / 32.0)).collect::<Vec<_>>(),
+            ),
+            Geometry::Arc { center, radius, start_angle, end_angle } => {
+                let sweep = (end_angle - start_angle).rem_euclid(360.0);
+                let points: Vec<Point> =
+                    (0..=32).map(|k| center.polar(*radius, start_angle + sweep * f64::from(k) / 32.0)).collect();
+                points_record(6, &points);
+            }
             // A filled arrowhead.
             Geometry::Hatch { loops, .. } => {
                 for l in loops {
@@ -149,7 +160,8 @@ pub(crate) fn proxy_graphics(parts: &[Geometry]) -> ProxyGraphics {
                 for (k, line) in lines.into_iter().enumerate() {
                     let wide = height * 0.6 * line.chars().count() as f64;
                     let x = match attach {
-                        Attach::MiddleRight => position.x - wide,
+                        Attach::MiddleRight | Attach::TopRight | Attach::BottomRight => position.x - wide,
+                        Attach::MiddleCenter | Attach::TopCenter | Attach::BottomCenter => position.x - wide / 2.0,
                         _ => position.x,
                     };
                     let y = position.y + block / 2.0 - height - k as f64 * height * 1.667;
@@ -264,7 +276,22 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document, handles: &HashMap<En
             _ => m.content_type = LeaderContentType::None,
         }
         if proxies {
-            let parts = with_leader_style(ls, || leader_primitives(points, content, *scale, false));
+            let mut parts = with_leader_style(ls, || leader_primitives(points, content, *scale, blocks.is_some()));
+            // Its blocks, placed, and their attributes' values.
+            for insert in &inserts {
+                let Geometry::Insert { block, placement, attributes, .. } = insert else { continue };
+                let Some(b) = doc.block(block) else { continue };
+                parts.extend(b.entities.iter().map(|x| placement.place(b.base, &x.geometry)));
+                parts.extend(attributes.iter().filter(|a| !a.invisible).map(|a| Geometry::Text {
+                    look: Default::default(),
+                    position: a.position,
+                    height: a.height,
+                    rotation: a.rotation,
+                    width: 0.0,
+                    attach: a.attach,
+                    content: a.value.clone(),
+                }));
+            }
             m.common.set_proxy_graphics(&proxy_graphics(&parts));
         }
         if let Some(slot) = cad.get_entity_mut(first) {
@@ -369,37 +396,53 @@ mod tests {
             blocks: None,
         };
         doc.add(leader);
+        // And one with a tag block (a circle around its number).
+        let tag = doc.tag_block(oxidraft_model::annotation::TagShape::Circle);
+        doc.add(Geometry::Leader {
+            points: vec![Point::new(50.0, 0.0), Point::new(60.0, 10.0)],
+            content: String::new(),
+            scale: 1.0,
+            more: Vec::new(),
+            blocks: Some(Box::new(oxidraft_model::annotation::LeaderBlocks::one(tag, "7"))),
+        });
         for version in [crate::Version::R2004, crate::Version::R2000] {
             crate::set_native_objects(true);
             let dwg = crate::write(&doc, version).unwrap();
             crate::set_native_objects(false);
             // As AutoCAD 2004 reads it: a multileader it draws by its graphics.
             let cad = acadrust::DwgReader::from_stream(std::io::Cursor::new(dwg.clone())).read().unwrap();
-            let kinds: Vec<&str> = cad.entities().map(|e| e.as_entity().entity_type()).collect();
-            assert_eq!(kinds, ["MULTILEADER"], "{version:?}");
-            let graphics = cad.entities().next().unwrap().common().proxy_graphics().expect("its proxy graphics");
-            let lines = graphics
-                .records
-                .iter()
-                .filter(|r| matches!(r, ProxyGraphicRecord::Unknown { record_type: 6, .. }))
-                .count();
-            let texts: Vec<&str> = graphics
-                .records
-                .iter()
-                .filter_map(|r| match r {
-                    ProxyGraphicRecord::UnicodeText(t) => Some(t.text.as_str()),
-                    _ => None,
-                })
-                .collect();
-            assert!(lines >= 1, "{version:?}: its line and arrowhead");
-            assert_eq!(texts, ["SEE DETAIL", "SHEET 4"], "{version:?}");
+            let leaders: Vec<&EntityType> =
+                cad.entities().filter(|e| matches!(e, EntityType::MultiLeader(_))).collect();
+            assert_eq!(leaders.len(), 2, "{version:?}");
+            let drawn = |e: &EntityType| {
+                let graphics = e.common().proxy_graphics().expect("its proxy graphics");
+                let lines = graphics
+                    .records
+                    .iter()
+                    .filter(|r| matches!(r, ProxyGraphicRecord::Unknown { record_type: 6, .. }))
+                    .count();
+                let texts: Vec<String> = graphics
+                    .records
+                    .iter()
+                    .filter_map(|r| match r {
+                        ProxyGraphicRecord::UnicodeText(t) => Some(t.text.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                (lines, texts)
+            };
+            let all: Vec<(usize, Vec<String>)> = leaders.iter().map(|e| drawn(e)).collect();
+            assert!(all.iter().any(|(lines, texts)| *lines >= 1 && texts == &["SEE DETAIL", "SHEET 4"]), "{all:?}");
+            // The tag: its leader, its circle and its number.
+            assert!(all.iter().any(|(lines, texts)| *lines >= 2 && texts == &["7"]), "{all:?}");
             // Oxidraft (and AutoCAD 2007 on) reads it back a multileader.
             let back = crate::read(&dwg).unwrap().imported.document;
             let got: Vec<&Geometry> = back.entities().map(|e| &e.geometry).collect();
             assert!(
-                matches!(got.as_slice(), [Geometry::Leader { content, .. }] if content == "SEE DETAIL\\PSHEET 4"),
+                got.iter().any(|g| matches!(g, Geometry::Leader { content, .. } if content == "SEE DETAIL\\PSHEET 4")),
                 "{version:?}: {got:?}"
             );
+            assert!(got.iter().any(|g| matches!(g, Geometry::Leader { blocks: Some(_), .. })), "{version:?}: {got:?}");
         }
         // Without NATIVESAVE, AutoCAD 2004 gets LEADERs it can edit.
         let cad =
