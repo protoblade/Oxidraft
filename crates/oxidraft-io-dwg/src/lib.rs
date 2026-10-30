@@ -15,6 +15,7 @@ pub use acadrust::sheet_set;
 pub use ole::bmp_from_dib;
 
 mod annotative;
+mod arrays;
 mod dimassoc;
 mod dimbreaks;
 mod dynblocks;
@@ -154,6 +155,7 @@ fn imported_from(cad: &mut CadDocument) -> Result<Imported, Error> {
     annotative::restore(cad, &mut imported);
     dimbreaks::restore(cad, &mut imported);
     ole::restore(cad, &mut imported);
+    arrays::restore(cad, &mut imported);
     // acadrust's DXF leaves $LIMCHECK out.
     if cad.header.limit_check {
         imported.document.set_limits_check(true);
@@ -229,6 +231,11 @@ pub fn read_dxf(bytes: &[u8]) -> Result<Imported, Error> {
         && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
     {
         ole::restore(&cad, &mut imported);
+    }
+    if bytes.windows(24).any(|w| w == b"ACDBASSOCARRAYACTIONBODY")
+        && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
+    {
+        arrays::restore(&cad, &mut imported);
     }
     if bytes.windows(9).any(|w| w == b"BREAKDATA")
         && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
@@ -326,6 +333,7 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
     if native_objects() {
         annotative::write(&mut cad, doc, &handles);
         dimbreaks::write(&mut cad, doc, &handles);
+        arrays::write(&mut cad, doc, &handles);
     }
     groups::finish(&mut cad, doc, &handles);
     settings::finish(&mut cad, doc);

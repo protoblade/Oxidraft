@@ -55,7 +55,7 @@ work (LINE, PLINE, OFFSET, TRIM, FILLET, LAYER, DIM, HATCH…).
 
 What AutoCAD LT has that Oxidraft doesn't, yet:
 
-- **Associative arrays:** AutoCAD sees an array as a block reference.
+- **Associative arrays:** AutoCAD's rectangular and polar arrays come in as arrays (from their items), its path arrays as block references. Oxidraft's rectangular and polar arrays go out as AutoCAD's (its association network, action, dependency and array body, laid out as AutoCAD-made drawings have them) only with `NATIVESAVE` 1: the names and form of the layout's values are guessed (AutoCAD's aren't published) and it isn't yet tried in AutoCAD itself; path arrays are block references to AutoCAD.
 - **Multileaders** saved as AutoCAD 2004 or older (which has none) are LEADERs with their text or blocks.
 - **OLE objects:** a file `INSERTOBJ` embeds is kept in Oxidraft's own data, so AutoCAD sees its frame rather than an OLE object, unless `NATIVESAVE` is 1: then it's saved as an OLE package (Windows' Packager's, the file in it, its frame and name its picture), laid out as an AutoCAD-made drawing's OLE object is, but not yet tried in AutoCAD itself. AutoCAD's OLE objects come in as the pictures they show (a metafile's as its frame), and its packages as INSERTOBJ's, kept in the drawing, not as OLE objects to edit.
 - **Sheet sets:** a sheet selection saved in Oxidraft goes into a .dst only when the set has one made in AutoCAD to follow (AutoCAD's own are read and kept).
