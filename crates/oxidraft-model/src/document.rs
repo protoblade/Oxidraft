@@ -2333,6 +2333,8 @@ impl Document {
         let changed = self.changed_before();
         if !changed.is_empty() {
             self.follow_center_marks(&changed);
+            // Path arrays follow their paths, in the same step.
+            self.follow_array_paths(&changed);
         }
         // Dimensions follow the objects they measure, in the same step.
         if !self.dim_assoc.is_empty()

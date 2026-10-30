@@ -58,11 +58,18 @@ pub struct RefClose {
     /// Started as the panel's Save Changes or Discard Changes.
     preset: Option<bool>,
     idle: bool,
+    /// ARRAYCLOSE: asks Yes or No.
+    array: bool,
 }
 
 impl RefClose {
     pub fn new(save: Option<bool>) -> Self {
-        Self { preset: save, idle: false }
+        Self { preset: save, idle: false, array: false }
+    }
+
+    /// ARRAYCLOSE: ends editing an array's source objects.
+    pub fn array() -> Self {
+        Self { array: true, ..Self::new(None) }
     }
 
     fn close(save: bool, ctx: &mut Ctx) -> Step {
@@ -75,9 +82,13 @@ impl RefClose {
             ctx.ui = Some(UiRequest::SaveXrefEdit);
             return Step::Done;
         }
-        let block = r.block.clone();
+        let (block, array) = (r.block.clone(), r.array.is_some());
         ctx.doc.close_refedit(save);
-        if save {
+        if array {
+            let done =
+                if save { "Changes to the array's source saved." } else { "Changes to the array's source discarded." };
+            ctx.messages.push(done.into());
+        } else if save {
             let n = ctx
                 .doc
                 .entities()
@@ -102,6 +113,9 @@ impl Command for RefClose {
     }
 
     fn prompt(&self) -> Prompt {
+        if self.array {
+            return Prompt::new("Save changes to array").with_keywords(&["Yes", "No"]).with_default("Yes");
+        }
         Prompt::new("Enter option").with_keywords(&["Save", "Discard reference changes"]).with_default("Save")
     }
 
@@ -110,7 +124,7 @@ impl Command for RefClose {
             return Ok(Self::close(save, ctx));
         }
         match input {
-            Input::Keyword("Discard reference changes") => Ok(Self::close(false, ctx)),
+            Input::Keyword("Discard reference changes" | "No") => Ok(Self::close(false, ctx)),
             Input::Keyword(_) | Input::Enter => Ok(Self::close(true, ctx)),
             _ => Err("Enter Save or Discard.".into()),
         }

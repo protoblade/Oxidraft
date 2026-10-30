@@ -31,6 +31,9 @@ pub struct RefEdit {
     /// of the drawing hidden, and `reference` is a temporary one at the
     /// origin, gone when the editor closes.
     pub editor: bool,
+    /// ARRAYEDIT Source: the array whose item is being edited, through a
+    /// temporary reference at that item, gone when editing ends.
+    pub array: Option<EntityId>,
 }
 
 impl RefEdit {
@@ -88,7 +91,8 @@ impl Document {
             self.add_styled(placement.place(def.base, &be.geometry), &be.layer, be.color, &be.linetype, be.lineweight);
         }
         let outside = host.clone();
-        self.set_refedit(Some(RefEdit { reference, block: def.name, placement, host, outside, editor: false }));
+        let r = RefEdit { reference, block: def.name, placement, host, outside, editor: false, array: None };
+        self.set_refedit(Some(r));
         Ok(def.entities.len())
     }
 
@@ -180,7 +184,7 @@ impl Document {
             self.remove(id);
         }
         self.set_refedit(None);
-        if r.editor {
+        if r.editor || r.array.is_some() {
             self.remove(r.reference);
         }
         Some(r)

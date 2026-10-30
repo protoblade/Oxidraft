@@ -282,6 +282,12 @@ impl Command for Array {
 enum EditStage {
     Select,
     Option,
+    /// Source: the item whose objects are edited.
+    SourceItem,
+    /// REPlace: the objects, their base point, then the items they replace.
+    ReplaceObjects,
+    ReplaceBase,
+    ReplaceItems,
     Rows,
     RowSpacing,
     Columns,
@@ -303,11 +309,21 @@ pub struct ArrayEdit {
     layout: Option<ArrayLayout>,
     /// A count typed, waiting for its spacing.
     count: usize,
+    /// REPlace's objects and their base point.
+    replacement: Vec<EntityId>,
+    replace_base: Point,
 }
 
 impl Default for ArrayEdit {
     fn default() -> Self {
-        Self { stage: EditStage::Select, id: None, layout: None, count: 0 }
+        Self {
+            stage: EditStage::Select,
+            id: None,
+            layout: None,
+            count: 0,
+            replacement: Vec::new(),
+            replace_base: Point::ORIGIN,
+        }
     }
 }
 
@@ -343,13 +359,19 @@ impl Command for ArrayEdit {
         let layout = self.layout.as_ref();
         match self.stage {
             EditStage::Select => Prompt::new("Select array"),
+            EditStage::SourceItem => Prompt::new("Select item in array"),
+            EditStage::ReplaceObjects => Prompt::new("Select replacement objects"),
+            EditStage::ReplaceBase => Prompt::new("Select base point of replacement objects").with_default("centroid"),
+            EditStage::ReplaceItems => {
+                Prompt::new("Replace array items").with_keywords(&["Source objects"]).with_default("done")
+            }
             EditStage::Option => {
                 let keywords: &[&str] = match layout {
-                    Some(ArrayLayout::Rect { .. }) => &["Rows", "COLumns", "eXit"],
+                    Some(ArrayLayout::Rect { .. }) => &["Source", "REPlace", "Rows", "COLumns", "RESet", "eXit"],
                     Some(ArrayLayout::Polar { .. }) => {
-                        &["ITems", "Angle between", "Fill angle", "ROTate items", "eXit"]
+                        &["Source", "REPlace", "ITems", "Angle between", "Fill angle", "ROTate items", "RESet", "eXit"]
                     }
-                    _ => &["Items", "Align items", "eXit"],
+                    _ => &["Source", "REPlace", "Items", "Align items", "RESet", "eXit"],
                 };
                 Prompt::new("Enter an option").with_keywords(keywords).with_default("eXit")
             }
@@ -408,8 +430,52 @@ impl Command for ArrayEdit {
                 return Ok(Step::Done);
             }
             (EditStage::Select, _) => return Err("Select an array.".into()),
+            (EditStage::Option, Input::Keyword("RESet")) => {
+                let id = self.id.ok_or("Select an array.")?;
+                if ctx.doc.reset_array_items(id) {
+                    ctx.messages.push("Replaced items show the source objects again.".into());
+                }
+            }
+            (EditStage::SourceItem, Input::Pick { at, .. }) => {
+                let id = self.id.ok_or("Select an array.")?;
+                let item = ctx.doc.array_item_at(id, at).ok_or("No item found.")?;
+                let n = ctx.doc.begin_array_source_edit(id, item)?;
+                ctx.messages.push(format!("{n} object(s) to edit."));
+                ctx.messages.push("Use ARRAYCLOSE to save or discard the changes to the array's source.".into());
+                return Ok(Step::Done);
+            }
+            (EditStage::ReplaceObjects, Input::Selection(s)) => {
+                if s.ids.is_empty() {
+                    self.stage = EditStage::Option;
+                    return Ok(Step::Continue);
+                }
+                let bounds = s.ids.iter().filter_map(|id| ctx.doc.entity(*id)).map(|e| ctx.doc.entity_bounds(e));
+                self.replace_base = bounds.reduce(Aabb::union).map_or(Point::ORIGIN, |b| b.center());
+                self.replacement = s.ids;
+                self.stage = EditStage::ReplaceBase;
+            }
+            (EditStage::ReplaceBase, input @ (Input::Point(_) | Input::Enter)) => {
+                if let Input::Point(p) = input {
+                    self.replace_base = p;
+                }
+                self.stage = EditStage::ReplaceItems;
+            }
+            (EditStage::ReplaceItems, Input::Pick { at, .. } | Input::Point(at)) => {
+                let id = self.id.ok_or("Select an array.")?;
+                let item = ctx.doc.array_item_at(id, at).ok_or("No item found.")?;
+                ctx.doc.replace_array_items(id, &self.replacement, self.replace_base, Some(item));
+            }
+            (EditStage::ReplaceItems, Input::Keyword(_)) => {
+                let id = self.id.ok_or("Select an array.")?;
+                ctx.doc.replace_array_items(id, &self.replacement, self.replace_base, None);
+                ctx.messages.push("Every item shows the replacement objects.".into());
+                self.stage = EditStage::Option;
+            }
+            (EditStage::ReplaceItems, Input::Enter) => self.stage = EditStage::Option,
             (EditStage::Option, Input::Keyword(k)) => {
                 self.stage = match k {
+                    "Source" => EditStage::SourceItem,
+                    "REPlace" => EditStage::ReplaceObjects,
                     "Rows" => EditStage::Rows,
                     "COLumns" => EditStage::Columns,
                     "ITems" | "Items" => EditStage::Items,
@@ -491,6 +557,164 @@ impl Command for ArrayEdit {
     }
 
     fn wants_pick(&self) -> bool {
-        self.stage == EditStage::Select
+        matches!(self.stage, EditStage::Select | EditStage::SourceItem | EditStage::ReplaceItems)
+    }
+
+    fn wants_selection(&self) -> bool {
+        self.stage == EditStage::ReplaceObjects
+    }
+}
+
+/// Dragging an array's count, spacing or fill grip (AutoCAD's
+/// `** COLUMN COUNT **` and the like): the array laid out again where the
+/// grip lands, or by the number typed.
+pub struct ArrayGripEdit {
+    id: EntityId,
+    grip: oxidraft_model::assoc_array::ArrayGrip,
+    at: Point,
+    layout: ArrayLayout,
+    /// The first item's base, the array's x and y in the world, and its scale.
+    origin: Point,
+    /// A polar array's center, in the world.
+    center: Point,
+    x: Point,
+    y: Point,
+    scale: f64,
+    /// The first item's objects in the world, for the preview.
+    first: Vec<Geometry>,
+}
+
+impl ArrayGripEdit {
+    pub fn new(
+        doc: &oxidraft_model::Document,
+        id: EntityId,
+        grip: oxidraft_model::assoc_array::ArrayGrip,
+        at: Point,
+    ) -> Option<Self> {
+        let array = doc.array(id)?;
+        let Geometry::Insert { placement, .. } = &doc.entity(id)?.geometry else { return None };
+        let (item, block) = doc.array_item(id, 0)?;
+        let b = doc.block(&block)?;
+        let first = b.entities.iter().map(|be| item.place(b.base, &be.geometry)).collect();
+        let turn = |p: Point| p.rotated_about(Point::ORIGIN, placement.rotation);
+        let x = turn(Point::new(if placement.mirror { -1.0 } else { 1.0 }, 0.0));
+        let outer = match &doc.entity(id)?.geometry {
+            Geometry::Insert { block, .. } => doc.block(block)?.base,
+            _ => return None,
+        };
+        let center = match &array.layout {
+            ArrayLayout::Polar { center, .. } => placement.apply(outer, *center),
+            _ => placement.position,
+        };
+        Some(Self {
+            id,
+            grip,
+            at,
+            layout: array.layout.clone(),
+            origin: placement.position,
+            center,
+            x,
+            y: turn(Point::new(0.0, 1.0)),
+            scale: placement.scale,
+            first,
+        })
+    }
+
+    /// The layout with the grip at `p`.
+    fn layout_at(&self, p: Point) -> Option<ArrayLayout> {
+        use oxidraft_model::assoc_array::ArrayGrip;
+        let d = p - self.origin;
+        let (along_x, along_y) = (d.dot(self.x) / self.scale, d.dot(self.y) / self.scale);
+        // A count by the spacing (a stand-in for none), which it then keeps.
+        let count = |along: f64, spacing: &mut f64, other: f64| {
+            *spacing = oxidraft_model::assoc_array::grip_spacing(*spacing, other);
+            ((along / *spacing).round() as i64 + 1).clamp(1, MAX_ITEMS as i64) as usize
+        };
+        let mut layout = self.layout.clone();
+        match (&mut layout, self.grip) {
+            (ArrayLayout::Rect { columns, column_spacing, row_spacing, .. }, ArrayGrip::Columns) => {
+                *columns = count(along_x, column_spacing, *row_spacing)
+            }
+            (ArrayLayout::Rect { column_spacing, .. }, ArrayGrip::ColumnSpacing) => *column_spacing = along_x,
+            (ArrayLayout::Rect { rows, row_spacing, column_spacing, .. }, ArrayGrip::Rows) => {
+                *rows = count(along_y, row_spacing, *column_spacing)
+            }
+            (ArrayLayout::Rect { row_spacing, .. }, ArrayGrip::RowSpacing) => *row_spacing = along_y,
+            // The last item lands where the grip does.
+            (ArrayLayout::Polar { fill, .. }, ArrayGrip::Fill) => {
+                let a = (self.center.angle_to(p) - self.center.angle_to(self.origin)).rem_euclid(360.0);
+                *fill = a.max(1e-6);
+            }
+            _ => return None,
+        }
+        (layout.count() <= MAX_ITEMS as usize).then_some(layout)
+    }
+
+    /// The layout with the number typed: a count, a spacing or an angle.
+    fn layout_typed(&self, v: f64) -> Option<ArrayLayout> {
+        use oxidraft_model::assoc_array::ArrayGrip;
+        let mut layout = self.layout.clone();
+        let n = (v.round() as i64).clamp(1, MAX_ITEMS as i64) as usize;
+        match (&mut layout, self.grip) {
+            (ArrayLayout::Rect { columns, .. }, ArrayGrip::Columns) => *columns = n,
+            (ArrayLayout::Rect { column_spacing, .. }, ArrayGrip::ColumnSpacing) => *column_spacing = v,
+            (ArrayLayout::Rect { rows, .. }, ArrayGrip::Rows) => *rows = n,
+            (ArrayLayout::Rect { row_spacing, .. }, ArrayGrip::RowSpacing) => *row_spacing = v,
+            (ArrayLayout::Polar { fill, .. }, ArrayGrip::Fill) if v != 0.0 && v.abs() <= 360.0 => *fill = v,
+            _ => return None,
+        }
+        (layout.count() <= MAX_ITEMS as usize).then_some(layout)
+    }
+}
+
+impl Command for ArrayGripEdit {
+    fn prompt(&self) -> Prompt {
+        use oxidraft_model::assoc_array::ArrayGrip;
+        let what = match self.grip {
+            ArrayGrip::Columns => "** COLUMN COUNT ** Specify number of columns",
+            ArrayGrip::ColumnSpacing => "** COLUMN SPACING ** Specify the distance between columns",
+            ArrayGrip::Rows => "** ROW COUNT ** Specify number of rows",
+            ArrayGrip::RowSpacing => "** ROW SPACING ** Specify the distance between rows",
+            ArrayGrip::Fill => "** FILL ANGLE ** Specify the angle to fill",
+            ArrayGrip::Base => "** MOVE ** Specify base point",
+        };
+        Prompt::new(what).with_keywords(&["eXit"])
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let layout = match input {
+            Input::Point(p) => self.layout_at(p),
+            Input::Value(v) => self.layout_typed(v),
+            Input::Enter | Input::Keyword(_) => return Ok(Step::Done),
+            _ => return Err("Point or number required.".into()),
+        };
+        let layout = layout.ok_or("That would make no array.")?;
+        ctx.doc.set_array_layout(self.id, layout);
+        Ok(Step::Done)
+    }
+
+    fn preview(&self, cursor: Point) -> Vec<Geometry> {
+        let Some(layout) = self.layout_at(cursor) else { return Vec::new() };
+        let base = Point::ORIGIN;
+        let first = layout.items(base).first().copied().unwrap_or((base, 0.0));
+        layout
+            .items(base)
+            .into_iter()
+            .take(2000)
+            .flat_map(|(at, turn)| {
+                let d = at - first.0;
+                let shift = (self.x * d.x + self.y * d.y) * self.scale;
+                let pivot = self.origin;
+                self.first.iter().map(move |g| g.rotated(pivot, turn - first.1).translated(shift))
+            })
+            .collect()
+    }
+
+    fn base_point(&self) -> Option<Point> {
+        Some(self.at)
+    }
+
+    fn highlighted(&self) -> Vec<EntityId> {
+        vec![self.id]
     }
 }

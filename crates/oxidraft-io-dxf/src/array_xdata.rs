@@ -1,6 +1,8 @@
 //! An associative array's layout, kept as XDATA on its block reference
 //! (other programs see the reference and its nested items): the kind, the
-//! item block, then the numbers. A path is kept as a polyline.
+//! item block, then the numbers. A path is kept as a polyline. Replaced
+//! items follow a "REPLACED" marker, by number (one more than their
+//! index); which block each shows is its nested reference's.
 
 use dxf::{XData, XDataItem};
 use oxidraft_geom::Point;
@@ -8,6 +10,7 @@ use oxidraft_model::assoc_array::{ArrayLayout, AssocArray, MAX_ITEMS};
 use oxidraft_model::{Document, Entity, EntityId, Geometry, Vertex};
 
 pub const APP: &str = "OXIDRAFT_ARRAY";
+const REPLACED: &str = "REPLACED";
 
 fn long(n: usize) -> XDataItem {
     XDataItem::Long(i32::try_from(n).unwrap_or(i32::MAX))
@@ -45,6 +48,10 @@ pub fn xdata(e: &Entity) -> Option<XData> {
         }
     };
     items[0] = XDataItem::Str(kind.into());
+    if !a.replaced.is_empty() {
+        items.push(XDataItem::Str(REPLACED.into()));
+        items.extend(a.replaced.iter().map(|(i, _)| long(i + 1)));
+    }
     Some(XData { application_name: APP.into(), items })
 }
 
@@ -52,17 +59,30 @@ pub fn xdata(e: &Entity) -> Option<XData> {
 /// the one its block refers to: blocks may be renamed on the way.
 pub fn read(x_data: &[XData], doc: &Document, id: EntityId) -> Option<Box<AssocArray>> {
     let x = x_data.iter().find(|x| x.application_name == APP)?;
-    let mut strings = x.items.iter().filter_map(|i| if let XDataItem::Str(s) = i { Some(s.as_str()) } else { None });
+    let marker = x.items.iter().position(|i| matches!(i, XDataItem::Str(s) if s == REPLACED));
+    let (head, tail) = x.items.split_at(marker.unwrap_or(x.items.len()));
+    let mut strings = head.iter().filter_map(|i| if let XDataItem::Str(s) = i { Some(s.as_str()) } else { None });
     let kind = strings.next()?;
     let Geometry::Insert { block, .. } = &doc.entity(id)?.geometry else { return None };
-    let item = doc.block(block)?.entities.iter().find_map(|be| match &be.geometry {
-        Geometry::Insert { block, .. } => Some(block.clone()),
-        _ => None,
-    })?;
+    let replaced_at: Vec<usize> = tail
+        .iter()
+        .filter_map(|i| if let XDataItem::Long(n) = i { usize::try_from(*n - 1).ok() } else { None })
+        .collect();
+    let shown: Vec<String> = doc
+        .block(block)?
+        .entities
+        .iter()
+        .filter_map(|be| match &be.geometry {
+            Geometry::Insert { block, .. } => Some(block.clone()),
+            _ => None,
+        })
+        .collect();
+    let item = shown.iter().enumerate().find(|(i, _)| !replaced_at.contains(i)).map(|(_, b)| b.clone())?;
+    let replaced: Vec<(usize, String)> =
+        replaced_at.iter().filter_map(|i| shown.get(*i).map(|b| (*i, b.clone()))).collect();
     let reals: Vec<f64> =
-        x.items.iter().filter_map(|i| if let XDataItem::Real(v) = i { Some(*v) } else { None }).collect();
-    let counts: Vec<usize> = x
-        .items
+        head.iter().filter_map(|i| if let XDataItem::Real(v) = i { Some(*v) } else { None }).collect();
+    let counts: Vec<usize> = head
         .iter()
         .filter_map(|i| match i {
             XDataItem::Long(n) => usize::try_from(*n).ok(),
@@ -71,7 +91,7 @@ pub fn read(x_data: &[XData], doc: &Document, id: EntityId) -> Option<Box<AssocA
         .filter(|n| (1..=MAX_ITEMS).contains(n))
         .collect();
     let flags: Vec<bool> =
-        x.items.iter().filter_map(|i| if let XDataItem::Integer(n) = i { Some(*n != 0) } else { None }).collect();
+        head.iter().filter_map(|i| if let XDataItem::Integer(n) = i { Some(*n != 0) } else { None }).collect();
     let layout = match kind {
         "RECT" => match (counts.as_slice(), reals.as_slice()) {
             ([rows, columns], [row_spacing, column_spacing]) => ArrayLayout::Rect {
@@ -102,5 +122,5 @@ pub fn read(x_data: &[XData], doc: &Document, id: EntityId) -> Option<Box<AssocA
         }
         _ => return None,
     };
-    reals.iter().all(|v| v.is_finite()).then(|| Box::new(AssocArray { layout, item }))
+    reals.iter().all(|v| v.is_finite()).then(|| Box::new(AssocArray { layout, item, replaced }))
 }

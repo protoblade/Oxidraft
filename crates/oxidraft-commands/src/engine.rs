@@ -1001,7 +1001,6 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: None,
     },
     CommandInfo { name: "QCCLOSE", aliases: &[], description: "Close QuickCalc", make: None },
-    CommandInfo { name: "ARRAYCLOSE", aliases: &[], description: "Leave an array's in-place editing", make: None },
     CommandInfo { name: "TIFOUT", aliases: &[], description: "Save the drawing area as a TIFF image", make: None },
     CommandInfo {
         name: "EXPORTLAYOUT",
@@ -1997,6 +1996,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(RefSet::new(None))),
     },
     CommandInfo {
+        name: "ARRAYCLOSE",
+        aliases: &[],
+        description: "Save or discard the edits to an array's source objects",
+        make: Some(|| Box::new(RefClose::array())),
+    },
+    CommandInfo {
         name: "REFCLOSE",
         aliases: &[],
         description: "Save or discard the edits to the reference being edited",
@@ -2612,7 +2617,15 @@ impl Engine {
         if self.active.is_some() {
             return Vec::new();
         }
-        self.selection.iter().filter_map(|&id| doc.entity(id)).flat_map(|e| e.geometry.grips()).collect()
+        self.selection
+            .iter()
+            .filter_map(|&id| doc.entity(id))
+            .flat_map(|e| match e.array {
+                // An array's own: its place, its counts and spacing.
+                Some(_) => doc.array_grips(e.id).into_iter().map(|(p, _)| p).collect(),
+                None => e.geometry.grips(),
+            })
+            .collect()
     }
 
     // ---- drafting settings ----------------------------------------------------
@@ -3048,8 +3061,26 @@ impl Engine {
         }
     }
 
-    /// Clicking a grip of a selected object makes it hot and starts STRETCH.
+    /// Clicking a grip of a selected object makes it hot and starts STRETCH
+    /// (an array's count, spacing and fill grips lay it out again instead).
     fn start_grip_edit(&mut self, p: Point, doc: &mut Document, tolerance: f64) -> bool {
+        use oxidraft_model::assoc_array::ArrayGrip;
+        let array_grip = self.selection.iter().find_map(|&id| {
+            let grips = doc.array_grips(id);
+            grips
+                .into_iter()
+                .find(|(g, kind)| *kind != ArrayGrip::Base && g.distance(p) <= tolerance)
+                .map(|(g, kind)| (id, g, kind))
+        });
+        if let Some((id, at, kind)) = array_grip
+            && let Some(cmd) = crate::array::ArrayGripEdit::new(doc, id, kind, at)
+        {
+            let info = find("ARRAYEDIT").expect("ARRAYEDIT is a command");
+            doc.begin(info.name);
+            self.last_point = Some(at);
+            self.active = Some(Active { info, cmd: Box::new(cmd) });
+            return true;
+        }
         let mut hot = None;
         let mut targets = Vec::new();
         for &id in &self.selection {
@@ -3970,6 +4001,42 @@ mod tests {
             .collect();
         at.sort();
         assert_eq!(at, [(0, 0), (0, 20), (10, 10)]);
+    }
+
+    #[test]
+    fn array_items_replaced_and_source_edited() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["c", "0,0", "1"]);
+        type_all(&mut e, &mut d, &["arrayrect"]);
+        click(&mut e, &mut d, 1.0, 0.0);
+        type_all(&mut e, &mut d, &["", "1", "3", "20"]);
+        let array = d.entities().next().unwrap().id;
+        type_all(&mut e, &mut d, &["l", "100,100", "102,100", ""]);
+        let shown = |d: &Document| d.expanded(d.entity(array).unwrap());
+        // REPlace: the line stands in for the middle item.
+        type_all(&mut e, &mut d, &["arrayedit"]);
+        click(&mut e, &mut d, 1.0, 0.0);
+        type_all(&mut e, &mut d, &["rep"]);
+        click(&mut e, &mut d, 101.0, 100.0);
+        type_all(&mut e, &mut d, &["", "100,100"]);
+        click(&mut e, &mut d, 21.0, 0.0);
+        type_all(&mut e, &mut d, &["", "x"]);
+        assert!(!e.is_active(), "{:?}", e.history());
+        let line = Geometry::Line { start: Point::new(20.0, 0.0), end: Point::new(22.0, 0.0) };
+        assert!(shown(&d).contains(&line), "{:?}", shown(&d));
+        assert_eq!(shown(&d).iter().filter(|g| matches!(g, Geometry::Circle { .. })).count(), 2);
+        // Source: a second circle drawn in the first item shows in every circle item.
+        type_all(&mut e, &mut d, &["arrayedit"]);
+        click(&mut e, &mut d, 1.0, 0.0);
+        type_all(&mut e, &mut d, &["s"]);
+        click(&mut e, &mut d, 1.0, 0.0);
+        assert!(d.refedit().is_some_and(|r| r.array == Some(array)), "{:?}", e.history());
+        type_all(&mut e, &mut d, &["c", "0,5", "1"]);
+        type_all(&mut e, &mut d, &["arrayclose", ""]);
+        assert!(d.refedit().is_none(), "{:?}", e.history());
+        assert!(e.history().iter().any(|l| l == "Changes to the array's source saved."));
+        assert_eq!(shown(&d).iter().filter(|g| matches!(g, Geometry::Circle { .. })).count(), 4);
+        assert_eq!(d.len(), 2, "the array and the line");
     }
 
     #[test]
@@ -4972,6 +5039,66 @@ mod tests {
         assert_eq!(e.selection().len(), 2, "selection survives grip editing");
         type_all(&mut e, &mut d, &["u"]);
         assert_eq!(lines(&d)[0].1, Point::new(10.0, 0.0));
+    }
+
+    #[test]
+    fn array_grips_change_counts_spacing_and_fill() {
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["c", "0,0", "1"]);
+        type_all(&mut e, &mut d, &["arrayrect"]);
+        click(&mut e, &mut d, 1.0, 0.0);
+        type_all(&mut e, &mut d, &["", "1", "3", "20"]);
+        let array = d.entities().next().unwrap().id;
+        let centers = |d: &Document| {
+            let mut x: Vec<i64> = d
+                .expanded(d.entity(array).unwrap())
+                .iter()
+                .filter_map(
+                    |g| if let Geometry::Circle { center, .. } = g { Some(center.x.round() as i64) } else { None },
+                )
+                .collect();
+            x.sort();
+            x
+        };
+        e.set_selection(vec![array]);
+        let grips = e.grips(&d);
+        assert!(grips.contains(&Point::new(20.0, 0.0)) && grips.contains(&Point::new(40.0, 0.0)), "{grips:?}");
+        // The last column's grip: dragged to 80, five columns.
+        click(&mut e, &mut d, 40.0, 0.0);
+        assert_eq!(e.active_name(), Some("ARRAYEDIT"));
+        click(&mut e, &mut d, 80.0, 0.0);
+        assert_eq!(centers(&d), [0, 20, 40, 60, 80]);
+        // The second column's grip: spacing 10.
+        e.set_selection(vec![array]);
+        click(&mut e, &mut d, 20.0, 0.0);
+        type_all(&mut e, &mut d, &["10"]);
+        assert_eq!(centers(&d), [0, 10, 20, 30, 40]);
+        type_all(&mut e, &mut d, &["u"]);
+        assert_eq!(centers(&d), [0, 20, 40, 60, 80], "each grip edit undoes on its own");
+        // The base grip moves the whole array.
+        e.set_selection(vec![array]);
+        click(&mut e, &mut d, 0.0, 0.0);
+        assert_eq!(e.active_name(), Some("STRETCH"));
+        click(&mut e, &mut d, 0.0, 50.0);
+        assert!(
+            matches!(d.entity(array).unwrap().geometry, Geometry::Insert { placement, .. } if placement.position == Point::new(0.0, 50.0))
+        );
+        // A polar array's last item: dragged a quarter turn round, the fill is 90.
+        type_all(&mut e, &mut d, &["c", "200,0", "1"]);
+        type_all(&mut e, &mut d, &["arraypolar"]);
+        click(&mut e, &mut d, 201.0, 0.0);
+        type_all(&mut e, &mut d, &["", "200,-20", "4", "", ""]);
+        let polar = d.entities().find(|x| x.id != array && x.array.is_some()).unwrap().id;
+        e.set_selection(vec![polar]);
+        let last = *e.grips(&d).last().unwrap();
+        assert!(last.approx_eq(Point::new(220.0, -20.0)), "{last:?}");
+        click(&mut e, &mut d, last.x, last.y);
+        click(&mut e, &mut d, 180.0, -20.0);
+        assert!(
+            matches!(d.array(polar).map(|a| &a.layout), Some(oxidraft_model::assoc_array::ArrayLayout::Polar { fill, .. }) if (fill - 90.0).abs() < 1e-9),
+            "{:?}",
+            d.array(polar)
+        );
     }
 
     #[test]

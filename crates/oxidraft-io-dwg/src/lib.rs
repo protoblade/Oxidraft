@@ -1003,7 +1003,13 @@ mod tests {
         let c = doc.add(Geometry::Circle { center: Point::new(0.0, 0.0), radius: 1.0 });
         let l = doc.add(Geometry::Line { start: Point::new(0.0, 5.0), end: Point::new(3.0, 5.0) });
         let rect = ArrayLayout::Rect { rows: 2, columns: 3, row_spacing: 10.0, column_spacing: 20.0 };
-        doc.make_array(&[c], rect.clone()).unwrap();
+        let grid = doc.make_array(&[c], rect.clone()).unwrap();
+        // One item replaced by a square.
+        let square = doc.add(Geometry::Polyline {
+            vertices: [(90.0, 90.0), (92.0, 90.0), (92.0, 92.0)].map(|(x, y)| Vertex::at(Point::new(x, y))).to_vec(),
+            closed: true,
+        });
+        assert!(doc.replace_array_items(grid, &[square], Point::new(90.0, 90.0), Some(4)));
         let arc = Geometry::Arc { center: Point::new(50.0, 50.0), radius: 10.0, start_angle: 0.0, end_angle: 180.0 };
         doc.make_array(&[l], ArrayLayout::Path { path: Box::new(arc), items: 5, align: true }).unwrap();
         // Two dimensions, whose blocks mustn't clash with the arrays'.
@@ -1032,6 +1038,13 @@ mod tests {
             let arrays: Vec<_> = back.entities().filter_map(|e| e.array.as_deref()).collect();
             assert_eq!(arrays.len(), 2, "{how}");
             assert!(arrays.iter().any(|a| a.layout == rect), "{how}");
+            let grid = back.entities().find(|e| e.array.as_ref().is_some_and(|a| a.layout == rect)).unwrap();
+            assert_eq!(grid.array.as_ref().unwrap().replaced.iter().map(|r| r.0).collect::<Vec<_>>(), [4], "{how}");
+            assert_eq!(
+                back.expanded(grid).iter().filter(|g| matches!(g, Geometry::Polyline { .. })).count(),
+                1,
+                "{how}: the square stands in for one item"
+            );
             assert!(
                 arrays.iter().any(|a| matches!(a.layout, ArrayLayout::Path { items: 5, align: true, .. })),
                 "{how}"

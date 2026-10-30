@@ -798,7 +798,6 @@ impl OxidraftApp {
             "LAYERCLOSE" => self.layer_manager_open = false,
             "EXTERNALREFERENCESCLOSE" => self.xref_palette_open = false,
             "QCCLOSE" => self.quickcalc = None,
-            "ARRAYCLOSE" => self.engine.log("No array is being edited in place: ARRAYEDIT changes one."),
             "TIFOUT" => self.image_out_command("TIFF", &["tif", "tiff"]),
             "EXPORTLAYOUT" => self.export_layout(),
             "DWGCONVERT" => self.dwg_convert(),
