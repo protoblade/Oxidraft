@@ -376,7 +376,7 @@ pub(crate) fn restore(cad: &CadDocument, imported: &mut Imported) {
             _ => None,
         };
         n += 1;
-        match picture.and_then(|f| extension(&f).map(|x| (f, x))) {
+        let shown = match picture.and_then(|f| extension(&f).map(|x| (f, x))) {
             Some((file, ext)) => {
                 let stored = doc.embed_file(&format!("OLE{n}.{ext}"), file);
                 let name = (n..).map(|i| format!("OLE{i}")).find(|d| doc.image_def(d).is_none()).unwrap_or_default();
@@ -399,7 +399,7 @@ pub(crate) fn restore(cad: &CadDocument, imported: &mut Imported) {
                     },
                     &layer,
                     Color::ByLayer,
-                );
+                )
             }
             // Its frame, where its picture can't be shown.
             None => {
@@ -408,10 +408,59 @@ pub(crate) fn restore(cad: &CadDocument, imported: &mut Imported) {
                     Geometry::Polyline { vertices: corners.into_iter().map(Vertex::at).collect(), closed: true },
                     &layer,
                     Color::ByLayer,
-                );
+                )
             }
+        };
+        // The document it embeds (a spreadsheet, a text, slides), kept in
+        // the drawing and opened from it (Cmd/Ctrl-click), as AutoCAD opens
+        // an OLE object in the program that made it.
+        if let Some((file, ext)) = document(o) {
+            let kind = acadrust::entities::ole_presentation::ole_user_type(&o.encoded_payload());
+            let stored = doc.embed_file(&format!("OLE{n}.{ext}"), file);
+            let link = Hyperlink {
+                url: format!("{EMBEDDED_PREFIX}{stored}"),
+                description: kind.unwrap_or_else(|| stored.clone()),
+            };
+            doc.update(shown, |e| e.hyperlink = Some(Box::new(link)));
         }
     }
+}
+
+/// A stream of an OLE object's compound file, by name.
+fn stream_of(root: &CompoundStorage, name: &str) -> Option<Vec<u8>> {
+    root.entries.iter().find_map(|e| match e {
+        CompoundEntry::Stream(s) if s.name.eq_ignore_ascii_case(name) => Some(s.content.encode()),
+        _ => None,
+    })
+}
+
+/// The document an OLE object embeds, as a file, and its extension: an
+/// Office 2007 or later one (its Package stream, a zip whose parts say
+/// which), an older one (the compound file itself), or a PDF.
+fn document(o: &Ole2Frame) -> Option<(Vec<u8>, &'static str)> {
+    let cfb = o.storage.compound_file.as_ref()?;
+    let root = &cfb.root;
+    if let Some(package) = stream_of(root, "Package").filter(|p| p.starts_with(b"PK")) {
+        let has = |part: &[u8]| package.windows(part.len()).any(|w| w == part);
+        let ext = if has(b"xl/") {
+            "xlsx"
+        } else if has(b"word/") {
+            "docx"
+        } else if has(b"ppt/") {
+            "pptx"
+        } else {
+            "zip"
+        };
+        return Some((package, ext));
+    }
+    for (stream, ext) in [("Workbook", "xls"), ("Book", "xls"), ("WordDocument", "doc"), ("PowerPoint Document", "ppt")]
+    {
+        if stream_of(root, stream).is_some() {
+            return Some((cfb.encode(), ext));
+        }
+    }
+    let contents = stream_of(root, "CONTENTS")?;
+    contents.starts_with(b"%PDF").then_some((contents, "pdf"))
 }
 
 #[cfg(test)]
@@ -545,6 +594,43 @@ mod tests {
                 .read()
                 .unwrap();
         assert!(!plain.entities().any(|e| matches!(e, EntityType::Ole2Frame(_))));
+    }
+
+    #[test]
+    fn office_documents_come_in_to_open() {
+        let mut doc = Document::new();
+        doc.add(Geometry::Line { start: Point::ORIGIN, end: Point::new(1.0, 1.0) });
+        let dxf = crate::write_dxf(&doc).unwrap();
+        let mut cad = acadrust::DxfReader::from_reader(std::io::Cursor::new(dxf)).and_then(|r| r.read()).unwrap();
+        // An Excel 2007 worksheet (its workbook a zip in the Package stream)
+        // and an older Word document (the compound file is the .doc).
+        // (Bytes like a zip's, naming its workbook part.)
+        let xlsx = b"PK\x03\x04 xl/workbook.xml <workbook/>".to_vec();
+        let mut comp = vec![0x01, 0x00, 0xFE, 0xFF, 0x03, 0x0A, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF];
+        comp.extend([0u8; 16]);
+        comp.extend((ansi("Microsoft Excel Worksheet").len() as u32).to_le_bytes());
+        comp.extend(ansi("Microsoft Excel Worksheet"));
+        for (x, streams) in [
+            (0.0, vec![stream("Package", &xlsx), stream("\u{1}CompObj", &comp)]),
+            (100.0, vec![stream("WordDocument", b"word's own")]),
+        ] {
+            let mut ole = Ole2Frame::new();
+            ole.upper_left_corner = Vector3::new(x, 40.0, 0.0);
+            ole.lower_right_corner = Vector3::new(x + 60.0, 5.0, 0.0);
+            let mut root = CompoundStorage::root();
+            root.entries = streams;
+            ole.storage.compound_file = Some(CompoundFile { root, ..CompoundFile::default() });
+            cad.add_entity(EntityType::Ole2Frame(Box::new(ole))).unwrap();
+        }
+        let back = crate::imported_from(&mut cad).unwrap().document;
+        let links: Vec<&Hyperlink> = back.entities().filter_map(|e| e.hyperlink.as_deref()).collect();
+        assert_eq!(links.len(), 2, "{links:?}");
+        let file = |l: &Hyperlink| back.embedded_file(l.url.strip_prefix(EMBEDDED_PREFIX).unwrap()).unwrap().to_vec();
+        let excel = links.iter().find(|l| l.url.ends_with(".xlsx")).expect("the workbook");
+        assert_eq!(file(excel), xlsx);
+        assert_eq!(excel.description, "Microsoft Excel Worksheet");
+        let word = links.iter().find(|l| l.url.ends_with(".doc")).expect("the document");
+        assert!(file(word).starts_with(&[0xD0, 0xCF, 0x11, 0xE0]), "the compound file itself");
     }
 
     #[test]
