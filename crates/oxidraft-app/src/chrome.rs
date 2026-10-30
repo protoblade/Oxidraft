@@ -12,6 +12,7 @@ use crate::{
     layers::layer_state_icons,
     layouts::TabAction,
     properties::common,
+    ribbon_fit::{Items, Panel, Pass},
     theme,
 };
 
@@ -384,51 +385,114 @@ impl OxidraftApp {
 
         let body = Frame::NONE.fill(theme::ribbon()).inner_margin(Margin::symmetric(4, 0));
         egui::Panel::top("ribbon").frame(body).exact_size(98.0).show_separator_line(false).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-                // While a reference is edited in place (or a block in the
-                // Block Editor), its panel leads every tab.
-                if self.in_block_editor() {
-                    self.block_editor_panel(ui);
-                } else if self.doc.refedit().is_some() {
-                    self.edit_reference_panel(ui);
-                }
-                if self.ribbon_tab >= CUSTOM_TAB {
-                    let tab = self.custom_tabs().get(self.ribbon_tab - CUSTOM_TAB).cloned().unwrap_or_default();
-                    self.custom_panels(ui, &tab);
-                    return;
-                }
-                if self.ribbon_tab == 0 {
-                    self.home_tab(ui);
-                } else if self.ribbon_tab == LAYOUT_TAB {
-                    self.layout_ribbon(ui);
-                } else if RIBBON_TABS[self.ribbon_tab] == "Collaborate" {
-                    self.collaborate_tab(ui);
-                } else if RIBBON_TABS[self.ribbon_tab] == "Manage" {
-                    self.manage_tab(ui);
-                } else if RIBBON_TABS[self.ribbon_tab] == "View" {
-                    self.view_tab(ui);
-                } else if RIBBON_TABS[self.ribbon_tab] == "Annotate" {
-                    self.annotate_tab(ui);
-                } else if RIBBON_TABS[self.ribbon_tab] == "Insert" {
-                    self.insert_tab(ui);
-                } else if RIBBON_TABS[self.ribbon_tab] == "Output" {
-                    self.output_tab(ui);
-                } else {
-                    ui.add_space(16.0);
-                    ui.vertical(|ui| {
-                        ui.add_space(36.0);
-                        ui.colored_label(
-                            theme::text_dim(),
-                            format!("The {} tab is {}.", RIBBON_TABS[self.ribbon_tab], NOT_YET.to_lowercase()),
-                        );
-                    });
-                }
-                // Panels of your own on this tab, after its own.
-                let tab = if self.ribbon_tab == LAYOUT_TAB { "Layout" } else { RIBBON_TABS[self.ribbon_tab] };
-                self.custom_panels(ui, tab);
+            // The panels fitted to the room there is (see ribbon_fit); in a
+            // window too narrow for even that, the ribbon scrolls, by the
+            // wheel or dragged (a bar would lie over the panels' titles).
+            let room = ui.available_width();
+            ui.style_mut().always_scroll_the_only_direction = true;
+            let scroll = egui::ScrollArea::horizontal()
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+            scroll.id_salt("ribbon").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                    let editing = (self.in_block_editor(), self.doc.refedit().is_some());
+                    self.ribbon_fit.begin(format!("{}{editing:?}", self.ribbon_tab), room);
+                    self.ribbon_panels(ui);
+                    if self.ribbon_fit.end() {
+                        ui.ctx().request_repaint();
+                    }
+                });
             });
         });
+    }
+
+    /// The selected tab's panels.
+    fn ribbon_panels(&mut self, ui: &mut Ui) {
+        // While a reference is edited in place (or a block in the
+        // Block Editor), its panel leads every tab.
+        if self.in_block_editor() {
+            self.block_editor_panel(ui);
+        } else if self.doc.refedit().is_some() {
+            self.edit_reference_panel(ui);
+        }
+        if self.ribbon_tab >= CUSTOM_TAB {
+            let tab = self.custom_tabs().get(self.ribbon_tab - CUSTOM_TAB).cloned().unwrap_or_default();
+            self.custom_panels(ui, &tab);
+            return;
+        }
+        if self.ribbon_tab == 0 {
+            self.home_tab(ui);
+        } else if self.ribbon_tab == LAYOUT_TAB {
+            self.layout_ribbon(ui);
+        } else if RIBBON_TABS[self.ribbon_tab] == "Collaborate" {
+            self.collaborate_tab(ui);
+        } else if RIBBON_TABS[self.ribbon_tab] == "Manage" {
+            self.manage_tab(ui);
+        } else if RIBBON_TABS[self.ribbon_tab] == "View" {
+            self.view_tab(ui);
+        } else if RIBBON_TABS[self.ribbon_tab] == "Annotate" {
+            self.annotate_tab(ui);
+        } else if RIBBON_TABS[self.ribbon_tab] == "Insert" {
+            self.insert_tab(ui);
+        } else if RIBBON_TABS[self.ribbon_tab] == "Output" {
+            self.output_tab(ui);
+        } else {
+            ui.add_space(16.0);
+            ui.vertical(|ui| {
+                ui.add_space(36.0);
+                ui.colored_label(
+                    theme::text_dim(),
+                    format!("The {} tab is {}.", RIBBON_TABS[self.ribbon_tab], NOT_YET.to_lowercase()),
+                );
+            });
+        }
+        // Panels of your own on this tab, after its own.
+        let tab = if self.ribbon_tab == LAYOUT_TAB { "Layout" } else { RIBBON_TABS[self.ribbon_tab] };
+        self.custom_panels(ui, tab);
+    }
+
+    /// A ribbon panel fitted to the room the ribbon has (see ribbon_fit):
+    /// `contents` adds its items (`items.item`) and what its slide-out
+    /// always has (`items.more`). The items there's no room for go in the
+    /// slide-out, opened from its title; with none left, the panel is one
+    /// button (`icon` and its title) that opens it. Layers, Properties and
+    /// the Block Editor's and Edit Reference's panels keep all theirs.
+    /// Returns its title strip, and whether any of its items are in the
+    /// slide-out.
+    fn fit_panel(
+        &mut self,
+        ui: &mut Ui,
+        title: &str,
+        icon: Icon,
+        mut contents: impl FnMut(&mut Self, &mut Ui, &mut Items),
+    ) -> (Response, bool) {
+        let key = self.ribbon_fit.next_key(title);
+        // Layers and Properties as they are; and while a block or a
+        // reference is edited in place, the panel that ends it.
+        let fixed = matches!(title, "Layers" | "Properties" | "Edit Reference") || title.starts_with("Block Editor - ");
+        let shown = if fixed { usize::MAX } else { self.ribbon_fit.shown(&key) };
+        let title_width =
+            ui.painter().layout_no_wrap(title.to_string(), FontId::proportional(11.0), theme::text_dim()).size().x;
+        let mut items = Items::new(Pass::Ribbon, shown);
+        let mut collapsed = None;
+        let strip = ribbon_panel_more(ui, title, Panel::title_room(title_width), |ui| {
+            contents(self, ui, &mut items);
+            if shown == 0 && items.count() > 0 {
+                collapsed =
+                    Some(paint_large_labeled(ui, icon, title, true).on_hover_text(format!("The {title} panel")));
+            }
+        });
+        self.ribbon_fit.drawn(key, fixed, title_width, items.count(), items.measured());
+        let hidden = items.any_hidden();
+        if hidden || items.has_more() {
+            // The one button of a panel left with none opens it too.
+            if collapsed.is_some_and(|b| b.clicked()) {
+                egui::Popup::toggle_id(ui.ctx(), egui::Popup::default_response_id(&strip));
+            }
+            let count = items.count();
+            egui::Popup::menu(&strip).show(|ui| slide_out(self, ui, &mut contents, shown, count));
+        }
+        (strip, hidden)
     }
 
     /// The tabs CUI's panels make: those not AutoCAD's, in order.
@@ -443,31 +507,41 @@ impl OxidraftApp {
         let panels: Vec<crate::settings::RibbonPanel> =
             self.settings.ribbon_panels.iter().filter(|p| p.tab.eq_ignore_ascii_case(tab)).cloned().collect();
         for p in panels {
-            ribbon_panel(ui, &p.name, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.set_max_width(240.0);
-                    for entry in &p.commands {
-                        let mut split = entry.split('|').map(str::trim).filter(|c| !c.is_empty());
-                        let Some(main) = split.next() else { continue };
-                        let others: Vec<&str> = split.collect();
-                        self.custom_button(ui, main);
-                        if !others.is_empty() {
-                            let more = format!("More like {}", self.button_label(main));
-                            let r = ui.menu_button("+", |ui| {
-                                for c in others {
-                                    let label = self.button_label(c);
-                                    if ui.button(label).on_hover_text(self.button_tip(c)).clicked() {
-                                        self.run(c);
-                                        ui.close();
-                                    }
-                                }
-                            });
-                            r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &more));
-                            r.response.on_hover_text(more.clone());
-                        }
-                    }
-                });
+            self.fit_panel(ui, &p.name, Icon::Properties, |this, ui, items| {
+                // Its buttons in columns of three, each column an item.
+                for column in p.commands.chunks(3) {
+                    items.item(ui, |ui| {
+                        ui.vertical(|ui| {
+                            for entry in column {
+                                ui.horizontal(|ui| this.custom_entry(ui, entry));
+                            }
+                        });
+                    });
+                }
             });
+        }
+    }
+
+    /// A CUI panel's entry: its button, and `+` for the others of a split
+    /// button.
+    fn custom_entry(&mut self, ui: &mut Ui, entry: &str) {
+        let mut split = entry.split('|').map(str::trim).filter(|c| !c.is_empty());
+        let Some(main) = split.next() else { return };
+        let others: Vec<&str> = split.collect();
+        self.custom_button(ui, main);
+        if !others.is_empty() {
+            let more = format!("More like {}", self.button_label(main));
+            let r = ui.menu_button("+", |ui| {
+                for c in others {
+                    let label = self.button_label(c);
+                    if ui.button(label).on_hover_text(self.button_tip(c)).clicked() {
+                        self.run(c);
+                        ui.close();
+                    }
+                }
+            });
+            r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &more));
+            r.response.on_hover_text(more.clone());
         }
     }
 
@@ -566,103 +640,97 @@ impl OxidraftApp {
     }
 
     fn insert_tab(&mut self, ui: &mut Ui) {
-        ribbon_panel(ui, "Block", |ui| {
-            self.large_tool(ui, &BLOCK_INSERT);
-            ui.vertical(|ui| {
-                for t in BLOCK_SMALL {
-                    self.small_tool(ui, t);
-                }
-            });
+        self.fit_panel(ui, "Block", Icon::InsertBlock, |this, ui, items| {
+            items.item(ui, |ui| this.large_tool(ui, &BLOCK_INSERT));
+            items.item(ui, |ui| this.small_column(ui, BLOCK_SMALL));
         });
-        ribbon_panel(ui, "Block Definition", |ui| {
-            ui.vertical(|ui| {
-                for t in BLOCK_DEFINITION {
-                    self.small_tool(ui, t);
-                }
-            });
+        self.fit_panel(ui, "Block Definition", Icon::CreateBlock, |this, ui, items| {
+            items.item(ui, |ui| this.small_column(ui, BLOCK_DEFINITION));
         });
-        ribbon_panel(ui, "Reference", |ui| {
-            self.large_tool(
-                ui,
-                &tool(
-                    Icon::Attach,
-                    "Attach",
-                    Some("XATTACH"),
-                    "Attaches a DWG or DXF drawing as an external reference (XA)",
-                ),
-            );
-            self.large_tool(
-                ui,
-                &tool(
-                    Icon::ExternalReferences,
-                    "External\nReferences",
-                    Some("EXTERNALREFERENCES"),
-                    "Opens the External References palette (XR)",
-                ),
-            );
-            ui.vertical(|ui| {
-                for t in [
-                    tool(
-                        Icon::Image,
-                        "Image",
-                        Some("IMAGEATTACH"),
-                        "Attaches an image, placed by its georeferencing if it has some; pick many GeoTIFFs to attach them unloaded (IAT)",
-                    ),
-                    tool(Icon::Pdf, "PDF", Some("PDFATTACH"), "Attaches a page of a PDF as an underlay"),
-                    tool(
-                        Icon::ImageClip,
-                        "Clip",
-                        Some("CLIP"),
-                        "Clips an xref, block reference, image or PDF underlay to a boundary",
-                    ),
-                ] {
-                    self.small_tool(ui, &t);
-                }
-            });
-            ui.vertical(|ui| {
-                self.small_tool(
+        self.fit_panel(ui, "Reference", Icon::Attach, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
                     ui,
                     &tool(
-                        Icon::EditReference,
-                        "Edit Reference",
-                        Some("REFEDIT"),
-                        "Edits a block reference or xref in place (REFEDIT)",
+                        Icon::Attach,
+                        "Attach",
+                        Some("XATTACH"),
+                        "Attaches a DWG or DXF drawing as an external reference (XA)",
                     ),
-                );
-                self.small_tool(
+                )
+            });
+            items.item(ui, |ui| {
+                this.large_tool(
                     ui,
                     &tool(
-                        Icon::Image,
-                        "Adjust",
-                        Some("ADJUST"),
-                        "Adjusts an image's brightness, contrast and fade, or a PDF's fade and monochrome",
+                        Icon::ExternalReferences,
+                        "External\nReferences",
+                        Some("EXTERNALREFERENCES"),
+                        "Opens the External References palette (XR)",
                     ),
-                );
-                self.small_tool(
+                )
+            });
+            items.item(ui, |ui| {
+                this.small_column(
                     ui,
-                    &tool(
-                        Icon::ImageClip,
-                        "Frames",
-                        Some("FRAME"),
-                        "Frames of images, PDFs and wipeouts: hidden, shown and plotted, or shown only (FRAME)",
-                    ),
-                );
+                    &[
+                        tool(
+                            Icon::Image,
+                            "Image",
+                            Some("IMAGEATTACH"),
+                            "Attaches an image, placed by its georeferencing if it has some; pick many GeoTIFFs to attach them unloaded (IAT)",
+                        ),
+                        tool(Icon::Pdf, "PDF", Some("PDFATTACH"), "Attaches a page of a PDF as an underlay"),
+                        tool(
+                            Icon::ImageClip,
+                            "Clip",
+                            Some("CLIP"),
+                            "Clips an xref, block reference, image or PDF underlay to a boundary",
+                        ),
+                    ],
+                )
+            });
+            items.item(ui, |ui| {
+                this.small_column(
+                    ui,
+                    &[
+                        tool(
+                            Icon::EditReference,
+                            "Edit Reference",
+                            Some("REFEDIT"),
+                            "Edits a block reference or xref in place (REFEDIT)",
+                        ),
+                        tool(
+                            Icon::Image,
+                            "Adjust",
+                            Some("ADJUST"),
+                            "Adjusts an image's brightness, contrast and fade, or a PDF's fade and monochrome",
+                        ),
+                        tool(
+                            Icon::ImageClip,
+                            "Frames",
+                            Some("FRAME"),
+                            "Frames of images, PDFs and wipeouts: hidden, shown and plotted, or shown only (FRAME)",
+                        ),
+                    ],
+                )
             });
         });
-        ribbon_panel(ui, "Data", |ui| {
-            ui.vertical(|ui| {
-                for t in [
-                    tool(
-                        Icon::Text,
-                        "Field",
-                        Some("FIELD"),
-                        "Inserts a field: text that shows the date, the file name, a drawing property or an object's area",
-                    ),
-                    tool(Icon::Text, "Update Fields", Some("UPDATEFIELD"), "Updates the fields in the selected objects"),
-                    tool(Icon::Text, "Hyperlink", Some("HYPERLINK"), "Links objects to a web page or file (Ctrl+K)"),
-                ] {
-                    self.small_tool(ui, &t);
-                }
+        self.fit_panel(ui, "Data", Icon::Text, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.small_column(
+                    ui,
+                    &[
+                        tool(
+                            Icon::Text,
+                            "Field",
+                            Some("FIELD"),
+                            "Inserts a field: text that shows the date, the file name, a drawing property or an object's area",
+                        ),
+                        tool(Icon::Text, "Update Fields", Some("UPDATEFIELD"), "Updates the fields in the selected objects"),
+                        tool(Icon::Text, "Hyperlink", Some("HYPERLINK"), "Links objects to a web page or file (Ctrl+K)"),
+                    ],
+                )
             });
         });
     }
@@ -685,17 +753,26 @@ impl OxidraftApp {
     /// The View tab: the UCS icon and navigation bar, model viewports,
     /// named views, the palettes, and the file and layout tabs.
     fn view_tab(&mut self, ui: &mut Ui) {
-        ribbon_panel(ui, "Viewport Tools", |ui| {
-            let vars = &self.engine.vars;
-            let (ucs, nav) = (vars.ucs_icon, vars.nav_bar);
-            if self.toggle_tool(ui, Icon::Ucs, "UCS\nIcon", ucs, "Shows the UCS icon (UCSICON)") {
-                self.engine.vars.ucs_icon = !ucs;
-            }
-            if self.toggle_tool(ui, Icon::NavigationBar, "Navigation\nBar", nav, "Shows the navigation bar (NAVBAR)") {
-                self.engine.vars.nav_bar = !nav;
-            }
+        self.fit_panel(ui, "Viewport Tools", Icon::Ucs, |this, ui, items| {
+            let (ucs, nav) = (this.engine.vars.ucs_icon, this.engine.vars.nav_bar);
+            items.item(ui, |ui| {
+                if this.toggle_tool(ui, Icon::Ucs, "UCS\nIcon", ucs, "Shows the UCS icon (UCSICON)") {
+                    this.engine.vars.ucs_icon = !ucs;
+                }
+            });
+            items.item(ui, |ui| {
+                if this.toggle_tool(
+                    ui,
+                    Icon::NavigationBar,
+                    "Navigation\nBar",
+                    nav,
+                    "Shows the navigation bar (NAVBAR)",
+                ) {
+                    this.engine.vars.nav_bar = !nav;
+                }
+            });
         });
-        ribbon_panel(ui, "Coordinates", |ui| {
+        self.fit_panel(ui, "Coordinates", Icon::Ucs, |this, ui, items| {
             for column in [
                 [
                     tool(Icon::Ucs, "World", Some("UCS W"), "Back to the world coordinate system (UCS World)"),
@@ -713,47 +790,54 @@ impl OxidraftApp {
                     tool(Icon::Ucs, "World Plan", Some("PLAN W"), "The view as the world lies (PLAN World)"),
                 ],
             ] {
-                ui.vertical(|ui| {
-                    for t in &column {
-                        self.small_tool(ui, t);
-                    }
-                });
+                items.item(ui, |ui| this.small_column(ui, &column));
             }
         });
-        let viewports = ribbon_panel_more(ui, "Model Viewports", |ui| {
-            let config = tool(
-                Icon::ViewportConfig,
-                "Viewport\nConfiguration",
-                Some("VPORTS"),
-                "Splits model space into viewports (VPORTS); Ctrl+R makes the next one current",
-            );
-            let response = paint_large(ui, &config, true).on_hover_text(config.tip);
-            egui::Popup::menu(&response).show(|ui| self.tiling_items(ui));
-        });
-        egui::Popup::menu(&viewports).show(|ui| self.tiling_items(ui));
-        ribbon_panel(ui, "Named Views", |ui| {
-            self.large_tool(
-                ui,
-                &tool(Icon::ViewManager, "View\nManager", Some("VIEW"), "Saves, restores and deletes named views (V)"),
-            );
-            ui.vertical(|ui| {
-                let views: Vec<oxidraft_model::NamedView> = self.doc.views().to_vec();
-                egui::ComboBox::from_id_salt("named_views").width(130.0).selected_text("Restore view").show_ui(
-                    ui,
-                    |ui| {
-                        if views.is_empty() {
-                            ui.colored_label(theme::text_dim(), "No named views");
-                        }
-                        for v in &views {
-                            if ui.selectable_label(false, &v.name).clicked() {
-                                self.restore_view(v);
-                            }
-                        }
-                    },
+        self.fit_panel(ui, "Model Viewports", Icon::ViewportConfig, |this, ui, items| {
+            items.item(ui, |ui| {
+                let config = tool(
+                    Icon::ViewportConfig,
+                    "Viewport\nConfiguration",
+                    Some("VPORTS"),
+                    "Splits model space into viewports (VPORTS); Ctrl+R makes the next one current",
                 );
+                let response = paint_large(ui, &config, true).on_hover_text(config.tip);
+                egui::Popup::menu(&response).show(|ui| this.tiling_items(ui));
+            });
+            items.more(ui, |ui| this.tiling_items(ui));
+        });
+        self.fit_panel(ui, "Named Views", Icon::ViewManager, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
+                    ui,
+                    &tool(
+                        Icon::ViewManager,
+                        "View\nManager",
+                        Some("VIEW"),
+                        "Saves, restores and deletes named views (V)",
+                    ),
+                )
+            });
+            items.item(ui, |ui| {
+                ui.vertical(|ui| {
+                    let views: Vec<oxidraft_model::NamedView> = this.doc.views().to_vec();
+                    egui::ComboBox::from_id_salt("named_views").width(130.0).selected_text("Restore view").show_ui(
+                        ui,
+                        |ui| {
+                            if views.is_empty() {
+                                ui.colored_label(theme::text_dim(), "No named views");
+                            }
+                            for v in &views {
+                                if ui.selectable_label(false, &v.name).clicked() {
+                                    this.restore_view(v);
+                                }
+                            }
+                        },
+                    );
+                });
             });
         });
-        ribbon_panel(ui, "Palettes", |ui| {
+        self.fit_panel(ui, "Palettes", Icon::Properties, |this, ui, items| {
             for t in [
                 tool(Icon::Properties, "Properties", Some("PROPERTIES"), "Shows the Properties palette (Cmd+1)"),
                 tool(
@@ -784,26 +868,41 @@ impl OxidraftApp {
                     "Sheets from drawings' layouts, published and archived together (SSM)",
                 ),
             ] {
-                self.large_tool(ui, &t);
+                items.item(ui, |ui| this.large_tool(ui, &t));
             }
         });
-        ribbon_panel(ui, "Interface", |ui| {
-            let (files, layouts) = (self.show_file_tabs, self.show_layout_tabs);
-            if self.toggle_tool(ui, Icon::FileTabs, "File\nTabs", files, "Shows the file tabs (FILETAB, FILETABCLOSE)")
-            {
-                self.show_file_tabs = !files;
-            }
-            if self.toggle_tool(ui, Icon::LayoutTabs, "Layout\nTabs", layouts, "Shows the Model and layout tabs") {
-                self.show_layout_tabs = !layouts;
-            }
-            ui.vertical(|ui| {
-                for t in [
-                    tool(Icon::FileTabs, "Switch Windows", Some("SWITCHWINDOWS"), "The next open drawing (Ctrl+Tab)"),
-                    tool(Icon::FileTabs, "Tile Vertically", Some("SYSWINDOWS V"), "The open drawings side by side"),
-                    tool(Icon::FileTabs, "Cascade", Some("SYSWINDOWS C"), "The open drawings cascaded"),
-                ] {
-                    self.small_tool(ui, &t);
+        self.fit_panel(ui, "Interface", Icon::FileTabs, |this, ui, items| {
+            let (files, layouts) = (this.show_file_tabs, this.show_layout_tabs);
+            items.item(ui, |ui| {
+                if this.toggle_tool(
+                    ui,
+                    Icon::FileTabs,
+                    "File\nTabs",
+                    files,
+                    "Shows the file tabs (FILETAB, FILETABCLOSE)",
+                ) {
+                    this.show_file_tabs = !files;
                 }
+            });
+            items.item(ui, |ui| {
+                if this.toggle_tool(ui, Icon::LayoutTabs, "Layout\nTabs", layouts, "Shows the Model and layout tabs") {
+                    this.show_layout_tabs = !layouts;
+                }
+            });
+            items.item(ui, |ui| {
+                this.small_column(
+                    ui,
+                    &[
+                        tool(
+                            Icon::FileTabs,
+                            "Switch Windows",
+                            Some("SWITCHWINDOWS"),
+                            "The next open drawing (Ctrl+Tab)",
+                        ),
+                        tool(Icon::FileTabs, "Tile Vertically", Some("SYSWINDOWS V"), "The open drawings side by side"),
+                        tool(Icon::FileTabs, "Cascade", Some("SYSWINDOWS C"), "The open drawings cascaded"),
+                    ],
+                )
             });
         });
     }
@@ -811,57 +910,65 @@ impl OxidraftApp {
     /// The Collaborate tab: comparing with another drawing, and counting
     /// blocks.
     fn collaborate_tab(&mut self, ui: &mut Ui) {
-        ribbon_panel(ui, "Compare", |ui| {
-            self.large_tool(
-                ui,
-                &tool(
-                    Icon::Compare,
-                    "DWG\nCompare",
-                    Some("COMPARE"),
-                    "Shows what's only here, only in another drawing, or in both",
-                ),
-            );
+        self.fit_panel(ui, "Compare", Icon::Compare, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
+                    ui,
+                    &tool(
+                        Icon::Compare,
+                        "DWG\nCompare",
+                        Some("COMPARE"),
+                        "Shows what's only here, only in another drawing, or in both",
+                    ),
+                )
+            });
             let exit = tool(Icon::CompareExit, "Exit\nCompare", Some("COMPAREEXIT"), "Stops comparing (COMPAREEXIT)");
-            self.large_tool(ui, &exit);
+            items.item(ui, |ui| this.large_tool(ui, &exit));
         });
-        ribbon_panel(ui, "Share", |ui| {
-            self.large_tool(
-                ui,
-                &tool(
-                    Icon::Pdf,
-                    "Share",
-                    Some("SHARE"),
-                    "Packs the drawing, a PDF of its sheets and its files to send",
-                ),
-            );
+        self.fit_panel(ui, "Share", Icon::Pdf, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
+                    ui,
+                    &tool(
+                        Icon::Pdf,
+                        "Share",
+                        Some("SHARE"),
+                        "Packs the drawing, a PDF of its sheets and its files to send",
+                    ),
+                )
+            });
         });
-        ribbon_panel(ui, "Markup", |ui| {
-            self.large_tool(
-                ui,
-                &tool(
-                    Icon::Pdf,
-                    "Markup\nImport",
-                    Some("MARKUP"),
-                    "Lays a marked-up plot (PDF or image) over its sheet, on layer MARKUP",
-                ),
-            );
+        self.fit_panel(ui, "Markup", Icon::Pdf, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
+                    ui,
+                    &tool(
+                        Icon::Pdf,
+                        "Markup\nImport",
+                        Some("MARKUP"),
+                        "Lays a marked-up plot (PDF or image) over its sheet, on layer MARKUP",
+                    ),
+                )
+            });
         });
-        ribbon_panel(ui, "Count", |ui| {
-            self.large_tool(
-                ui,
-                &tool(
-                    Icon::Count,
-                    "Count",
-                    Some("COUNT"),
-                    "Counts a block's references and selects them; Enter lists every block",
-                ),
-            );
+        self.fit_panel(ui, "Count", Icon::Count, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
+                    ui,
+                    &tool(
+                        Icon::Count,
+                        "Count",
+                        Some("COUNT"),
+                        "Counts a block's references and selects them; Enter lists every block",
+                    ),
+                )
+            });
         });
     }
 
     /// The Manage tab: cleaning the drawing up, and the user's aliases.
     fn manage_tab(&mut self, ui: &mut Ui) {
-        ribbon_panel(ui, "Cleanup", |ui| {
+        self.fit_panel(ui, "Cleanup", Icon::Purge, |this, ui, items| {
             for t in [
                 tool(Icon::Purge, "Purge", Some("PURGE"), "Removes layers, blocks and linetypes nothing uses (PU)"),
                 tool(
@@ -872,24 +979,22 @@ impl OxidraftApp {
                 ),
                 tool(Icon::Audit, "Audit", Some("AUDIT"), "Checks the drawing for broken objects, and mends them"),
             ] {
-                self.large_tool(ui, &t);
+                items.item(ui, |ui| this.large_tool(ui, &t));
             }
         });
-        ribbon_panel(ui, "Customization", |ui| {
-            self.large_tool(
-                ui,
-                &tool(
+        self.fit_panel(ui, "Customization", Icon::Properties, |this, ui, items| {
+            for t in [
+                tool(
                     Icon::Properties,
                     "User\nInterface",
                     Some("CUI"),
                     "Keyboard shortcuts and the Quick Access Toolbar",
                 ),
-            );
-            self.large_tool(ui, &tool(Icon::Aliases, "Edit\nAliases", Some("ALIASEDIT"), "Your own command aliases"));
-            self.large_tool(
-                ui,
-                &tool(Icon::Properties, "Workspace", Some("WORKSPACE"), "Make a workspace current, save or delete one"),
-            );
+                tool(Icon::Aliases, "Edit\nAliases", Some("ALIASEDIT"), "Your own command aliases"),
+                tool(Icon::Properties, "Workspace", Some("WORKSPACE"), "Make a workspace current, save or delete one"),
+            ] {
+                items.item(ui, |ui| this.large_tool(ui, &t));
+            }
         });
     }
 
@@ -916,232 +1021,259 @@ impl OxidraftApp {
 
     /// The Annotate tab: text, dimensions, leaders, tables and markup.
     fn annotate_tab(&mut self, ui: &mut Ui) {
-        let text_panel = ribbon_panel_more(ui, "Text", |ui| {
+        let (text_panel, hidden) = self.fit_panel(ui, "Text", Icon::Text, |this, ui, items| {
             for t in ANNOTATE_TEXT {
-                self.large_tool(ui, t);
+                items.item(ui, |ui| this.large_tool(ui, t));
             }
-            ui.vertical(|ui| {
-                ui.add_space(2.0);
-                self.text_style_combo(ui);
-                for t in [
-                    tool(Icon::Zoom, "Find Text", Some("FIND"), "Finds and replaces text"),
-                    tool(Icon::Scale, "Scale", Some("SCALETEXT"), "Gives text a new height, each about its own point"),
-                    tool(Icon::Text, "Justify", Some("JUSTIFYTEXT"), "Hangs text from another of its points"),
-                ] {
-                    self.small_tool(ui, &t);
-                }
-            });
-        });
-        // The panel's title opens STYLE, as its arrow does in AutoCAD.
-        if text_panel.clicked() {
-            self.run("STYLE");
-        }
-        let dimensions = ribbon_panel_more(ui, "Dimensions", |ui| {
-            self.large_tool(
-                ui,
-                &tool(Icon::Dimension, "Dimension", Some("DIM"), "Dimensions what you pick, or two points (DIM)"),
-            );
-            for column in ANNOTATE_DIMENSIONS.chunks(3) {
+            items.item(ui, |ui| {
                 ui.vertical(|ui| {
-                    for t in column {
-                        self.small_tool(ui, t);
+                    ui.add_space(2.0);
+                    this.text_style_combo(ui);
+                    for t in [
+                        tool(Icon::Zoom, "Find Text", Some("FIND"), "Finds and replaces text"),
+                        tool(
+                            Icon::Scale,
+                            "Scale",
+                            Some("SCALETEXT"),
+                            "Gives text a new height, each about its own point",
+                        ),
+                        tool(Icon::Text, "Justify", Some("JUSTIFYTEXT"), "Hangs text from another of its points"),
+                    ] {
+                        this.small_tool(ui, &t);
                     }
                 });
-            }
-        });
-        egui::Popup::menu(&dimensions).show(|ui| {
-            for t in ANNOTATE_DIMENSIONS_MORE {
-                self.small_tool(ui, t);
-            }
-        });
-        ribbon_panel(ui, "Dimension Style", |ui| {
-            self.large_tool(
-                ui,
-                &tool(
-                    Icon::Dimension,
-                    "Dimension\nStyle",
-                    Some("DIMSTYLE"),
-                    "Sets text height, arrows, extension lines and precision (D)",
-                ),
-            );
-        });
-        ribbon_panel(ui, "Centerlines", |ui| {
-            ui.vertical(|ui| {
-                self.small_tool(
-                    ui,
-                    &tool(Icon::Circle, "Center Mark", Some("CENTERMARK"), "Marks circles' and arcs' centers (CM)"),
-                );
-                self.small_tool(
-                    ui,
-                    &tool(
-                        Icon::Xline,
-                        "Centerline",
-                        Some("CENTERLINE"),
-                        "Draws the center line between two lines (CL)",
-                    ),
-                );
             });
         });
-        ribbon_panel(ui, "Leaders", |ui| {
-            self.large_tool(
-                ui,
-                &tool(Icon::Leader, "Multileader", Some("MLEADER"), "Creates a leader with text (MLD)"),
-            );
-            ui.vertical(|ui| {
-                for t in [
-                    tool(
-                        Icon::Leader,
-                        "Add/Remove Leader",
-                        Some("MLEADEREDIT"),
-                        "Adds arrowheads to a multileader (MLE)",
-                    ),
-                    tool(Icon::Leader, "Align", Some("MLEADERALIGN"), "Lines up multileaders' text (MLA)"),
-                    tool(
-                        Icon::Leader,
-                        "Collect",
-                        Some("MLEADERCOLLECT"),
-                        "Gathers multileaders' blocks onto one (MLC)",
-                    ),
-                ] {
-                    self.small_tool(ui, &t);
+        // The panel's title opens STYLE, as its arrow does in AutoCAD
+        // (unless it has items to show there).
+        if text_panel.clicked() && !hidden {
+            self.run("STYLE");
+        }
+        self.fit_panel(ui, "Dimensions", Icon::Dimension, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
+                    ui,
+                    &tool(Icon::Dimension, "Dimension", Some("DIM"), "Dimensions what you pick, or two points (DIM)"),
+                )
+            });
+            for column in ANNOTATE_DIMENSIONS.chunks(3) {
+                items.item(ui, |ui| this.small_column(ui, column));
+            }
+            items.more(ui, |ui| {
+                for t in ANNOTATE_DIMENSIONS_MORE {
+                    this.small_tool(ui, t);
                 }
             });
-            ui.vertical(|ui| {
-                let style = tool(
-                    Icon::Properties,
-                    "Multileader Style",
-                    Some("MLEADERSTYLE"),
-                    "Arrowhead, content (text or a tag block), landing (MLS)",
-                );
-                self.small_tool(ui, &style);
+        });
+        self.fit_panel(ui, "Dimension Style", Icon::Dimension, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
+                    ui,
+                    &tool(
+                        Icon::Dimension,
+                        "Dimension\nStyle",
+                        Some("DIMSTYLE"),
+                        "Sets text height, arrows, extension lines and precision (D)",
+                    ),
+                )
             });
         });
-        ribbon_panel(ui, "Tables", |ui| {
-            self.large_tool(ui, &tool(Icon::Table, "Table", Some("TABLE"), "Inserts a table of rows and columns (TB)"));
-            ui.vertical(|ui| {
-                let style = tool(
-                    Icon::Properties,
-                    "Table Style",
-                    Some("TABLESTYLE"),
-                    "Text height and margins of new tables (TS)",
-                );
-                self.small_tool(ui, &style);
+        self.fit_panel(ui, "Centerlines", Icon::Circle, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.small_column(
+                    ui,
+                    &[
+                        tool(Icon::Circle, "Center Mark", Some("CENTERMARK"), "Marks circles' and arcs' centers (CM)"),
+                        tool(
+                            Icon::Xline,
+                            "Centerline",
+                            Some("CENTERLINE"),
+                            "Draws the center line between two lines (CL)",
+                        ),
+                    ],
+                )
             });
         });
-        ribbon_panel(ui, "Markup", |ui| {
-            self.large_tool(
-                ui,
-                &tool(
+        self.fit_panel(ui, "Leaders", Icon::Leader, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
+                    ui,
+                    &tool(Icon::Leader, "Multileader", Some("MLEADER"), "Creates a leader with text (MLD)"),
+                )
+            });
+            items.item(ui, |ui| {
+                this.small_column(
+                    ui,
+                    &[
+                        tool(
+                            Icon::Leader,
+                            "Add/Remove Leader",
+                            Some("MLEADEREDIT"),
+                            "Adds arrowheads to a multileader (MLE)",
+                        ),
+                        tool(Icon::Leader, "Align", Some("MLEADERALIGN"), "Lines up multileaders' text (MLA)"),
+                        tool(
+                            Icon::Leader,
+                            "Collect",
+                            Some("MLEADERCOLLECT"),
+                            "Gathers multileaders' blocks onto one (MLC)",
+                        ),
+                    ],
+                )
+            });
+            items.item(ui, |ui| {
+                this.small_column(
+                    ui,
+                    &[tool(
+                        Icon::Properties,
+                        "Multileader Style",
+                        Some("MLEADERSTYLE"),
+                        "Arrowhead, content (text or a tag block), landing (MLS)",
+                    )],
+                )
+            });
+        });
+        self.fit_panel(ui, "Tables", Icon::Table, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
+                    ui,
+                    &tool(Icon::Table, "Table", Some("TABLE"), "Inserts a table of rows and columns (TB)"),
+                )
+            });
+            items.item(ui, |ui| {
+                this.small_column(
+                    ui,
+                    &[tool(
+                        Icon::Properties,
+                        "Table Style",
+                        Some("TABLESTYLE"),
+                        "Text height and margins of new tables (TS)",
+                    )],
+                )
+            });
+        });
+        self.fit_panel(ui, "Markup", Icon::RevCloud, |this, ui, items| {
+            for t in [
+                tool(
                     Icon::RevCloud,
                     "Revision\nCloud",
                     Some("REVCLOUD"),
                     "Draws a cloud of arcs around an area or object",
                 ),
-            );
-            self.large_tool(
-                ui,
-                &tool(
+                tool(
                     Icon::Hatch,
                     "Wipeout",
                     Some("WIPEOUT"),
                     "Hides what's under a polygon; Frames shows or hides frames",
                 ),
-            );
+            ] {
+                items.item(ui, |ui| this.large_tool(ui, &t));
+            }
         });
     }
 
     /// The Layout tab, on a layout's tab: new layouts and page setup, and
     /// its viewports.
     fn layout_ribbon(&mut self, ui: &mut Ui) {
-        ribbon_panel(ui, "Layout", |ui| {
+        self.fit_panel(ui, "Layout", Icon::NewLayout, |this, ui, items| {
             for t in LAYOUT_TOOLS {
-                self.large_tool(ui, t);
+                items.item(ui, |ui| this.large_tool(ui, t));
             }
         });
-        ribbon_panel(ui, "Layout Viewports", |ui| {
-            self.large_tool(
-                ui,
-                &tool(Icon::Viewport, "Rectangular", Some("MVIEW"), "Creates a rectangular viewport (MV)"),
-            );
-            ui.vertical(|ui| {
-                for t in [
-                    tool(Icon::Polygon, "Polygonal", Some("MVIEW P"), "Creates a viewport bounded by points you pick"),
-                    tool(
-                        Icon::Circle,
-                        "Object",
-                        Some("MVIEW O"),
-                        "Makes a closed polyline, circle or ellipse a viewport",
-                    ),
-                    tool(
-                        Icon::ImageClip,
-                        "Clip",
-                        Some("VPCLIP"),
-                        "Clips a viewport to a shape or points, or Deletes its clipping",
-                    ),
-                ] {
-                    self.small_tool(ui, &t);
-                }
+        self.fit_panel(ui, "Layout Viewports", Icon::Viewport, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
+                    ui,
+                    &tool(Icon::Viewport, "Rectangular", Some("MVIEW"), "Creates a rectangular viewport (MV)"),
+                )
             });
-            ui.vertical(|ui| {
-                for t in VIEWPORT_TOOLS {
-                    self.small_tool(ui, t);
-                }
+            items.item(ui, |ui| {
+                this.small_column(
+                    ui,
+                    &[
+                        tool(
+                            Icon::Polygon,
+                            "Polygonal",
+                            Some("MVIEW P"),
+                            "Creates a viewport bounded by points you pick",
+                        ),
+                        tool(
+                            Icon::Circle,
+                            "Object",
+                            Some("MVIEW O"),
+                            "Makes a closed polyline, circle or ellipse a viewport",
+                        ),
+                        tool(
+                            Icon::ImageClip,
+                            "Clip",
+                            Some("VPCLIP"),
+                            "Clips a viewport to a shape or points, or Deletes its clipping",
+                        ),
+                    ],
+                )
             });
+            items.item(ui, |ui| this.small_column(ui, VIEWPORT_TOOLS));
         });
     }
 
     fn output_tab(&mut self, ui: &mut Ui) {
-        ribbon_panel(ui, "Plot", |ui| {
-            self.large_tool(ui, &tool(Icon::Plot, "Plot", Some("PLOT"), "Plots the drawing to a PDF file (Cmd+P)"));
-            self.large_tool(
-                ui,
-                &tool(Icon::Plot, "Batch\nPlot", Some("PUBLISH"), "Plots several sheets to one PDF (PUBLISH)"),
-            );
-            ui.vertical(|ui| {
-                self.small_tool(
-                    ui,
-                    &tool(Icon::PlotPreview, "Preview", Some("PREVIEW"), "Shows the drawing as it will plot"),
-                );
-                self.small_tool(
-                    ui,
-                    &tool(Icon::PageSetup, "Page Setup Manager", Some("PAGESETUP"), "Sets how a layout plots"),
-                );
-                self.small_tool(
-                    ui,
-                    &tool(
-                        Icon::PageSetup,
-                        "Plot Style Manager",
-                        Some("STYLESMANAGER"),
-                        "Plot style tables (.ctb): each color's pen, screening and lineweight",
-                    ),
-                );
+        self.fit_panel(ui, "Plot", Icon::Plot, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(ui, &tool(Icon::Plot, "Plot", Some("PLOT"), "Plots the drawing to a PDF file (Cmd+P)"))
             });
-            ui.vertical(|ui| {
-                self.small_tool(
+            items.item(ui, |ui| {
+                this.large_tool(
                     ui,
-                    &tool(
+                    &tool(Icon::Plot, "Batch\nPlot", Some("PUBLISH"), "Plots several sheets to one PDF (PUBLISH)"),
+                )
+            });
+            items.item(ui, |ui| {
+                this.small_column(
+                    ui,
+                    &[
+                        tool(Icon::PlotPreview, "Preview", Some("PREVIEW"), "Shows the drawing as it will plot"),
+                        tool(Icon::PageSetup, "Page Setup Manager", Some("PAGESETUP"), "Sets how a layout plots"),
+                        tool(
+                            Icon::PageSetup,
+                            "Plot Style Manager",
+                            Some("STYLESMANAGER"),
+                            "Plot style tables (.ctb): each color's pen, screening and lineweight",
+                        ),
+                    ],
+                )
+            });
+            items.item(ui, |ui| {
+                this.small_column(
+                    ui,
+                    &[tool(
                         Icon::Plot,
                         "Plotter Manager",
                         Some("PLOTTERMANAGER"),
                         "Plotter configurations, paper sizes of your own, image plot resolution",
-                    ),
-                );
+                    )],
+                )
             });
         });
-        ribbon_panel(ui, "Export to DWF/PDF", |ui| {
-            self.large_tool(
-                ui,
-                &tool(Icon::Pdf, "Export", Some("EXPORTPDF"), "Saves the current layout, or all of them, as a PDF"),
-            );
-            ui.vertical(|ui| {
-                self.small_tool(
+        self.fit_panel(ui, "Export to DWF/PDF", Icon::Pdf, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
                     ui,
-                    &tool(Icon::Pdf, "DWFx", Some("EXPORTDWFX"), "Saves the current layout, or all of them, as DWFx"),
-                );
-                self.small_tool(
+                    &tool(Icon::Pdf, "Export", Some("EXPORTPDF"), "Saves the current layout, or all of them, as a PDF"),
+                )
+            });
+            items.item(ui, |ui| {
+                this.small_column(
                     ui,
-                    &tool(Icon::Pdf, "Metafile", Some("WMFOUT"), "Saves objects as a Windows Metafile (WMF)"),
-                );
+                    &[
+                        tool(
+                            Icon::Pdf,
+                            "DWFx",
+                            Some("EXPORTDWFX"),
+                            "Saves the current layout, or all of them, as DWFx",
+                        ),
+                        tool(Icon::Pdf, "Metafile", Some("WMFOUT"), "Saves objects as a Windows Metafile (WMF)"),
+                    ],
+                )
             });
         });
     }
@@ -1149,145 +1281,158 @@ impl OxidraftApp {
     fn home_tab(&mut self, ui: &mut Ui) {
         // The most used tools show; the rest are in each panel's slide-out,
         // opened from its title, as in AutoCAD.
-        let draw = ribbon_panel_more(ui, "Draw", |ui| {
+        self.fit_panel(ui, "Draw", Icon::Line, |this, ui, items| {
             for t in DRAW_LARGE {
-                self.large_tool(ui, t);
+                items.item(ui, |ui| this.large_tool(ui, t));
             }
-            ui.vertical(|ui| {
-                for t in DRAW_SMALL {
-                    self.small_tool(ui, t);
+            items.item(ui, |ui| this.small_column(ui, DRAW_SMALL));
+            items.more(ui, |ui| {
+                for t in DRAW_MORE {
+                    this.small_tool(ui, t);
                 }
             });
         });
-        egui::Popup::menu(&draw).show(|ui| {
-            for t in DRAW_MORE {
-                self.small_tool(ui, t);
-            }
-        });
-        let modify = ribbon_panel_more(ui, "Modify", |ui| {
-            ui.vertical(|ui| {
-                for row in MODIFY_GRID {
-                    ui.horizontal(|ui| {
-                        for t in row {
-                            self.small_tool(ui, t);
+        self.fit_panel(ui, "Modify", Icon::Move, |this, ui, items| {
+            // AutoCAD's columns: Move, Copy, Stretch; Rotate, Mirror, Scale;
+            // Trim, Fillet, Array.
+            for column in 0..3 {
+                items.item(ui, |ui| {
+                    ui.vertical(|ui| {
+                        for row in MODIFY_GRID {
+                            this.small_tool(ui, &row[column]);
                         }
                     });
+                });
+            }
+            items.more(ui, |ui| {
+                for t in MODIFY_MORE {
+                    this.small_tool(ui, t);
+                }
+                // Draw order, as the panel's split button offers it.
+                for (icon, label, option, tip) in [
+                    (
+                        Icon::BringToFront,
+                        "Bring to Front",
+                        "Front",
+                        "Draws the selected objects over everything (DRAWORDER)",
+                    ),
+                    (
+                        Icon::SendToBack,
+                        "Send to Back",
+                        "Back",
+                        "Draws the selected objects under everything (DRAWORDER)",
+                    ),
+                ] {
+                    let response = paint_small(ui, &tool(icon, label, None, tip), true);
+                    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+                    if response.on_hover_text(tip).clicked() {
+                        this.engine.draw_order(option, &mut this.doc);
+                    }
                 }
             });
         });
-        egui::Popup::menu(&modify).show(|ui| {
-            for t in MODIFY_MORE {
-                self.small_tool(ui, t);
-            }
-            // Draw order, as the panel's split button offers it.
-            for (icon, label, option, tip) in [
-                (
-                    Icon::BringToFront,
-                    "Bring to Front",
-                    "Front",
-                    "Draws the selected objects over everything (DRAWORDER)",
-                ),
-                (Icon::SendToBack, "Send to Back", "Back", "Draws the selected objects under everything (DRAWORDER)"),
-            ] {
-                let response = paint_small(ui, &tool(icon, label, None, tip), true);
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
-                if response.on_hover_text(tip).clicked() {
-                    self.engine.draw_order(option, &mut self.doc);
-                }
-            }
-        });
-        ribbon_panel(ui, "Annotation", |ui| {
+        self.fit_panel(ui, "Annotation", Icon::Text, |this, ui, items| {
             for t in ANNOTATION_LARGE {
-                self.large_tool(ui, t);
+                items.item(ui, |ui| this.large_tool(ui, t));
             }
-            ui.vertical(|ui| {
-                for t in ANNOTATION_SMALL {
-                    self.small_tool(ui, t);
+            items.item(ui, |ui| this.small_column(ui, ANNOTATION_SMALL));
+        });
+        // As it is, whatever the room.
+        self.fit_panel(ui, "Layers", Icon::LayerProperties, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
+                    ui,
+                    &tool(Icon::LayerProperties, "Layer\nProperties", Some("LAYER"), "Manages layers (LA)"),
+                );
+                ui.vertical(|ui| {
+                    ui.add_space(6.0);
+                    this.layer_combo(ui);
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let make_current = tool(
+                            Icon::MakeCurrent,
+                            "Make Current",
+                            Some("LAYMCUR"),
+                            "Makes a selected object's layer current",
+                        );
+                        this.small_tool(ui, &make_current);
+                        for t in LAYER_TOOLS {
+                            this.small_tool(ui, t);
+                        }
+                    });
+                });
+            });
+            items.more(ui, |ui| {
+                for t in LAYERS_MORE {
+                    this.small_tool(ui, t);
                 }
             });
         });
-        let layers = ribbon_panel_more(ui, "Layers", |ui| {
-            self.large_tool(
-                ui,
-                &tool(Icon::LayerProperties, "Layer\nProperties", Some("LAYER"), "Manages layers (LA)"),
-            );
-            ui.vertical(|ui| {
-                ui.add_space(6.0);
-                self.layer_combo(ui);
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    let make_current = tool(
-                        Icon::MakeCurrent,
-                        "Make Current",
-                        Some("LAYMCUR"),
-                        "Makes a selected object's layer current",
+        self.fit_panel(ui, "Block", Icon::InsertBlock, |this, ui, items| {
+            items.item(ui, |ui| this.large_tool(ui, &BLOCK_INSERT));
+            items.item(ui, |ui| this.small_column(ui, BLOCK_SMALL));
+        });
+        // As it is, whatever the room.
+        self.fit_panel(ui, "Properties", Icon::MatchProperties, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
+                    ui,
+                    &tool(
+                        Icon::MatchProperties,
+                        "Match\nProperties",
+                        Some("MATCHPROP"),
+                        "Copies layer and color to other objects (MA)",
+                    ),
+                );
+                this.property_combos(ui);
+            });
+        });
+        self.fit_panel(ui, "Groups", Icon::Group, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.large_tool(
+                    ui,
+                    &tool(Icon::Group, "Group", Some("GROUP"), "Makes the selected objects a group (G)"),
+                )
+            });
+            items.item(ui, |ui| {
+                ui.vertical(|ui| {
+                    this.small_tool(ui, &tool(Icon::Ungroup, "Ungroup", Some("UNGROUP"), "Takes a group apart"));
+                    this.small_tool(
+                        ui,
+                        &tool(
+                            Icon::Properties,
+                            "Group Edit",
+                            Some("GROUPEDIT"),
+                            "Adds objects to a group, removes them, or renames it",
+                        ),
                     );
-                    self.small_tool(ui, &make_current);
-                    for t in LAYER_TOOLS {
-                        self.small_tool(ui, t);
+                    let on = this.engine.vars.group_select;
+                    let label = if on { "Selection On" } else { "Selection Off" };
+                    let response = paint_small(ui, &tool(Icon::Group, label, None, ""), true);
+                    if response
+                        .on_hover_text("Group Selection: picking one object picks its group (Ctrl+Shift+A)")
+                        .clicked()
+                    {
+                        this.toggle_group_selection();
                     }
                 });
             });
         });
-        egui::Popup::menu(&layers).show(|ui| {
-            for t in LAYERS_MORE {
+        self.fit_panel(ui, "Utilities", Icon::Measure, |this, ui, items| {
+            for t in UTILITIES_LARGE {
+                items.item(ui, |ui| this.large_tool(ui, t));
+            }
+            items.item(ui, |ui| this.small_column(ui, UTILITIES_SMALL));
+        });
+    }
+
+    /// A column of small buttons.
+    fn small_column(&mut self, ui: &mut Ui, tools: &[Tool]) {
+        ui.vertical(|ui| {
+            for t in tools {
                 self.small_tool(ui, t);
             }
-        });
-        ribbon_panel(ui, "Block", |ui| {
-            self.large_tool(ui, &BLOCK_INSERT);
-            ui.vertical(|ui| {
-                for t in BLOCK_SMALL {
-                    self.small_tool(ui, t);
-                }
-            });
-        });
-        ribbon_panel(ui, "Properties", |ui| {
-            self.large_tool(
-                ui,
-                &tool(
-                    Icon::MatchProperties,
-                    "Match\nProperties",
-                    Some("MATCHPROP"),
-                    "Copies layer and color to other objects (MA)",
-                ),
-            );
-            self.property_combos(ui);
-        });
-        ribbon_panel(ui, "Groups", |ui| {
-            self.large_tool(ui, &tool(Icon::Group, "Group", Some("GROUP"), "Makes the selected objects a group (G)"));
-            ui.vertical(|ui| {
-                self.small_tool(ui, &tool(Icon::Ungroup, "Ungroup", Some("UNGROUP"), "Takes a group apart"));
-                self.small_tool(
-                    ui,
-                    &tool(
-                        Icon::Properties,
-                        "Group Edit",
-                        Some("GROUPEDIT"),
-                        "Adds objects to a group, removes them, or renames it",
-                    ),
-                );
-                let on = self.engine.vars.group_select;
-                let label = if on { "Selection On" } else { "Selection Off" };
-                let response = paint_small(ui, &tool(Icon::Group, label, None, ""), true);
-                if response
-                    .on_hover_text("Group Selection: picking one object picks its group (Ctrl+Shift+A)")
-                    .clicked()
-                {
-                    self.toggle_group_selection();
-                }
-            });
-        });
-        ribbon_panel(ui, "Utilities", |ui| {
-            for t in UTILITIES_LARGE {
-                self.large_tool(ui, t);
-            }
-            ui.vertical(|ui| {
-                for t in UTILITIES_SMALL {
-                    self.small_tool(ui, t);
-                }
-            });
         });
     }
 
@@ -1301,43 +1446,47 @@ impl OxidraftApp {
     /// The Block Editor's panel: save the block, close the editor.
     fn block_editor_panel(&mut self, ui: &mut Ui) {
         let name = self.doc.refedit().map(|r| r.block.clone()).unwrap_or_default();
-        ribbon_panel(ui, &format!("Block Editor - {name}"), |ui| {
+        self.fit_panel(ui, &format!("Block Editor - {name}"), Icon::SaveReference, |this, ui, items| {
             let save = tool(Icon::SaveReference, "Save\nBlock", None, "Saves the block definition (BSAVE)");
             let close = tool(Icon::DiscardReference, "Close Block\nEditor", None, "Closes the Block Editor (BCLOSE)");
             for (t, command) in [(save, "BSAVE"), (close, "BCLOSE")] {
-                let response = paint_large(ui, &t, true);
-                let label = t.label.replace('\n', " ");
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-                if response.on_hover_text(t.tip).clicked() {
-                    self.run(command);
-                }
+                items.item(ui, |ui| {
+                    let response = paint_large(ui, &t, true);
+                    let label = t.label.replace('\n', " ");
+                    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+                    if response.on_hover_text(t.tip).clicked() {
+                        this.run(command);
+                    }
+                });
             }
         });
         // Making it dynamic: parameters, their actions, visibility states.
-        ribbon_panel(ui, "Dynamic", |ui| {
-            ui.vertical(|ui| {
-                for t in [
-                    tool(Icon::Dimension, "Parameter", Some("BPARAMETER"), "A Linear, Flip or Rotation parameter"),
-                    tool(Icon::Stretch, "Stretch Action", Some("BACTION"), "What a linear parameter stretches"),
-                    tool(Icon::Properties, "Visibility States", Some("BVSTATE"), "New, current or deleted states"),
-                ] {
-                    self.small_tool(ui, &t);
-                }
+        self.fit_panel(ui, "Dynamic", Icon::Dimension, |this, ui, items| {
+            items.item(ui, |ui| {
+                this.small_column(
+                    ui,
+                    &[
+                        tool(Icon::Dimension, "Parameter", Some("BPARAMETER"), "A Linear, Flip or Rotation parameter"),
+                        tool(Icon::Stretch, "Stretch Action", Some("BACTION"), "What a linear parameter stretches"),
+                        tool(Icon::Properties, "Visibility States", Some("BVSTATE"), "New, current or deleted states"),
+                    ],
+                )
             });
-            ui.vertical(|ui| {
-                for t in [
-                    tool(Icon::Erase, "Make Invisible", Some("BVHIDE"), "Hides objects in the current state"),
-                    tool(Icon::Properties, "Make Visible", Some("BVSHOW"), "Shows objects in the current state"),
-                ] {
-                    self.small_tool(ui, &t);
-                }
+            items.item(ui, |ui| {
+                this.small_column(
+                    ui,
+                    &[
+                        tool(Icon::Erase, "Make Invisible", Some("BVHIDE"), "Hides objects in the current state"),
+                        tool(Icon::Properties, "Make Visible", Some("BVSHOW"), "Shows objects in the current state"),
+                    ],
+                )
             });
         });
     }
 
     /// The Edit Reference panel, shown while a reference is edited in place.
     fn edit_reference_panel(&mut self, ui: &mut Ui) {
-        ribbon_panel(ui, "Edit Reference", |ui| {
+        self.fit_panel(ui, "Edit Reference", Icon::EditReference, |this, ui, items| {
             let save = tool(Icon::SaveReference, "Save\nChanges", None, "Saves the edits to the reference (REFCLOSE)");
             let discard = tool(
                 Icon::DiscardReference,
@@ -1346,31 +1495,39 @@ impl OxidraftApp {
                 "Discards the edits to the reference (REFCLOSE)",
             );
             for (t, action) in [(save, "Save"), (discard, "Discard")] {
-                let response = paint_large(ui, &t, true);
-                let label = t.label.replace('\n', " ");
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-                if response.on_hover_text(t.tip).clicked() {
-                    self.command_text.clear();
-                    self.engine.edit_reference(action, &mut self.doc);
-                }
-            }
-            ui.vertical(|ui| {
-                let add =
-                    tool(Icon::AddToWorkingSet, "Add to Working Set", None, "Adds objects to the working set (REFSET)");
-                let remove = tool(
-                    Icon::RemoveFromWorkingSet,
-                    "Remove from Working Set",
-                    None,
-                    "Takes objects out of the working set (REFSET)",
-                );
-                for (t, action) in [(add, "Add"), (remove, "Remove")] {
-                    let response = paint_small(ui, &t, true);
-                    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t.label));
+                items.item(ui, |ui| {
+                    let response = paint_large(ui, &t, true);
+                    let label = t.label.replace('\n', " ");
+                    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
                     if response.on_hover_text(t.tip).clicked() {
-                        self.command_text.clear();
-                        self.engine.edit_reference(action, &mut self.doc);
+                        this.command_text.clear();
+                        this.engine.edit_reference(action, &mut this.doc);
                     }
-                }
+                });
+            }
+            items.item(ui, |ui| {
+                ui.vertical(|ui| {
+                    let add = tool(
+                        Icon::AddToWorkingSet,
+                        "Add to Working Set",
+                        None,
+                        "Adds objects to the working set (REFSET)",
+                    );
+                    let remove = tool(
+                        Icon::RemoveFromWorkingSet,
+                        "Remove from Working Set",
+                        None,
+                        "Takes objects out of the working set (REFSET)",
+                    );
+                    for (t, action) in [(add, "Add"), (remove, "Remove")] {
+                        let response = paint_small(ui, &t, true);
+                        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t.label));
+                        if response.on_hover_text(t.tip).clicked() {
+                            this.command_text.clear();
+                            this.engine.edit_reference(action, &mut this.doc);
+                        }
+                    }
+                });
             });
         });
     }
@@ -1736,26 +1893,24 @@ impl OxidraftApp {
 
 /// A large ribbon button: its icon above its label.
 fn paint_large(ui: &mut Ui, t: &Tool, enabled: bool) -> Response {
+    paint_large_labeled(ui, t.icon, t.label, enabled)
+}
+
+/// A large button: an icon, and a label under it.
+fn paint_large_labeled(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> Response {
     // As wide as its longest line of label needs.
     let font = FontId::proportional(11.5);
-    let widest = t
-        .label
+    let widest = label
         .lines()
         .map(|l| ui.painter().layout_no_wrap(l.to_string(), font.clone(), theme::text()).size().x)
         .fold(0.0, f32::max);
     let (rect, response) = ui.allocate_exact_size(vec2((widest + 10.0).max(58.0), 76.0), Sense::click());
     paint_hover(ui, rect, &response, enabled);
     let color = if enabled { theme::text() } else { theme::text_disabled() };
-    let icon = Rect::from_center_size(pos2(rect.center().x, rect.top() + 22.0), vec2(30.0, 30.0));
-    icons::paint(ui.painter(), icon, t.icon, color, enabled);
-    ui.painter().text(
-        pos2(rect.center().x, rect.top() + 42.0),
-        Align2::CENTER_TOP,
-        t.label,
-        FontId::proportional(11.5),
-        color,
-    );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, t.label.replace('\n', " ")));
+    let at = Rect::from_center_size(pos2(rect.center().x, rect.top() + 22.0), vec2(30.0, 30.0));
+    icons::paint(ui.painter(), at, icon, color, enabled);
+    ui.painter().text(pos2(rect.center().x, rect.top() + 42.0), Align2::CENTER_TOP, label, font, color);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label.replace('\n', " ")));
     response
 }
 
@@ -1818,18 +1973,33 @@ fn command_tip(command: &str) -> String {
         .map_or_else(|| command.to_string(), |i| format!("{} ({})", i.description, i.name))
 }
 
-fn ribbon_panel(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {
-    let _ = ribbon_panel_more(ui, title, contents);
+/// A panel's slide-out: the items the ribbon hasn't room for, as the
+/// ribbon has them, then what it always has.
+fn slide_out(
+    app: &mut OxidraftApp,
+    ui: &mut Ui,
+    contents: &mut impl FnMut(&mut OxidraftApp, &mut Ui, &mut Items),
+    shown: usize,
+    count: usize,
+) {
+    if shown < count {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+            contents(app, ui, &mut Items::new(Pass::Hidden, shown));
+        });
+    }
+    contents(app, ui, &mut Items::new(Pass::More, shown));
 }
 
-/// A ribbon panel; returns its title strip, which opens the panel's
-/// slide-out where it has one.
-fn ribbon_panel_more(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) -> Response {
+/// A ribbon panel, at least `min_width` wide; returns its title strip,
+/// which opens the panel's slide-out where it has one.
+fn ribbon_panel_more(ui: &mut Ui, title: &str, min_width: f32, contents: impl FnOnce(&mut Ui)) -> Response {
     let mut title_response = None;
     let response = ui
         .vertical(|ui| {
             let r = ui.horizontal(|ui| {
                 ui.set_height(78.0);
+                ui.set_min_width(min_width);
                 ui.add_space(4.0);
                 contents(ui);
                 ui.add_space(4.0);

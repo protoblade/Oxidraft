@@ -273,6 +273,8 @@ pub struct OxidraftApp {
     /// Top of the command line's history and input from the last frame.
     pub(crate) command_line_top: f32,
     pub(crate) ribbon_tab: usize,
+    /// The ribbon's panels fitted to the window, frame to frame.
+    pub(crate) ribbon_fit: crate::ribbon_fit::RibbonFit,
     /// F2: show more command history.
     pub(crate) history_expanded: bool,
     /// Highlighted AutoComplete suggestion.
@@ -482,6 +484,7 @@ impl OxidraftApp {
             sheet_scale: None,
             command_line_top: f32::INFINITY,
             ribbon_tab: 0,
+            ribbon_fit: Default::default(),
             history_expanded: false,
             suggestion: 0,
             recall: None,

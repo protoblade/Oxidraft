@@ -57,6 +57,7 @@ mod properties;
 mod publish;
 mod qselect;
 mod quickcalc;
+mod ribbon_fit;
 mod settings;
 mod share;
 mod sheet_set;

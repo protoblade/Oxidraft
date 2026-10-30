@@ -1948,6 +1948,9 @@ fn quickcalc_works_out_and_pastes_to_the_command_line() {
     let mut h = app_with_line();
     h.get_by_role_and_label(Role::Tab, "View").click();
     h.run_steps(2);
+    // In the Palettes panel's slide-out, at this width.
+    h.get_by_role_and_label(Role::Button, "Palettes panel").click();
+    h.run_steps(2);
     h.get_by_label("QuickCalc").click();
     h.run_steps(2);
     for key in ["7", "*", "6"] {
@@ -4063,4 +4066,33 @@ fn ole_documents_show_their_pictures() {
         assert!(image::load_from_memory(&after).is_ok(), "{name}");
     }
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The ribbon fitted to the window: every panel there at any width, the
+/// items there's no room for in its slide-out; Layers and Properties
+/// whole.
+#[test]
+fn the_ribbon_fits_the_window() {
+    let panels = ["Draw", "Modify", "Annotation", "Layers", "Block", "Properties", "Groups", "Utilities"];
+    for width in [1920.0, 1100.0, 800.0] {
+        let mut h = app_sized(1.0 / 4.0, width);
+        h.run_steps(3);
+        for p in panels {
+            assert!(h.query_by_label(&format!("{p} panel")).is_some(), "{p} at {width}");
+        }
+        assert!(h.query_by_label("Layer control").is_some(), "the layer list at {width}");
+        assert!(h.query_by_label("Make Current").is_some(), "Layers whole at {width}");
+        assert!(h.query_by_label("Match Properties").is_some(), "Properties whole at {width}");
+        // Arc: in the ribbon with room for it, else in Draw's slide-out.
+        if width >= 1920.0 {
+            assert!(h.query_by_label("Arc").is_some());
+            continue;
+        }
+        assert!(h.query_by_label("Arc").is_none(), "no room for Arc at {width}");
+        h.get_by_role_and_label(Role::Button, "Draw panel").click();
+        h.run_steps(2);
+        h.get_by_label("Arc").click();
+        h.run_steps(2);
+        assert_eq!(h.state_mut().engine_mut().active_name(), Some("ARC"), "{width}");
+    }
 }
