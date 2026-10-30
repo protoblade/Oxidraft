@@ -2,11 +2,13 @@
 //! there too (oxidraft_io_dxf reads AutoCAD's): the multileader style as
 //! the Standard MLEADERSTYLE (with AutoCAD's arrowhead blocks), the table
 //! style as the Standard TABLESTYLE, IMAGEFRAME and WIPEOUTFRAME in
-//! RASTERVARIABLES and WIPEOUTVARIABLES, and LIMCHECK.
+//! RASTERVARIABLES and WIPEOUTVARIABLES, and LIMCHECK; with NATIVESAVE,
+//! each named view's layout.
 
 use acadrust::entities::{Line, LwPolyline};
 use acadrust::objects::{
-    Dictionary, DictionaryVariable, LeaderContentType, ObjectType, RasterVariables, TableStyle, WipeoutVariables,
+    Dictionary, DictionaryCloningFlags, DictionaryVariable, LeaderContentType, ObjectType, RasterVariables, TableStyle,
+    WipeoutVariables, XRecordEntry, XRecordValue,
 };
 use acadrust::types::{Color, DxfVersion, Handle, Vector2, Vector3};
 use acadrust::{CadDocument, EntityType};
@@ -131,6 +133,42 @@ fn set_variable(cad: &mut CadDocument, name: &str, value: &str) {
     }
 }
 
+/// NATIVESAVE: which layout each named view is on, as AutoCAD keeps it:
+/// in an ADSK_XREC_VTRVIEWINFO record in the view's extension dictionary
+/// — its category (300), a name of its own (302), its layout (330) and
+/// 294 — laid out as in an AutoCAD-made drawing (ACadSharp's samples).
+fn view_layouts(cad: &mut CadDocument, doc: &Document) {
+    for v in doc.views() {
+        let name = if v.space == oxidraft_model::MODEL {
+            "Model".to_string()
+        } else {
+            match doc.layouts().into_iter().find(|l| l.id == v.space) {
+                Some(l) => l.name.clone(),
+                None => continue,
+            }
+        };
+        let layout = cad.objects.values().find_map(|o| match o {
+            ObjectType::Layout(l) if l.name.eq_ignore_ascii_case(&name) => Some(l.handle),
+            _ => None,
+        });
+        let (Some(layout), Some(view)) = (layout, cad.views.get(&v.name).map(|x| x.handle)) else { continue };
+        let h = cad.ensure_xrecord(view, VIEW_INFO);
+        if let Some(ObjectType::XRecord(x)) = cad.objects.get_mut(&h) {
+            x.cloning_flags = DictionaryCloningFlags::KeepExisting;
+            x.reactors = vec![x.owner];
+            x.entries = vec![
+                XRecordEntry::string(300, "<None>"),
+                XRecordEntry::string(302, format!("ACAD_VIEWS_{}", v.name)),
+                XRecordEntry::new(330, XRecordValue::Handle(layout)),
+                XRecordEntry::new(294, XRecordValue::Bool(false)),
+            ];
+        }
+    }
+}
+
+/// AutoCAD's record of a named view's layout.
+pub(crate) const VIEW_INFO: &str = "ADSK_XREC_VTRVIEWINFO";
+
 pub(crate) fn finish(cad: &mut CadDocument, doc: &Document, version: DxfVersion) {
     cad.header.limit_check = doc.limits_check();
     // Views on layouts: paper space views.
@@ -138,6 +176,9 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document, version: DxfVersion)
         if let Some(view) = cad.views.get_mut(&v.name) {
             view.paper_space = true;
         }
+    }
+    if crate::native_objects() {
+        view_layouts(cad, doc);
     }
     // NATIVESAVE: PDFFRAME and ANNOALLVISIBLE as variables in AutoCAD's
     // variable dictionary, where AutoCAD keeps its newer ones (where it
@@ -234,7 +275,11 @@ mod tests {
         let mut doc = Document::new();
         doc.add(Geometry::Line { start: Point::ORIGIN, end: Point::new(10.0, 0.0) });
         let paper = oxidraft_model::Paper { width: 420.0, height: 297.0, millimeters: true, ..Default::default() };
-        let space = doc.add_layout(oxidraft_model::layout::Layout { id: 0, name: "Sheet".into(), tab_order: 1, paper });
+        let sheet = oxidraft_model::layout::Layout { id: 0, name: "Sheet".into(), tab_order: 1, paper: paper.clone() };
+        doc.add_layout(sheet);
+        // On the second layout: only AutoCAD's record of it says so.
+        let space =
+            doc.add_layout(oxidraft_model::layout::Layout { id: 0, name: "Second".into(), tab_order: 2, paper });
         let view = oxidraft_model::NamedView {
             name: "Detail".into(),
             center: Point::new(5.0, 5.0),
@@ -242,14 +287,26 @@ mod tests {
             width: 30.0,
             space,
         };
-        doc.save_view(view).unwrap();
+        doc.save_view(view.clone()).unwrap();
+        doc.save_view(oxidraft_model::NamedView { name: "Plan".into(), space: oxidraft_model::MODEL, ..view }).unwrap();
         doc.set_picture_frame(true, 0);
         doc.set_anno_all_visible(false);
         crate::set_native_objects(true);
         let dwg = crate::write(&doc, crate::Version::R2018);
+        let dxf = crate::write_dxf(&doc).unwrap();
         crate::set_native_objects(false);
         let mut cad = acadrust::DwgReader::from_stream(Cursor::new(dwg.unwrap())).read().unwrap();
         assert!(cad.views.get("Detail").unwrap().paper_space);
+        // Its layout, as AutoCAD keeps it.
+        let detail = cad.views.get("Detail").unwrap().handle;
+        let info = cad.xrecord(detail, VIEW_INFO).expect("the view's record");
+        let layout = info.entries.iter().find(|e| e.code == 330).map(|e| e.value.clone());
+        let second = cad.objects.values().find_map(|o| match o {
+            ObjectType::Layout(l) if l.name == "Second" => Some(l.handle),
+            _ => None,
+        });
+        assert_eq!(layout, second.map(XRecordValue::Handle));
+        assert_eq!(info.entries[1].value, XRecordValue::String("ACAD_VIEWS_Detail".into()));
         let root = cad.header.named_objects_dict_handle;
         let variable = |cad: &CadDocument, name: &str| {
             let Some(ObjectType::Dictionary(r)) = cad.objects.get(&root) else { return None };
@@ -266,9 +323,18 @@ mod tests {
         // As AutoCAD would save it: read from AutoCAD's own forms.
         without_oxidraft(&mut cad);
         let back = crate::read(&acadrust::DwgWriter::write_to_vec(&cad).unwrap()).unwrap().imported.document;
-        let layout = back.layouts().into_iter().find(|l| l.name == "Sheet").unwrap().id;
-        assert_eq!(back.views().iter().find(|v| v.name == "Detail").map(|v| v.space), Some(layout));
+        let spaces = |back: &Document| {
+            let second = back.layouts().into_iter().find(|l| l.name == "Second").unwrap().id;
+            let space = |name: &str| back.views().iter().find(|v| v.name == name).map(|v| v.space);
+            assert_eq!(space("Detail"), Some(second));
+            assert_eq!(space("Plan"), Some(oxidraft_model::MODEL));
+        };
+        spaces(&back);
         assert_eq!((back.picture_frame(true), back.anno_all_visible()), (0, false));
+        // And from a DXF.
+        let mut cad = acadrust::DxfReader::from_reader(Cursor::new(dxf)).and_then(|r| r.read()).unwrap();
+        without_oxidraft(&mut cad);
+        spaces(&crate::read_dxf(&acadrust::DxfWriter::new(&cad).write_to_vec().unwrap()).unwrap().document);
     }
 
     #[test]

@@ -10,14 +10,21 @@ use oxidraft_model::{Document, MODEL};
 use crate::layout_dxf::RawLayouts;
 
 pub(crate) fn read(doc: &mut Document, raw: &RawLayouts) {
-    // Paper space views, on the first layout (Oxidraft's own record says
+    // Named views on the layout AutoCAD's record of them names; paper space
+    // ones without it on the first layout (Oxidraft's own record says
     // which, for its own).
-    if let Some(first) = doc.layouts().iter().min_by_key(|l| l.tab_order).map(|l| l.id) {
-        for (name, _) in raw.views.iter().filter(|(_, f)| f & 1 != 0) {
-            if let Some(mut v) = doc.views().iter().find(|v| &v.name == name && v.space == MODEL).cloned() {
-                v.space = first;
-                let _ = doc.save_view(v);
-            }
+    let first = doc.layouts().iter().min_by_key(|l| l.tab_order).map(|l| l.id);
+    for (name, flags, xdict) in &raw.views {
+        let space = match view_layout(raw, *xdict) {
+            Some(l) if l == "MODEL" => Some(MODEL),
+            Some(l) => doc.layouts().iter().find(|x| x.name.eq_ignore_ascii_case(l)).map(|x| x.id),
+            None => first.filter(|_| flags & 1 != 0),
+        };
+        if let Some(space) = space
+            && let Some(mut v) = doc.views().iter().find(|v| &v.name == name && v.space != space).cloned()
+        {
+            v.space = space;
+            let _ = doc.save_view(v);
         }
     }
     let ours = raw.apps.iter().any(|a| a.to_ascii_uppercase().starts_with("OXIDRAFT"))
@@ -110,4 +117,15 @@ pub(crate) fn read(doc: &mut Document, raw: &RawLayouts) {
             _ => {}
         }
     }
+}
+
+/// The upper-case name of the layout a view's ADSK_XREC_VTRVIEWINFO (in
+/// its extension dictionary `xdict`) names: the record's own 330, after
+/// its owner's.
+fn view_layout(raw: &RawLayouts, xdict: u64) -> Option<&String> {
+    let (_, record) = raw.dictionaries.get(&xdict)?.iter().find(|(n, _)| n == "ADSK_XREC_VTRVIEWINFO")?;
+    let codes = raw.xrecords.get(record)?;
+    let body = codes.iter().position(|(c, v)| *c == 100 && v == "AcDbXrecord")?;
+    let (_, layout) = codes[body..].iter().find(|(c, _)| *c == 330)?;
+    raw.layout_names.get(&u64::from_str_radix(layout, 16).ok()?)
 }

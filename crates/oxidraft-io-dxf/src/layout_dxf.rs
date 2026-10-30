@@ -65,8 +65,11 @@ pub(crate) struct RawLayouts {
     /// $CTABLESTYLE), and the applications registered (APPID).
     pub header: HashMap<String, String>,
     pub apps: Vec<String>,
-    /// Each named view's name and flags (1: a paper space view).
-    pub views: Vec<(String, i32)>,
+    /// Each named view's name, flags (1: a paper space view) and extension
+    /// dictionary (0 if none).
+    pub views: Vec<(String, i32, u64)>,
+    /// Layouts' upper-case names by the LAYOUT object's handle.
+    pub layout_names: HashMap<u64, String>,
 }
 
 fn paper(plot: &[(i32, &str)]) -> Paper {
@@ -171,7 +174,11 @@ pub(crate) fn read(dxf: &[u8]) -> RawLayouts {
             "VIEW" if section == "TABLES" => {
                 if let Some(name) = body.iter().find(|p| p.0 == 2) {
                     let flags = body.iter().find(|p| p.0 == 70).and_then(|p| p.1.parse().ok()).unwrap_or(0);
-                    out.views.push((name.1.to_string(), flags));
+                    let xdict = body.windows(2).find_map(|w| match w {
+                        [(102, "{ACAD_XDICTIONARY"), (360, h)] => u64::from_str_radix(h, 16).ok(),
+                        _ => None,
+                    });
+                    out.views.push((name.1.to_string(), flags, xdict.unwrap_or(0)));
                 }
             }
             "APPID" if section == "TABLES" => {
@@ -240,6 +247,9 @@ pub(crate) fn read(dxf: &[u8]) -> RawLayouts {
                     && let Some(name) = body[layout..].iter().find(|p| p.0 == 1)
                 {
                     let key = name.1.to_ascii_uppercase();
+                    if let Some(h) = body.iter().find(|p| p.0 == 5).and_then(|p| u64::from_str_radix(p.1, 16).ok()) {
+                        out.layout_names.insert(h, key.clone());
+                    }
                     if let Some(plot) = marker("AcDbPlotSettings").filter(|p| *p < layout) {
                         out.papers.insert(key.clone(), paper(&body[plot + 1..layout]));
                     }
