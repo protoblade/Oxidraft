@@ -1,7 +1,7 @@
 //! MicroStation DGN V8 files: a compound file whose first model's
 //! elements (points, lines, line strings, shapes, curves, B-spline curves,
-//! point strings, arcs, ellipses and text;
-//! the components of complex chains, shapes and cells, one by one; shared
+//! point strings, arcs, ellipses and text; complex chains and shapes as
+//! polylines, where their parts meet; cells' components one by one; shared
 //! cells as their definitions' elements, placed) come in
 //! as DGNIMPORT and DGNATTACH bring V7's, a layer for each level by its
 //! name. The layout is as ezdgn's V8 format notes set it out (MIT,
@@ -347,9 +347,11 @@ pub fn read_dgn8(data: &[u8]) -> Result<Vec<(Geometry, String, u8)>, String> {
     Ok(out)
 }
 
-/// A type's flag for an element that's another's component (a complex
-/// element's, a cell's, a shared cell definition's).
+/// A type's flags for an element that's another's component (a complex
+/// element's, a cell's, a shared cell definition's), and for one that has
+/// components (its count at 0x68).
 const COMPONENT: u32 = 0x4000_0000;
+const HEADER: u32 = 0x2000_0000;
 
 /// Elements as Oxidraft's geometry, with their levels' names and colors;
 /// `scale` and `to` as for [`element`].
@@ -360,10 +362,29 @@ fn geometry(
     levels: &std::collections::HashMap<u32, String>,
 ) -> Vec<(Geometry, String, u8)> {
     let mut out = Vec::new();
+    let geometry_of = |(kind, object, attributes): &Raw| {
+        element(*kind as u16, &object[..(*attributes).max(0x68).min(object.len())], scale, to)
+    };
     // A B-spline curve's order, from its header (type 27), for its poles
     // (type 21) after it.
     let mut order = None;
-    for (kind, object, attributes) in objects {
+    let mut k = 0;
+    while let Some(raw @ (kind, object, _)) = objects.get(k) {
+        k += 1;
+        // A complex chain or shape (types 12 and 14): one polyline, where
+        // its components (lines, line strings, arcs) run end to end; else
+        // they come in one by one.
+        if matches!(*kind as u16, 12 | 14) && kind & HEADER != 0 {
+            let count = u32_at(object, 0x68).unwrap_or(0) as usize;
+            let parts = objects.get(k..k + count).filter(|p| p.iter().all(|(c, ..)| c & COMPONENT != 0));
+            let pieces: Option<Vec<Geometry>> =
+                parts.and_then(|p| p.iter().map(geometry_of).collect::<Option<Vec<_>>>()).map(|v| v.concat());
+            if let Some(g) = pieces.and_then(|p| joined(&p, *kind as u16 == 14)) {
+                out.push((g, layer_of(levels, object), color_of(object)));
+                k += count;
+            }
+            continue;
+        }
         match *kind as u16 {
             27 => order = u32_at(object, 0x6c).map(|p| (p & 0x0f) as usize + 2),
             21 => {
@@ -376,13 +397,56 @@ fn geometry(
             }
             _ => {}
         }
-        let Some(parts) = element(*kind as u16, &object[..(*attributes).max(0x68).min(object.len())], scale, to) else {
-            continue;
-        };
+        let Some(parts) = geometry_of(raw) else { continue };
         let (layer, color) = (layer_of(levels, object), color_of(object));
         out.extend(parts.into_iter().map(|g| (g, layer.clone(), color)));
     }
     out
+}
+
+/// Lines, line strings and arcs that run end to end (each either way
+/// round) as one polyline, `closed` as a shape is.
+fn joined(pieces: &[Geometry], closed: bool) -> Option<Geometry> {
+    let near = |a: Point, b: Point| a.distance(b) <= 1e-9 * (1.0 + a.x.abs().max(a.y.abs()));
+    let (mut points, mut bulges): (Vec<Point>, Vec<f64>) = (Vec::new(), Vec::new());
+    for g in pieces {
+        // Its segments: (start, end, bulge).
+        let mut segments: Vec<(Point, Point, f64)> = match g {
+            Geometry::Line { start, end } => vec![(*start, *end, 0.0)],
+            Geometry::Polyline { vertices, closed: false } => {
+                vertices.windows(2).map(|w| (w[0].point, w[1].point, w[0].bulge)).collect()
+            }
+            Geometry::Arc { center, radius, start_angle, end_angle } => {
+                let at = |a: f64| *center + Point::new(a.to_radians().cos(), a.to_radians().sin()) * *radius;
+                let sweep = (end_angle - start_angle).rem_euclid(360.0);
+                vec![(at(*start_angle), at(*end_angle), (sweep / 4.0).to_radians().tan())]
+            }
+            _ => return None,
+        };
+        let (first, last) = (segments.first()?.0, segments.last()?.1);
+        match points.last() {
+            None => points.push(first),
+            Some(&p) if near(p, first) => {}
+            // The other way round.
+            Some(&p) if near(p, last) => {
+                segments = segments.into_iter().rev().map(|(s, e, b)| (e, s, -b)).collect();
+            }
+            Some(_) => return None,
+        }
+        for (_, end, bulge) in segments {
+            bulges.push(bulge);
+            points.push(end);
+        }
+    }
+    if points.len() < 2 {
+        return None;
+    }
+    if closed && near(points[0], points[points.len() - 1]) {
+        points.pop();
+    }
+    bulges.resize(points.len(), 0.0);
+    let vertices = points.into_iter().zip(bulges).map(|(p, b)| Vertex::new(p, b)).collect();
+    Some(Geometry::Polyline { vertices, closed })
 }
 
 /// The drawing V8 files are written on: GDAL's V8 test drawing (MIT/X,
@@ -466,7 +530,8 @@ fn name_linkage(name: &str) -> Vec<u8> {
 
 /// The drawing's model space as a DGN V8 file (2D elements, a drawing
 /// unit a master unit): lines, line strings, shapes, circles, arcs,
-/// ellipses and text, everything else as line strings; a level for each
+/// ellipses and text, polylines with arcs as complex chains and shapes
+/// (of lines and arcs), everything else as line strings; a level for each
 /// layer (its name and color).
 pub fn write_dgn8(doc: &oxidraft_model::Document) -> Result<Vec<u8>, String> {
     use oxidraft_model::Color;
@@ -501,6 +566,11 @@ pub fn write_dgn8(doc: &oxidraft_model::Document) -> Result<Vec<u8>, String> {
         .collect::<Option<_>>()
         .ok_or_else(lost)?;
     let seed_of = |k: u16| &seeds.iter().find(|(x, _)| *x == k).expect("every kind seeded").1;
+    // Complex chains' and shapes' headers: the seed's first of each.
+    let header_seed = |kind: u16| {
+        seed_graphics.iter().find(|(k, ..)| *k as u16 == kind && k & HEADER != 0 && k & COMPONENT == 0).cloned()
+    };
+    let (chain_seed, shape_seed) = (header_seed(12).ok_or_else(lost)?, header_seed(14).ok_or_else(lost)?);
     let id_of = |o: &[u8]| u64::from_le_bytes(o[0x10..0x18].try_into().unwrap_or_default());
     let mut next = seed_graphics.iter().chain(&named).map(|(_, o, _)| id_of(o)).max().unwrap_or(0) + 1;
     // Levels: the seed's (by name), and one more for each other layer.
@@ -548,14 +618,22 @@ pub fn write_dgn8(doc: &oxidraft_model::Document) -> Result<Vec<u8>, String> {
             _ => 0xffff_ffff,
         };
         for g in doc.expanded(e) {
+            let range_of = |g: &Geometry| {
+                let b = g.bounds();
+                let (lo, hi) = (uor(b.min), uor(b.max));
+                [lo[0].floor() as i64, lo[1].floor() as i64, hi[0].ceil() as i64, hi[1].ceil() as i64]
+            };
+            let range = range_of(&g);
             let b = g.bounds();
             let (lo, hi) = (uor(b.min), uor(b.max));
-            let range = [lo[0].floor() as i64, lo[1].floor() as i64, hi[0].ceil() as i64, hi[1].ceil() as i64];
             (low, high) = ([low[0].min(lo[0]), low[1].min(lo[1])], [high[0].max(hi[0]), high[1].max(hi[1])]);
             let point = |p: Point| uor(p).iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
-            let mut push = |kind: u16, fields: Vec<u8>| {
-                let mut o = made(seed_of(kind), &fields, next, level, color, range);
+            // An element made on `seed`, its type's flags with `flags`.
+            let mut push = |seed: &Raw, flags: u32, range: [i64; 4], fields: Vec<u8>| {
+                let mut o = made(seed, &fields, next, level, color, range);
                 o[0x18..0x20].copy_from_slice(&model_id.to_le_bytes());
+                let kind = u32::from_le_bytes([o[0], o[1], o[2], o[3]]) | flags;
+                o[0..4].copy_from_slice(&kind.to_le_bytes());
                 out.push(o);
                 next += 1;
             };
@@ -568,19 +646,23 @@ pub fn write_dgn8(doc: &oxidraft_model::Document) -> Result<Vec<u8>, String> {
                 d
             };
             match &g {
-                Geometry::Point { position } => push(3, [point(*position), point(*position)].concat()),
-                Geometry::Line { start, end } => push(3, [point(*start), point(*end)].concat()),
+                Geometry::Point { position } => {
+                    push(seed_of(3), 0, range, [point(*position), point(*position)].concat())
+                }
+                Geometry::Line { start, end } => push(seed_of(3), 0, range, [point(*start), point(*end)].concat()),
                 Geometry::Polyline { vertices, closed } if vertices.iter().all(|v| v.bulge == 0.0) => {
                     let mut pts: Vec<Point> = vertices.iter().map(|v| v.point).collect();
                     if *closed && pts.len() >= 3 {
                         pts.push(pts[0]);
-                        push(6, points(&pts));
+                        push(seed_of(6), 0, range, points(&pts));
                     } else if pts.len() >= 2 {
-                        push(4, points(&pts));
+                        push(seed_of(4), 0, range, points(&pts));
                     }
                 }
                 Geometry::Circle { center, radius } => push(
-                    15,
+                    seed_of(15),
+                    0,
+                    range,
                     [f(radius * per), f(radius * per), f(0.0)].concat().into_iter().chain(point(*center)).collect(),
                 ),
                 Geometry::Arc { center, radius, start_angle, end_angle } => {
@@ -591,17 +673,17 @@ pub fn write_dgn8(doc: &oxidraft_model::Document) -> Result<Vec<u8>, String> {
                             .into_iter()
                             .chain(point(*center))
                             .collect();
-                    push(16, d);
+                    push(seed_of(16), 0, range, d);
                 }
                 Geometry::Ellipse(el) => {
                     let (a, turn) = (el.major.length(), el.major.y.atan2(el.major.x));
                     let axes = [f(a * per), f(a * el.ratio * per)].concat();
                     if el.is_full() {
-                        push(15, [axes, f(turn).to_vec(), point(el.center)].concat());
+                        push(seed_of(15), 0, range, [axes, f(turn).to_vec(), point(el.center)].concat());
                     } else {
                         let sweep = (el.end - el.start).rem_euclid(360.0);
                         let head = [f(el.start.to_radians()), f(sweep.to_radians())].concat();
-                        push(16, [head, axes, f(turn).to_vec(), point(el.center)].concat());
+                        push(seed_of(16), 0, range, [head, axes, f(turn).to_vec(), point(el.center)].concat());
                     }
                 }
                 Geometry::Text { position, height, rotation, content, .. } => {
@@ -625,7 +707,34 @@ pub fn write_dgn8(doc: &oxidraft_model::Document) -> Result<Vec<u8>, String> {
                     d[0x98 - 0x68..0xa8 - 0x68].copy_from_slice(&point(*position));
                     d[0xa8 - 0x68..0xaa - 0x68].copy_from_slice(&0u16.to_le_bytes());
                     d.extend(text);
-                    push(17, d);
+                    push(seed_of(17), 0, range, d);
+                }
+                // With arcs: a complex chain (a complex shape, closed) of
+                // lines and arcs, after its header (their count).
+                Geometry::Polyline { closed, .. } => {
+                    let segments = g.segments();
+                    let header = if *closed { &shape_seed } else { &chain_seed };
+                    let count = [(segments.len() as u32).to_le_bytes(), [0; 4]].concat();
+                    push(header, 0, range, count);
+                    for seg in &segments {
+                        let part = Geometry::from_seg(seg);
+                        match seg {
+                            oxidraft_geom::curve::Seg::Line(l) => {
+                                push(seed_of(3), COMPONENT, range_of(&part), [point(l.start), point(l.end)].concat())
+                            }
+                            oxidraft_geom::curve::Seg::Arc(a) => {
+                                let d = [
+                                    f(a.start.to_radians()),
+                                    f(a.sweep.to_radians()),
+                                    f(a.radius * per),
+                                    f(a.radius * per),
+                                    f(0.0),
+                                ]
+                                .concat();
+                                push(seed_of(16), COMPONENT, range_of(&part), [d, point(a.center)].concat());
+                            }
+                        }
+                    }
                 }
                 // Everything else as line strings of its segments.
                 _ => {
@@ -643,7 +752,7 @@ pub fn write_dgn8(doc: &oxidraft_model::Document) -> Result<Vec<u8>, String> {
                         }
                     }
                     if pts.len() >= 2 {
-                        push(4, points(&pts));
+                        push(seed_of(4), 0, range, points(&pts));
                     }
                 }
             }
@@ -922,13 +1031,13 @@ pub(crate) mod tests {
             "Walls",
             Color::Index(3),
         );
-        doc.add(Geometry::Polyline {
-            vertices: vec![Vertex::new(p(0.0, 0.0), 1.0), Vertex::at(p(10.0, 0.0))],
-            closed: false,
-        });
+        let bulged = vec![Vertex::new(p(0.0, 0.0), 1.0), Vertex::at(p(10.0, 0.0))];
+        doc.add(Geometry::Polyline { vertices: bulged.clone(), closed: false });
+        let shape = vec![Vertex::at(p(30.0, 0.0)), Vertex::new(p(40.0, 0.0), -0.5), Vertex::at(p(40.0, 10.0))];
+        doc.add(Geometry::Polyline { vertices: shape.clone(), closed: true });
         let data = write_dgn8(&doc).unwrap();
         let got = read_dgn8(&data).unwrap();
-        assert_eq!(got.len(), 7, "{got:?}");
+        assert_eq!(got.len(), 8, "{got:?}");
         assert!(
             matches!(&got[0], (Geometry::Line { end, .. }, layer, 0) if end.approx_eq(p(100.0, 50.0)) && layer == "Walls")
         );
@@ -946,10 +1055,20 @@ pub(crate) mod tests {
         );
         assert!(matches!(&got[5], (Geometry::Text { content, height, rotation, .. }, layer, 3)
             if content == "Säule" && (height - 2.5).abs() < 1e-9 && (rotation - 30.0).abs() < 1e-9 && layer == "Walls"));
-        assert!(
-            matches!(&got[6], (Geometry::Polyline { vertices, closed: false }, ..) if vertices.len() > 3),
-            "the bulge as a line string"
-        );
+        // Polylines with arcs as complex chains and shapes, back whole.
+        let same = |g: &Geometry, want: &[Vertex], closed: bool| match g {
+            Geometry::Polyline { vertices, closed: c } => {
+                *c == closed
+                    && vertices.len() == want.len()
+                    && vertices
+                        .iter()
+                        .zip(want)
+                        .all(|(v, w)| v.point.approx_eq(w.point) && (v.bulge - w.bulge).abs() < 1e-9)
+            }
+            _ => false,
+        };
+        assert!(same(&got[6].0, &bulged, false), "{:?}", got[6]);
+        assert!(same(&got[7].0, &shape, true), "{:?}", got[7]);
         // In the file: every object framed whole, IDs one each, the highest
         // in the header; none of the seed's own elements.
         let root = StructuredStoragePayload::decode(&data).compound_file.unwrap().root;
@@ -957,6 +1076,15 @@ pub(crate) mod tests {
         let page = pages(storage(model, "Dgn^G").unwrap()).remove(0);
         let objs = objects(&page);
         assert_eq!(objs.len() as u32, u32_at(&page, 0).unwrap());
+        // Complex chains and shapes as GDAL's drawing has them: a header
+        // with its count, its components (flagged so) after it.
+        let at = objs.iter().position(|(k, ..)| *k == 0x3000_000c).expect("a complex chain");
+        assert_eq!((objs[at].1.len(), u32_at(&objs[at].1, 0x68)), (112, Some(1)));
+        assert_eq!(objs[at + 1].0, 0x5000_0010);
+        let at = objs.iter().position(|(k, ..)| *k == 0x3000_000e).expect("a complex shape");
+        assert_eq!(u32_at(&objs[at].1, 0x68), Some(3));
+        let parts: Vec<u32> = objs[at + 1..at + 4].iter().map(|o| o.0).collect();
+        assert_eq!(parts, [0x5000_0003, 0x5000_0010, 0x5000_0003]);
         let named = objects(&pages(storage(&root, "Dgn^Nm").unwrap()).remove(0));
         let mut ids: Vec<u64> =
             objs.iter().chain(&named).map(|(_, o, _)| u64::from_le_bytes(o[0x10..0x18].try_into().unwrap())).collect();
@@ -1053,13 +1181,27 @@ pub(crate) mod tests {
             .collect();
         assert_eq!(curves.len(), 2, "{curves:?}");
         assert!(curves.iter().all(|c| c.distance(p(-7.0 / 6.0, 5.5 / 6.0)) < 1e-9), "{curves:?}");
-        // A complex chain's arc, and a cell's shapes (one inside the other).
-        assert_eq!(
-            has(
-                &|g| matches!(g, Geometry::Arc { center, start_angle, .. } if center.approx_eq(p(3.0, 1.0)) && (start_angle - 180.0).abs() < 1e-9)
-            ),
-            1
-        );
+        // Complex chains and shapes as GDAL gives them: two lines end to
+        // end (2D and 3D); a line and an arc on through (3, 0); a closed
+        // one whose arc bulges up through (0.5, 1.5). Those whose parts
+        // don't meet come in as their parts.
+        let polyline = |want: &[(f64, f64, f64)], closed: bool| {
+            has(&|g| match g {
+                Geometry::Polyline { vertices, closed: c } => {
+                    *c == closed
+                        && vertices.len() == want.len()
+                        && vertices
+                            .iter()
+                            .zip(want)
+                            .all(|(v, w)| v.point.approx_eq(p(w.0, w.1)) && (v.bulge - w.2).abs() < 1e-9)
+                }
+                _ => false,
+            })
+        };
+        assert_eq!(polyline(&[(0.0, 1.0, 0.0), (2.0, 3.0, 0.0), (4.0, 5.0, 0.0)], false), 2);
+        assert_eq!(polyline(&[(0.0, 1.0, 0.0), (2.0, 1.0, 1.0), (4.0, 1.0, 0.0)], false), 1);
+        assert_eq!(polyline(&[(0.0, 0.0, 0.0), (0.0, 1.0, -1.0), (1.0, 1.0, 0.0)], true), 1);
+        // A cell's shapes (one inside the other).
         assert_eq!(
             has(
                 &|g| matches!(g, Geometry::Polyline { vertices, closed: true } if vertices[0].point.approx_eq(p(0.1, 0.1)))
