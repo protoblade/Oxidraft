@@ -1,5 +1,6 @@
 //! MicroStation DGN V8 files: a compound file whose first model's
-//! elements (lines, line strings, shapes, curves, arcs, ellipses and text;
+//! elements (points, lines, line strings, shapes, curves, B-spline curves,
+//! point strings, arcs, ellipses and text;
 //! the components of complex chains, shapes and cells, one by one) come in
 //! as DGNIMPORT and DGNATTACH bring V7's, a layer for each level by its
 //! name. The layout is as ezdgn's V8 format notes set it out (MIT,
@@ -95,13 +96,14 @@ fn units(header: &[u8]) -> Option<(Point, f64)> {
     Some((Point::new(f64_at(record, 0xc8)?, f64_at(record, 0xd0)?), 1.0 / per_master))
 }
 
-/// A level's name: its 0x56d2 linkage among `attributes` (UTF-16 after
-/// `ff fd`, 8-bit after `ff fe 01 00` or plain).
+/// A level's name: its 0x56d2 linkage among `attributes` (its kind in the
+/// signature's high half, its length in words less one in the low byte;
+/// UTF-16 after `ff fd`, 8-bit after `ff fe 01 00` or plain).
 fn level_name(attributes: &[u8]) -> Option<String> {
     let mut at = 0;
     while let Some(signature) = u32_at(attributes, at) {
         let len = 2 * ((signature & 0xff) as usize + 1);
-        if (signature >> 8) & 0xffff == 0x56d2 {
+        if signature >> 16 == 0x56d2 {
             let n = u32_at(attributes, at + 8)? as usize;
             let payload = attributes.get(at + 12..at + 12 + n)?;
             return Some(text_of(payload));
@@ -131,18 +133,21 @@ fn quaternion_turn(q: [f64; 4]) -> f64 {
     (2.0 * q[3].atan2(q[0])).to_degrees()
 }
 
-/// One element as Oxidraft's geometry: `object` its bytes, `primary` up to
-/// its attributes; `to` its points in master units.
-fn element(kind: u16, object: &[u8], scale: f64, to: &dyn Fn(Point) -> Point) -> Option<Geometry> {
+/// One element as Oxidraft's geometry (a point string's points): `object`
+/// its bytes up to its attributes; `to` its points in master units.
+fn element(kind: u16, object: &[u8], scale: f64, to: &dyn Fn(Point) -> Point) -> Option<Vec<Geometry>> {
     if object.len() < 0x68 {
         return None;
     }
     let three_d = u32_at(object, 0x28)? & 0x800 != 0;
     let width = if three_d { 24 } else { 16 };
     let point = |at: usize| Some(to(Point::new(f64_at(object, at)?, f64_at(object, at + 8)?)));
-    let vertices = |closed: bool| {
+    let points = || {
         let n = u32_at(object, 0x68)? as usize;
-        let mut points: Vec<Point> = (0..n).map(|k| point(0x70 + k * width)).collect::<Option<_>>()?;
+        (0..n).map(|k| point(0x70 + k * width)).collect::<Option<Vec<Point>>>()
+    };
+    let vertices = |closed: bool| {
+        let mut points = points()?;
         if closed && points.len() > 2 && points[0].approx_eq(points[points.len() - 1]) {
             points.pop();
         }
@@ -177,22 +182,43 @@ fn element(kind: u16, object: &[u8], scale: f64, to: &dyn Fn(Point) -> Point) ->
                 }
             }
         } else {
-            let major = Point::new(a, 0.0).rotated_about(Point::ORIGIN, turn);
-            let mut el = Ellipse::full(center, major, b / a.max(1e-12));
+            // The longer axis the major one, the angles from it.
+            let (major, ratio, shift) = if a >= b {
+                (Point::new(a, 0.0).rotated_about(Point::ORIGIN, turn), b / a, 0.0)
+            } else {
+                (Point::new(0.0, b).rotated_about(Point::ORIGIN, turn), a / b, 90.0)
+            };
+            let mut el = Ellipse::full(center, major, ratio);
             if !full {
-                (el.start, el.end) = (from.rem_euclid(360.0), to.rem_euclid(360.0));
+                (el.start, el.end) = ((from - shift).rem_euclid(360.0), (to - shift).rem_euclid(360.0));
             }
             Geometry::Ellipse(el)
         })
     };
-    match kind {
-        3 => Some(Geometry::Line { start: point(0x68)?, end: point(0x68 + width)? }),
-        4 | 11 => vertices(false),
-        6 => vertices(true),
-        15 => conic(0x68, 0x78, if three_d { 0x98 } else { 0x80 }, 0.0, 360.0),
+    let one = match kind {
+        // A line of no length is a point.
+        3 => {
+            let (start, end) = (point(0x68)?, point(0x68 + width)?);
+            if start.approx_eq(end) { Geometry::Point { position: start } } else { Geometry::Line { start, end } }
+        }
+        4 => vertices(false)?,
+        6 => vertices(true)?,
+        // A curve through its points, the first two and last two setting
+        // its ends' tangents.
+        11 => {
+            let all = points()?;
+            let inner = all.get(2..all.len().saturating_sub(2)).unwrap_or(&[]);
+            match oxidraft_geom::spline::Spline::through(inner, false) {
+                Some(s) if inner.len() >= 2 => Geometry::Spline(s),
+                _ => vertices(false)?,
+            }
+        }
+        // A point string: its points.
+        22 => return Some(points()?.into_iter().map(|position| Geometry::Point { position }).collect()),
+        15 => conic(0x68, 0x78, if three_d { 0x98 } else { 0x80 }, 0.0, 360.0)?,
         16 => {
             let (start, sweep) = (f64_at(object, 0x68)?.to_degrees(), f64_at(object, 0x70)?.to_degrees());
-            conic(0x78, 0x88, if three_d { 0xa8 } else { 0x90 }, start, if sweep == 0.0 { 360.0 } else { sweep })
+            conic(0x78, 0x88, if three_d { 0xa8 } else { 0x90 }, start, if sweep == 0.0 { 360.0 } else { sweep })?
         }
         17 => {
             let n = usize::from(u16_at(object, 0x6e)?);
@@ -200,7 +226,7 @@ fn element(kind: u16, object: &[u8], scale: f64, to: &dyn Fn(Point) -> Point) ->
             let content = text_of(object.get(at..at + n)?);
             let height = f64_at(object, 0x78)? * 6.0 / 1000.0 * scale;
             let rotation = if three_d { 0.0 } else { f64_at(object, 0x90)?.to_degrees() };
-            Some(Geometry::Text {
+            Geometry::Text {
                 position: point(if three_d { 0xb0 } else { 0x98 })?,
                 height,
                 rotation,
@@ -208,10 +234,37 @@ fn element(kind: u16, object: &[u8], scale: f64, to: &dyn Fn(Point) -> Point) ->
                 attach: Attach::BottomLeft,
                 content,
                 look: Default::default(),
-            })
+            }
         }
-        _ => None,
+        _ => return None,
+    };
+    Some(vec![one])
+}
+
+/// An element's layer: its level's name.
+fn layer_of(levels: &std::collections::HashMap<u32, String>, object: &[u8]) -> String {
+    let level = u32_at(object, 0x0c).unwrap_or(0);
+    levels.get(&level).cloned().unwrap_or_else(|| format!("Level {level}"))
+}
+
+/// An element's color, 0 where it's its level's (ByLevel, and ByCell).
+fn color_of(object: &[u8]) -> u8 {
+    match u32_at(object, 0x34).unwrap_or(0) {
+        c if c >= 0xffff_fffe => 0,
+        c => (c & 0xff) as u8,
     }
+}
+
+/// A B-spline curve of `order` through the poles of `object` (type 21),
+/// its knots uniform (not clamped to its ends, as MicroStation's are).
+fn bspline(object: &[u8], order: usize, to: &dyn Fn(Point) -> Point) -> Option<Geometry> {
+    let width = if u32_at(object, 0x28)? & 0x800 != 0 { 24 } else { 16 };
+    let n = u32_at(object, 0x68)? as usize;
+    let poles = (0..n)
+        .map(|k| Some(to(Point::new(f64_at(object, 0x70 + k * width)?, f64_at(object, 0x78 + k * width)?))))
+        .collect::<Option<Vec<Point>>>()?;
+    let knots = (0..n + order).map(|k| k as f64).collect();
+    oxidraft_geom::spline::Spline::new(order - 1, poles, knots, Vec::new(), false).map(Geometry::Spline)
 }
 
 /// What a DGN V8 file's first model holds: (geometry in master units, its
@@ -245,19 +298,29 @@ pub fn read_dgn8(data: &[u8]) -> Result<Vec<(Geometry, String, u8)>, String> {
         }
     }
     let mut out = Vec::new();
+    // A B-spline curve's order, from its header (type 27), for its poles
+    // (type 21) after it.
+    let mut order = None;
     for page in storage(model, "Dgn^G").map(pages).unwrap_or_default() {
         for (kind, object, attributes) in objects(&page) {
-            let Some(g) = element(kind as u16, &object[..attributes.max(0x68).min(object.len())], scale, &to) else {
+            match kind as u16 {
+                27 => order = u32_at(&object, 0x6c).map(|p| (p & 0x0f) as usize + 2),
+                21 => {
+                    if let Some(order) = order.take()
+                        && let Some(g) = bspline(&object, order, &to)
+                    {
+                        out.push((g, layer_of(&levels, &object), color_of(&object)));
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            let Some(parts) = element(kind as u16, &object[..attributes.max(0x68).min(object.len())], scale, &to)
+            else {
                 continue;
             };
-            let level = u32_at(&object, 0x0c).unwrap_or(0);
-            let layer = levels.get(&level).cloned().unwrap_or_else(|| format!("Level {level}"));
-            // ByLevel (and ByCell) is the layer's.
-            let color = match u32_at(&object, 0x34).unwrap_or(0) {
-                c if c >= 0xffff_fffe => 0,
-                c => (c & 0xff) as u8,
-            };
-            out.push((g, layer, color));
+            let (layer, color) = (layer_of(&levels, &object), color_of(&object));
+            out.extend(parts.into_iter().map(|g| (g, layer.clone(), color)));
         }
     }
     Ok(out)
@@ -359,7 +422,7 @@ pub(crate) mod tests {
         let name: Vec<u8> = [0xff, 0xfd].into_iter().chain("Walls".encode_utf16().flat_map(u16::to_le_bytes)).collect();
         let mut linkage = Vec::new();
         let total = (12 + name.len()).next_multiple_of(2);
-        linkage.extend((((0x56d2u32) << 8) | (total / 2 - 1) as u32).to_le_bytes());
+        linkage.extend(((0x56d2u32 << 16) | 0x1000 | (total / 2 - 1) as u32).to_le_bytes());
         linkage.extend(1u32.to_le_bytes());
         linkage.extend((name.len() as u32).to_le_bytes());
         linkage.extend(&name);
@@ -431,5 +494,95 @@ pub(crate) mod tests {
             if content == "ROOM" && (height - 2.5).abs() < 1e-9 && (rotation - 30.0).abs() < 1e-9 && position.approx_eq(Point::new(5.0, 60.0))));
         assert!(matches!(&got[5], (Geometry::Line { end, .. }, ..) if end.approx_eq(Point::new(1.0, 1.0))));
         assert!(read_dgn8(b"not a compound file").is_err());
+    }
+
+    /// GDAL's V8 test drawing, its contents as GDAL's reference lists them.
+    #[test]
+    fn gdals_v8_drawing() {
+        let got = read_dgn8(include_bytes!("../tests/fixtures/dgnv8/test_dgnv8.dgn")).unwrap();
+        let p = |x: f64, y: f64| Point::new(x, y);
+        let has = |want: &dyn Fn(&Geometry) -> bool| got.iter().filter(|(g, _, _)| want(g)).count();
+        // A point on level 1 (color 3), the rest on level 64, "Default".
+        assert!(
+            matches!(&got[0], (Geometry::Point { position }, layer, 3) if position.approx_eq(p(0.0, 1.0)) && layer == "Level 1")
+        );
+        assert!(got[1..].iter().all(|(_, layer, _)| layer == "Default"));
+        assert_eq!(
+            has(
+                &|g| matches!(g, Geometry::Line { start, end } if start.approx_eq(p(0.0, 1.0)) && end.approx_eq(p(3.0, 4.0)))
+            ),
+            1
+        );
+        assert_eq!(
+            has(&|g| matches!(g, Geometry::Text { content, rotation, height, position, .. }
+            if content == "myTéxt" && (rotation + 45.0).abs() < 1e-9 && (height - 1.0).abs() < 1e-9 && position.approx_eq(p(0.0, 1.0)))),
+            1
+        );
+        assert_eq!(
+            has(
+                &|g| matches!(g, Geometry::Polyline { vertices, closed: false } if vertices.len() == 3 && vertices[2].point.approx_eq(p(6.0, 7.0)))
+            ),
+            2
+        );
+        // Point strings' points.
+        assert_eq!(has(&|g| matches!(g, Geometry::Point { position } if position.approx_eq(p(3.0, 4.0)))), 2);
+        // Ellipses 1 by 2 about (0, 1), one an arc from 10° (at 0.985, 1.347).
+        assert_eq!(
+            has(
+                &|g| matches!(g, Geometry::Ellipse(e) if e.major.approx_eq(p(0.0, 2.0)) && (e.ratio - 0.5).abs() < 1e-9)
+            ),
+            2
+        );
+        let arc = got.iter().find_map(|(g, _, _)| match g {
+            Geometry::Ellipse(e) if !e.is_full() => Some(e.clone()),
+            _ => None,
+        });
+        let at = arc.expect("the elliptical arc").point_at(280.0);
+        assert!(
+            (at.x - 10f64.to_radians().cos()).abs() < 1e-9
+                && (at.y - (1.0 + 2.0 * 10f64.to_radians().sin())).abs() < 1e-9,
+            "{at:?}"
+        );
+        assert_eq!(
+            has(
+                &|g| matches!(g, Geometry::Circle { center, radius } if center.approx_eq(p(0.0, 1.0)) && (radius - 1.0).abs() < 1e-9)
+            ),
+            2
+        );
+        assert_eq!(
+            has(
+                &|g| matches!(g, Geometry::Arc { start_angle, end_angle, .. } if (start_angle - 55.0).abs() < 1e-9 && (end_angle - 235.0).abs() < 1e-9)
+            ),
+            1
+        );
+        // A curve through its points, from (1, 1) as GDAL draws it.
+        assert_eq!(
+            has(&|g| matches!(g, Geometry::Spline(s) if s.control().first().is_some_and(|c| c.approx_eq(p(1.0, 1.0))))),
+            2
+        );
+        // B-spline curves (cubic, uniform knots): from (P0 + 4 P1 + P2) / 6,
+        // where GDAL's start.
+        let curves: Vec<Point> = got
+            .iter()
+            .filter_map(|(g, _, _)| match g {
+                Geometry::Spline(s) if s.control().len() > 4 => Some(s.start_point()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(curves.len(), 2, "{curves:?}");
+        assert!(curves.iter().all(|c| c.distance(p(-7.0 / 6.0, 5.5 / 6.0)) < 1e-9), "{curves:?}");
+        // A complex chain's arc, and a cell's shapes (one inside the other).
+        assert_eq!(
+            has(
+                &|g| matches!(g, Geometry::Arc { center, start_angle, .. } if center.approx_eq(p(3.0, 1.0)) && (start_angle - 180.0).abs() < 1e-9)
+            ),
+            1
+        );
+        assert_eq!(
+            has(
+                &|g| matches!(g, Geometry::Polyline { vertices, closed: true } if vertices[0].point.approx_eq(p(0.1, 0.1)))
+            ),
+            2
+        );
     }
 }
