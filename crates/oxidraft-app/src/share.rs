@@ -2,7 +2,9 @@
 //! else needs to look at the drawing into one zip file to send: the
 //! drawing as DWG, a PDF of its sheets, and the files it uses. MARKUP
 //! (MARKUPIMPORT) brings a marked-up plot back: the PDF or image laid over
-//! the sheet it was plotted from, on layer MARKUP, to work from.
+//! the sheet it was plotted from, on layer MARKUP, to work from, and a
+//! PDF's markups (comments as text, drawn markups as lines) with it, as
+//! Markup Assist offers them.
 
 use std::path::Path;
 
@@ -167,10 +169,48 @@ impl OxidraftApp {
             clip: Vec::new(),
         };
         self.doc.add_on_layer(image, "MARKUP", Color::ByLayer);
+        // A PDF's markups — its comments and what reviewers drew — as text
+        // and lines on layer MARKUP, as Markup Assist offers them.
+        let mut markups = 0;
+        if pdf && let Ok(data) = std::fs::read(file) {
+            let mm = 25.4 / 72.0;
+            let at = |(x, y): (f64, f64)| to_drawing(Point::new(x * mm, y * mm));
+            for m in oxidraft_raster::pdf_markups::pdf_markups(&data, 0) {
+                let (g, rgb) = match m {
+                    oxidraft_raster::pdf_markups::Markup::Text { at: p, height, text, color } => (
+                        Geometry::Text {
+                            position: at(p),
+                            height: height * mm * 0.7 / layout.scale,
+                            rotation: 0.0,
+                            width: 0.0,
+                            attach: oxidraft_model::Attach::TopLeft,
+                            content: text.lines().collect::<Vec<_>>().join("\\P"),
+                            look: Default::default(),
+                        },
+                        color,
+                    ),
+                    oxidraft_raster::pdf_markups::Markup::Shape { points, closed, color } => {
+                        let pts: Vec<Point> = points.into_iter().map(at).collect();
+                        let g = if pts.len() == 2 && !closed {
+                            Geometry::Line { start: pts[0], end: pts[1] }
+                        } else {
+                            Geometry::Polyline {
+                                vertices: pts.into_iter().map(oxidraft_model::Vertex::at).collect(),
+                                closed,
+                            }
+                        };
+                        (g, color)
+                    }
+                };
+                self.doc.add_on_layer(g, "MARKUP", Color::Index(crate::pdf_import::nearest_aci(rgb)));
+                markups += 1;
+            }
+        }
         self.doc.commit();
         self.load_image(&name);
+        let taken = if markups > 0 { format!(", its {markups} markup(s) as text and lines") } else { String::new() };
         self.engine.log(format!(
-            "Markup \"{name}\" laid over the sheet on layer MARKUP: turn the layer off to compare, PDFIMPORT to take its lines."
+            "Markup \"{name}\" laid over the sheet on layer MARKUP{taken}: turn the layer off to compare, PDFIMPORT to take its lines."
         ));
         Ok(())
     }

@@ -3263,6 +3263,35 @@ fn sheet_sets_share_and_markup() {
     let markup = doc.entities().find(|e| e.layer == "MARKUP").expect("the markup");
     let Geometry::Image { origin, u, v, .. } = &markup.geometry else { panic!() };
     assert!(u.length() > 0.0 && v.length() > 0.0 && origin.x.is_finite());
+    // A marked-up PDF: its comment as text, its cloud as a polyline.
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /FreeText /Rect [100 400 300 440] /Contents (Widen opening) /DA (/Helv 12 Tf) >>",
+        "<< /Type /Annot /Subtype /Polygon /Rect [0 0 100 100] /Vertices [10 10 90 10 90 90] /C [1 0 0] >>",
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend(b"xref\n0 6\n0000000000 65535 f \n");
+    for o in offsets {
+        pdf.extend(format!("{o:010} 00000 n \n").bytes());
+    }
+    pdf.extend(format!("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").bytes());
+    let marked = dir.join("marked.pdf");
+    std::fs::write(&marked, pdf).unwrap();
+    h.state_mut().markup_import_file(&marked).unwrap();
+    let doc = h.state_mut().document_mut();
+    let on_markup: Vec<&Geometry> = doc.entities().filter(|e| e.layer == "MARKUP").map(|e| &e.geometry).collect();
+    assert!(on_markup.iter().any(|g| matches!(g, Geometry::Text { content, .. } if content == "Widen opening")));
+    assert!(
+        on_markup.iter().any(|g| matches!(g, Geometry::Polyline { vertices, closed: true } if vertices.len() == 3))
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 

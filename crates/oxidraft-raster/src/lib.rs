@@ -75,6 +75,7 @@ pub struct Pixels {
 }
 
 pub mod pdf_layers;
+pub mod pdf_markups;
 pub mod pdf_vectors;
 
 pub fn is_pdf(path: &Path) -> bool {
