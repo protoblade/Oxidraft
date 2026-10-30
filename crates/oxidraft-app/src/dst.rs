@@ -108,10 +108,26 @@ fn rename(el: &mut Element, from: &str, to: &str) {
     }
 }
 
+/// AutoCAD's sheet selection class (AcSmSheetSelSet), as AutoCAD's own
+/// map of its sheet set classes registers it.
+const CLSID_SHEET_SEL_SET: &str = "gEBF70DB8-F495-4522-BA80-43976BF35B3E";
+
+/// A sheet selection made from nothing: its name, and a reference to a
+/// sheet (`named`, to be renamed for each of its sheets).
+fn made_selection(named: &str) -> (Element, Element) {
+    let mut selection = dst::object("AcSmSheetSelSet", CLSID_SHEET_SEL_SET, None);
+    selection.set_prop("Name", "");
+    selection.set_prop("Desc", "");
+    let mut reference = dst::object("AcSmObjectReference", dst::CLSID_OBJECT_REFERENCE, None);
+    reference.set_prop("ReferencedObject", named);
+    (selection, reference)
+}
+
 /// The set's sheet selections into the .dst: AutoCAD's as they are, one
 /// made or changed in Oxidraft in the form an AutoCAD selection in the set
 /// takes (its class, and the element in it that names a sheet), when the
-/// set has one to follow; one removed in Oxidraft gone.
+/// set has one to follow, or (with NATIVESAVE) in the form made from
+/// nothing; one removed in Oxidraft gone.
 fn write_selections(db: &mut SheetSetDatabase, set: &SheetSet, path: &Path) {
     let ids: Vec<(String, (String, String))> = db
         .sheets()
@@ -134,6 +150,13 @@ fn write_selections(db: &mut SheetSetDatabase, set: &SheetSet, path: &Path) {
         Some((s.clone(), reference.clone(), id))
     });
     sets.children.retain(|c| c.prop("Name").is_none_or(|n| set.selections.iter().any(|s| s.name == n)));
+    let template = template.or_else(|| {
+        oxidraft_io_dwg::native_objects().then(|| {
+            let named = "{SHEET}".to_string();
+            let (selection, reference) = made_selection(&named);
+            (selection, reference, named)
+        })
+    });
     let Some((selection, reference, named)) = template else { return };
     for s in &set.selections {
         if current.iter().any(|c| c.name == s.name && c.sheets == s.sheets) {
@@ -347,7 +370,7 @@ mod tests {
         // A selection AutoCAD keeps: its name and the sheets it refers to.
         let first = db.sheets()[0].id().to_string();
         let sets = db.sheet_set_mut().named_mut("SheetSelSets").unwrap();
-        let mut selection = dst::object("AcSmSheetSelSet", "g00000000-0000-0000-0000-000000000000", None);
+        let mut selection = dst::object("AcSmSheetSelSet", CLSID_SHEET_SEL_SET, None);
         selection.set_prop("Name", "Issued");
         let mut reference = dst::object("AcSmObjectReference", dst::CLSID_OBJECT_REFERENCE, None);
         reference.set_prop_vt("ReferencedObject", -1, &first);
@@ -375,6 +398,26 @@ mod tests {
         assert_eq!(back.selections[1].sheets.len(), 2);
         let sets = db2.sheet_set().named("SheetSelSets").unwrap();
         assert!(sets.children.iter().all(|c| c.name == "AcSmSheetSelSet"), "in AutoCAD's form");
+        // With no AutoCAD selection to follow: only with NATIVESAVE, made from
+        // nothing in AutoCAD's form.
+        let mut set = back;
+        set.dst = None;
+        set.selections.clear();
+        set.save_selection("First", &[0]);
+        let fresh = dir.join("fresh.dst");
+        write_dst(&set, &fresh).unwrap();
+        assert!(read_dst(&fresh).unwrap().selections.is_empty(), "Oxidraft's own data keeps it");
+        std::fs::remove_file(&fresh).unwrap();
+        oxidraft_io_dwg::set_native_objects(true);
+        let db3 = write_dst(&set, &fresh);
+        oxidraft_io_dwg::set_native_objects(false);
+        let path = fresh;
+        let made = db3.unwrap();
+        let sets = made.sheet_set().named("SheetSelSets").unwrap();
+        assert_eq!(sets.children.iter().filter_map(|c| c.attr("clsid")).collect::<Vec<_>>(), [CLSID_SHEET_SEL_SET]);
+        let back = read_dst(&path).unwrap();
+        assert_eq!(back.selections.len(), 1);
+        assert_eq!((back.selections[0].name.as_str(), back.selections[0].sheets.len()), ("First", 1));
         std::fs::remove_dir_all(&dir).ok();
     }
 }
