@@ -15,10 +15,22 @@ pub(crate) fn read(doc: &mut Document, raw: &RawLayouts) {
     if ours {
         return;
     }
-    // The current style of a kind (Standard, if the header names none or
-    // one not there): its group codes.
+    // A variable AutoCAD keeps in its AcDbVariableDictionary (as it does
+    // CMLEADERSTYLE and CTABLESTYLE), or in the header.
+    let variable = |name: &str| {
+        let dict = raw.dictionaries.values().flatten().find(|(n, _)| n == "AcDbVariableDictionary").map(|(_, h)| *h);
+        let entry = dict.and_then(|d| raw.dictionaries.get(&d)).and_then(|e| e.iter().find(|(n, _)| n == name));
+        let object = entry.and_then(|(_, h)| raw.setting_objects.iter().find(|o| o.0 == "DICTIONARYVAR" && o.1 == *h));
+        object
+            .and_then(|o| o.2.iter().find(|(c, _)| *c == 1).map(|(_, v)| v.as_str()))
+            .or_else(|| raw.header.get(&format!("${name}")).map(String::as_str))
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+    };
+    // The current style of a kind (Standard, if none is named or the one
+    // named isn't there): its group codes.
     let style = |kind: &str, dictionary: &str, current: &str| {
-        let name = raw.header.get(current).map(|n| n.trim()).filter(|n| !n.is_empty()).unwrap_or("Standard");
+        let name = variable(current).unwrap_or("Standard");
         let dict = raw.dictionaries.values().flatten().find(|(n, _)| n == dictionary).map(|(_, h)| *h);
         let entries = dict.and_then(|d| raw.dictionaries.get(&d));
         let named = |n: &str| entries.and_then(|e| e.iter().find(|(k, _)| k.eq_ignore_ascii_case(n))).map(|(_, h)| *h);
@@ -33,7 +45,7 @@ pub(crate) fn read(doc: &mut Document, raw: &RawLayouts) {
         raw.records.get(&h).cloned()
     };
     let (mut l, mut t) = (doc.leader_style(), doc.table_style());
-    if let Some(p) = style("MLEADERSTYLE", "ACAD_MLEADERSTYLE", "$CMLEADERSTYLE") {
+    if let Some(p) = style("MLEADERSTYLE", "ACAD_MLEADERSTYLE", "CMLEADERSTYLE") {
         let num = |code| first(p, code);
         // Its sizes are on paper when annotative, else times its scale.
         l.annotative = num(296).is_some_and(|v| v != 0.0);
@@ -64,7 +76,7 @@ pub(crate) fn read(doc: &mut Document, raw: &RawLayouts) {
         };
     }
     // A table style's margin, and its data rows' text height (its first).
-    if let Some(p) = style("TABLESTYLE", "ACAD_TABLESTYLE", "$CTABLESTYLE") {
+    if let Some(p) = style("TABLESTYLE", "ACAD_TABLESTYLE", "CTABLESTYLE") {
         if let Some(m) = first(p, 40).filter(|m| *m >= 0.0) {
             t.margin = m;
         }

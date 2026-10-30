@@ -166,9 +166,52 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document, version: DxfVersion)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use acadrust::objects::{DictionaryVariable, MultiLeaderStyle};
     use oxidraft_geom::Point;
     use oxidraft_model::annotation::LeaderStyle;
     use std::io::Cursor;
+
+    #[test]
+    fn autocads_current_multileader_style_comes_in() {
+        // An AutoCAD drawing: Standard and Notes, Notes current (as AutoCAD
+        // keeps CMLEADERSTYLE, in its AcDbVariableDictionary).
+        let mut doc = Document::new();
+        doc.add(Geometry::Line { start: Point::ORIGIN, end: Point::new(10.0, 0.0) });
+        let dxf = crate::write_dxf(&doc).unwrap();
+        let mut cad = acadrust::DxfReader::from_reader(Cursor::new(dxf)).and_then(|r| r.read()).unwrap();
+        let standard = crate::mleaders::standard_style(&mut cad, None);
+        let ObjectType::MultiLeaderStyle(s) = &cad.objects[&standard] else { panic!() };
+        let dict = s.owner_handle;
+        let notes = cad.allocate_handle();
+        let mut style = MultiLeaderStyle::standard();
+        (style.handle, style.owner_handle, style.name, style.text_height) = (notes, dict, "Notes".into(), 7.0);
+        cad.objects.insert(notes, ObjectType::MultiLeaderStyle(style));
+        if let Some(ObjectType::Dictionary(d)) = cad.objects.get_mut(&dict) {
+            d.add_entry("Notes", notes);
+        }
+        let vars = named_object(&mut cad, "AcDbVariableDictionary", |h, owner| {
+            let mut d = Dictionary::new();
+            (d.handle, d.owner) = (h, owner);
+            ObjectType::Dictionary(d)
+        });
+        let var = cad.allocate_handle();
+        let mut v = DictionaryVariable::new("CMLEADERSTYLE", "Notes");
+        (v.handle, v.owner_handle) = (var, vars);
+        cad.objects.insert(var, ObjectType::DictionaryVariable(v));
+        if let Some(ObjectType::Dictionary(d)) = cad.objects.get_mut(&vars) {
+            d.add_entry("CMLEADERSTYLE", var);
+        }
+        let ours: Vec<String> =
+            cad.app_ids.iter().map(|a| a.name.clone()).filter(|n| n.starts_with("OXIDRAFT")).collect();
+        for name in ours {
+            cad.app_ids.remove(&name);
+        }
+        cad.version = DxfVersion::AC1032;
+        let dwg = acadrust::DwgWriter::write_to_vec(&cad).unwrap();
+        assert_eq!(crate::read(&dwg).unwrap().imported.document.leader_style().text_height, 7.0);
+        let dxf = acadrust::DxfWriter::new(&cad).write_to_vec().unwrap();
+        assert_eq!(crate::read_dxf(&dxf).unwrap().document.leader_style().text_height, 7.0);
+    }
 
     #[test]
     fn settings_in_autocads_objects_and_back() {

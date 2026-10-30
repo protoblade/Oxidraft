@@ -58,7 +58,8 @@ pub(crate) struct RawLayouts {
     /// XRECORD objects' group codes and values, by handle.
     pub xrecords: HashMap<u64, Vec<(i32, String)>>,
     /// AutoCAD's own objects for settings Oxidraft has (MLEADERSTYLE,
-    /// TABLESTYLE, RASTERVARIABLES, WIPEOUTVARIABLES).
+    /// TABLESTYLE, RASTERVARIABLES, WIPEOUTVARIABLES), and its variables
+    /// kept in objects (DICTIONARYVAR).
     pub setting_objects: Vec<RawObject>,
     /// Header variables the dxf crate doesn't read ($CMLEADERSTYLE,
     /// $CTABLESTYLE), and the applications registered (APPID).
@@ -168,7 +169,9 @@ pub(crate) fn read(dxf: &[u8]) -> RawLayouts {
             "APPID" if section == "TABLES" => {
                 out.apps.extend(body.iter().filter(|p| p.0 == 2).map(|p| p.1.to_string()));
             }
-            kind @ ("MLEADERSTYLE" | "TABLESTYLE" | "RASTERVARIABLES" | "WIPEOUTVARIABLES") if section == "OBJECTS" => {
+            kind @ ("MLEADERSTYLE" | "TABLESTYLE" | "RASTERVARIABLES" | "WIPEOUTVARIABLES" | "DICTIONARYVAR")
+                if section == "OBJECTS" =>
+            {
                 let handle = body.iter().find(|p| p.0 == 5).and_then(|p| u64::from_str_radix(p.1, 16).ok());
                 let pairs = body.iter().map(|(c, v)| (*c, v.to_string())).collect();
                 out.setting_objects.push((kind.to_string(), handle.unwrap_or(0), pairs));
