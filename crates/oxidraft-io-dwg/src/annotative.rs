@@ -5,14 +5,19 @@
 //! naming an `AcDbScale`: those scales become the object's, the one its own
 //! data is at (the default context) the one it shows. The drawing's
 //! annotation scale is AutoCAD's CANNOSCALE when Oxidraft's settings don't
-//! give one.
+//! give one. With NATIVESAVE on, annotative MTEXT, TEXT and block
+//! references go out in that form too: AcadAnnotative XDATA, a context leaf
+//! for each scale (its representation, moved where it was on its own), and
+//! the scales in ACAD_SCALELIST.
 
 use std::collections::HashMap;
 
-use acadrust::objects::ObjectType;
-use acadrust::{CadDocument, Handle};
+use acadrust::objects::{Dictionary, MTextContext, ObjectContextData, ObjectContextKind, ObjectType, Scale};
+use acadrust::types::{Vector2, Vector3};
+use acadrust::xdata::{ExtendedDataRecord, XDataValue};
+use acadrust::{CadDocument, EntityType, Handle};
 use oxidraft_io_dxf::Imported;
-use oxidraft_model::Annotative;
+use oxidraft_model::{Annotative, Document, EntityId};
 
 /// What owns object `h` (a dictionary or a context leaf).
 fn owner(cad: &CadDocument, h: Handle) -> Option<Handle> {
@@ -90,12 +95,239 @@ pub(crate) fn restore(cad: &CadDocument, imported: &mut Imported) {
     }
 }
 
+/// A dictionary in `cad`, owned by `owner`, with `entries`: its handle.
+fn add_dictionary(cad: &mut CadDocument, owner: Handle, entries: Vec<(String, Handle)>) -> Handle {
+    let h = cad.allocate_handle();
+    let mut d = Dictionary::new();
+    d.handle = h;
+    d.owner = owner;
+    d.entries = entries;
+    cad.objects.insert(h, ObjectType::Dictionary(d));
+    h
+}
+
+fn add_entry(cad: &mut CadDocument, dict: Handle, name: &str, h: Handle) {
+    if let Some(ObjectType::Dictionary(d)) = cad.objects.get_mut(&dict) {
+        d.entries.push((name.to_string(), h));
+    }
+}
+
+/// The scale `ratio` (drawing units per paper unit) in ACAD_SCALELIST,
+/// made there if it has none such.
+fn scale_handle(cad: &mut CadDocument, ratio: f64) -> Handle {
+    let found = cad.objects.iter().find_map(|(h, o)| match o {
+        ObjectType::Scale(s)
+            if s.paper_units > 0.0 && (s.drawing_units / s.paper_units - ratio).abs() < 1e-9 * ratio =>
+        {
+            Some(*h)
+        }
+        _ => None,
+    });
+    if let Some(h) = found {
+        return h;
+    }
+    let root = cad.header.named_objects_dict_handle;
+    let list = match cad.objects.get(&root) {
+        Some(ObjectType::Dictionary(d)) => d.entries.iter().find(|(n, _)| n == "ACAD_SCALELIST").map(|(_, h)| *h),
+        _ => None,
+    };
+    let list = list.unwrap_or_else(|| {
+        let h = add_dictionary(cad, root, Vec::new());
+        add_entry(cad, root, "ACAD_SCALELIST", h);
+        h
+    });
+    let count = match cad.objects.get(&list) {
+        Some(ObjectType::Dictionary(d)) => d.entries.len(),
+        _ => 0,
+    };
+    let name = if ratio >= 1.0 { format!("1:{}", fmt(ratio)) } else { format!("{}:1", fmt(1.0 / ratio)) };
+    let (paper, drawing) = if ratio >= 1.0 { (1.0, ratio) } else { (1.0 / ratio, 1.0) };
+    let mut s = Scale::new(&name, paper, drawing);
+    let h = cad.allocate_handle();
+    s.handle = h;
+    s.owner_handle = list;
+    s.is_unit_scale = (ratio - 1.0).abs() < 1e-12;
+    cad.objects.insert(h, ObjectType::Scale(s));
+    add_entry(cad, list, &format!("A{count}"), h);
+    h
+}
+
+fn fmt(v: f64) -> String {
+    let s = format!("{v:.4}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// A representation of `entity` at `factor` times its size, moved by
+/// `shift`: its context leaf's payload (MTEXT, TEXT and block references).
+fn context(entity: &EntityType, factor: f64, shift: Vector3) -> Option<ObjectContextKind> {
+    let add = |a: Vector3| Vector3::new(a.x + shift.x, a.y + shift.y, a.z);
+    Some(match entity {
+        EntityType::MText(m) => ObjectContextKind::MText(MTextContext {
+            attachment: m.attachment_point as i32,
+            x_axis_dir: Vector3::new(m.rotation.cos(), m.rotation.sin(), 0.0),
+            insertion: add(m.insertion_point),
+            rect_width: m.rectangle_width * factor,
+            rect_height: m.rectangle_height.unwrap_or(0.0) * factor,
+            extents_width: m.rectangle_width * factor,
+            extents_height: m.rectangle_height.unwrap_or(m.height) * factor,
+            column_type: 0,
+            columns: None,
+        }),
+        EntityType::Text(t) => {
+            let at = add(t.insertion_point);
+            let align = t.alignment_point.map_or(at, add);
+            ObjectContextKind::Text {
+                horizontal_mode: t.horizontal_alignment as i16,
+                rotation: t.rotation,
+                insertion: Vector2::new(at.x, at.y),
+                alignment: Vector2::new(align.x, align.y),
+            }
+        }
+        EntityType::Insert(i) => ObjectContextKind::BlkRef {
+            rotation: i.rotation,
+            insertion: add(i.insert_point),
+            scale_factor: Vector3::new(i.x_scale() * factor, i.y_scale() * factor, i.z_scale() * factor),
+        },
+        _ => return None,
+    })
+}
+
+/// NATIVESAVE: `doc`'s annotative MTEXT, TEXT and block references (each
+/// written as `handles` says) made annotative as AutoCAD keeps them.
+pub(crate) fn write(cad: &mut CadDocument, doc: &Document, handles: &HashMap<EntityId, Vec<u64>>) {
+    let objects: Vec<(Handle, Annotative)> = doc
+        .all_entities()
+        .filter_map(|e| Some((Handle::new(*handles.get(&e.id)?.first()?), e.annotative.as_deref()?.clone())))
+        .collect();
+    for (h, a) in objects {
+        let Some(entity) = cad.get_entity(h).cloned() else { continue };
+        if context(&entity, 1.0, Vector3::ZERO).is_none() || a.scales.is_empty() {
+            continue;
+        }
+        if cad.app_ids.get("AcadAnnotative").is_none() {
+            let mut app = acadrust::tables::AppId::new("AcadAnnotative");
+            app.handle = cad.allocate_handle();
+            let _ = cad.app_ids.add(app);
+        }
+        // The chain from the object to its leaves.
+        let xdict = match entity.common().xdictionary_handle.filter(|x| cad.objects.contains_key(x)) {
+            Some(x) => x,
+            None => add_dictionary(cad, h, Vec::new()),
+        };
+        let manager = add_dictionary(cad, xdict, Vec::new());
+        add_entry(cad, xdict, "AcDbContextDataManager", manager);
+        let scales = add_dictionary(cad, manager, Vec::new());
+        add_entry(cad, manager, "ACDB_ANNOTATIONSCALES", scales);
+        for (k, s) in a.scales.iter().enumerate() {
+            let scale = scale_handle(cad, *s);
+            let off = a.offset(*s);
+            let Some(kind) = context(&entity, s / a.shown, Vector3::new(off.x, off.y, 0.0)) else { continue };
+            let leaf = cad.allocate_handle();
+            cad.objects.insert(
+                leaf,
+                ObjectType::ObjectContextData(ObjectContextData {
+                    handle: leaf,
+                    owner_handle: scales,
+                    reactors: vec![scales],
+                    xdictionary_handle: None,
+                    class_version: 4,
+                    has_file_to_extension_dictionary: false,
+                    uses_legacy_mleader_context_base: false,
+                    is_default: (s - a.shown).abs() < 1e-9 * s,
+                    scale,
+                    kind,
+                }),
+            );
+            add_entry(cad, scales, &format!("*A{}", k + 1), leaf);
+        }
+        if let Some(e) = cad.get_entity_mut(h) {
+            let common = e.common_mut();
+            common.xdictionary_handle = Some(xdict);
+            let mut x = ExtendedDataRecord::new("AcadAnnotative");
+            for v in [
+                XDataValue::String("AnnotativeData".into()),
+                XDataValue::ControlString("{".into()),
+                XDataValue::Integer16(1),
+                XDataValue::Integer16(1),
+                XDataValue::ControlString("}".into()),
+            ] {
+                x.add_value(v);
+            }
+            common.extended_data.add_record(x);
+            if let EntityType::MText(m) = e {
+                m.is_annotative = true;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use acadrust::objects::{Dictionary, ObjectContextData, ObjectContextKind, Scale};
     use oxidraft_geom::Point;
     use oxidraft_model::{Document, Geometry};
+
+    #[test]
+    fn annotative_objects_go_out_as_autocads() {
+        let mut doc = Document::new();
+        let id = doc.add(Geometry::Text {
+            position: Point::new(10.0, 20.0),
+            height: 2.5,
+            rotation: 0.0,
+            width: 40.0,
+            attach: oxidraft_model::Attach::TopLeft,
+            content: "NOTE".into(),
+            look: Default::default(),
+        });
+        let mut a = Annotative::at(50.0);
+        a.scales.push(100.0);
+        a.offsets.push((100.0, Point::new(5.0, 0.0)));
+        doc.update(id, |e| e.annotative = Some(Box::new(a)));
+        crate::set_native_objects(true);
+        let dwg = crate::write(&doc, crate::Version::R2018);
+        let dxf = crate::write_dxf(&doc);
+        crate::set_native_objects(false);
+        let (dwg, dxf) = (dwg.unwrap(), dxf.unwrap());
+        for (how, mut cad) in [
+            ("DWG", acadrust::DwgReader::from_stream(std::io::Cursor::new(dwg)).read().unwrap()),
+            ("DXF", acadrust::DxfReader::from_reader(std::io::Cursor::new(dxf)).and_then(|r| r.read()).unwrap()),
+        ] {
+            let text = cad.entities().find(|e| matches!(e, EntityType::MText(_))).unwrap();
+            let apps: Vec<String> =
+                text.common().extended_data.records().iter().map(|r| r.application_name.clone()).collect();
+            let annotative = matches!(text, EntityType::MText(m) if m.is_annotative);
+            assert!(apps.iter().any(|a| a == "AcadAnnotative") || annotative, "{how}: {apps:?}");
+            let leaves: Vec<(bool, f64, Vector3)> = cad
+                .objects
+                .values()
+                .filter_map(|o| match o {
+                    ObjectType::ObjectContextData(c) => {
+                        let ObjectContextKind::MText(m) = &c.kind else { return None };
+                        Some((c.is_default, ratio(&cad, c.scale)?, m.insertion))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(leaves.len(), 2, "{how}: {leaves:?}");
+            assert!(leaves.iter().any(|(d, r, at)| *d && *r == 50.0 && at.x == 10.0), "{how}: {leaves:?}");
+            assert!(leaves.iter().any(|(d, r, at)| !*d && *r == 100.0 && at.x == 15.0), "{how}: moved on its own");
+            // Read as AutoCAD's alone (Oxidraft's own data taken off), the
+            // scales come back.
+            for e in cad.entities_mut() {
+                let data = &mut e.common_mut().extended_data;
+                let kept: Vec<_> =
+                    data.records().iter().filter(|r| r.application_name != "OXIDRAFT_ANNO").cloned().collect();
+                *data = Default::default();
+                for r in kept {
+                    data.add_record(r);
+                }
+            }
+            let back = crate::imported_from(&mut cad).unwrap().document;
+            let a = back.entities().find_map(|e| e.annotative.clone()).expect(how);
+            assert_eq!((a.scales, a.shown), (vec![50.0, 100.0], 50.0), "{how}");
+        }
+    }
 
     #[test]
     fn autocads_annotative_scales_come_in() {

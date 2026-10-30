@@ -342,6 +342,11 @@ fn vars() -> Vec<Var> {
             a.set_menu_bar(parse_flag(v)?);
             Ok(())
         }),
+        var!("NATIVESAVE", |a| flag(a.settings.native_save), |a, v| {
+            let settings = crate::settings::Settings { native_save: parse_flag(v)?, ..a.settings.clone() };
+            a.keep_settings(settings);
+            Ok(())
+        }),
         var!("OFFSETDIST", |a| a.engine.vars.offset_distance.map_or("-1".into(), number), |a, v| {
             let d = parse_number(v)?;
             a.engine.vars.offset_distance = (d >= 0.0).then_some(d);

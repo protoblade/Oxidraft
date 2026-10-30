@@ -61,7 +61,7 @@ What AutoCAD LT has that Oxidraft doesn't, yet:
 - **Sheet sets:** a sheet selection saved in Oxidraft goes into a .dst only when the set has one made in AutoCAD to follow (AutoCAD's own are read and kept).
 - **Interface:** a .cuix's workspaces aren't taken in, nor the images AutoCAD keeps in its own resource files (a button for one of AutoCAD's commands shows the ribbon's icon for it, where there is one).
 - **Autodesk's cloud:** `SHARE` makes a package rather than a link; Markup Assist's recognition of handwritten markups on images (a PDF's markups come in as they are); traces made in AutoCAD (web or desktop) aren't read, being kept in Autodesk's own data.
-- **Saved for AutoCAD in Oxidraft's own data:** dimension breaks (AutoCAD's own are read) and inspection, annotative scales (AutoCAD's own are read) and drawing settings round-trip in Oxidraft but show plain in AutoCAD. Fields naming objects come back as fields only with those objects.
+- **Saved for AutoCAD in Oxidraft's own data:** dimension inspection and drawing settings round-trip in Oxidraft but show plain in AutoCAD. Dimension breaks and annotative scales (MTEXT, TEXT and block references) are read from AutoCAD's, and written in AutoCAD's form too only with `NATIVESAVE` 1 (the Options dialog's Open and Save), not yet tried in AutoCAD itself. Fields naming objects come back as fields only with those objects.
 
 - **Also not yet:** DGN V8 files (V7 ones are read and written).
 

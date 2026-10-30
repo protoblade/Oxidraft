@@ -2,13 +2,19 @@
 //! names its dimension and holds its break point references — a gap
 //! between two points (a manual break), or around one (a break where an
 //! object crosses, as wide as DIMBREAK's ISO size at the dimension's
-//! scale) — which become the dimension's breaks.
+//! scale) — which become the dimension's breaks. With NATIVESAVE on, a
+//! dimension's breaks go out that way too: a BREAKDATA naming it, a
+//! two-point reference for each gap, kept in its extension dictionary as
+//! ACAD_BREAKDATA (as AutoCAD keeps DIMASSOC's; untested in AutoCAD).
 
-use acadrust::CadDocument;
-use acadrust::objects::{DataObjectData, ObjectType};
+use std::collections::HashMap;
+
+use acadrust::objects::{BreakData, BreakPointReference, DataObject, DataObjectData, Dictionary, ObjectType};
+use acadrust::types::Vector3;
+use acadrust::{CadDocument, Handle};
 use oxidraft_geom::Point;
 use oxidraft_io_dxf::Imported;
-use oxidraft_model::Geometry;
+use oxidraft_model::{Document, EntityId, Geometry};
 
 /// DIMBREAK's gap at scale 1, as Oxidraft's DIMBREAK makes it.
 const BREAK_SIZE: f64 = 3.75;
@@ -51,6 +57,56 @@ pub(crate) fn restore(cad: &CadDocument, imported: &mut Imported) {
     }
 }
 
+/// NATIVESAVE: each of `doc`'s dimensions with breaks given a BREAKDATA.
+pub(crate) fn write(cad: &mut CadDocument, doc: &Document, handles: &HashMap<EntityId, Vec<u64>>) {
+    for e in doc.all_entities() {
+        let Geometry::Dimension { extra, .. } = &e.geometry else { continue };
+        if extra.breaks.is_empty() {
+            continue;
+        }
+        let Some(dim) = handles.get(&e.id).and_then(|h| h.first()).map(|h| Handle::new(*h)) else { continue };
+        let Some(entity) = cad.get_entity(dim) else { continue };
+        let existing = entity.common().xdictionary_handle.filter(|x| cad.objects.contains_key(x));
+        let xdict = existing.unwrap_or_else(|| {
+            let h = cad.allocate_handle();
+            let mut d = Dictionary::new();
+            d.handle = h;
+            d.owner = dim;
+            cad.objects.insert(h, ObjectType::Dictionary(d));
+            h
+        });
+        let point = |p: Point| Vector3::new(p.x, p.y, 0.0);
+        let mut data = DataObject::new(DataObjectData::BreakData(BreakData {
+            version: 1,
+            dimension_reference: dim,
+            reserved_reference: Handle::default(),
+            point_references: extra
+                .breaks
+                .iter()
+                .enumerate()
+                .map(|(k, (a, b))| BreakPointReference {
+                    reference_type: 2,
+                    identifier: k as i32,
+                    first_point: point(*a),
+                    second_point: point(*b),
+                    ..Default::default()
+                })
+                .collect(),
+        }));
+        data.handle = cad.allocate_handle();
+        data.owner = xdict;
+        data.reactors = vec![xdict];
+        let h = data.handle;
+        cad.objects.insert(h, ObjectType::DataObject(data));
+        if let Some(ObjectType::Dictionary(d)) = cad.objects.get_mut(&xdict) {
+            d.entries.push(("ACAD_BREAKDATA".into(), h));
+        }
+        if let Some(e) = cad.get_entity_mut(dim) {
+            e.common_mut().xdictionary_handle = Some(xdict);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,6 +145,21 @@ mod tests {
         }));
         data.handle = cad.allocate_handle();
         cad.objects.insert(data.handle, ObjectType::DataObject(data));
+        let back = crate::imported_from(&mut cad).unwrap().document;
+        // NATIVESAVE: saved again, AutoCAD's form alone gives them back.
+        crate::set_native_objects(true);
+        let saved = crate::write(&back, crate::Version::R2018);
+        crate::set_native_objects(false);
+        let mut cad = acadrust::DwgReader::from_stream(std::io::Cursor::new(saved.unwrap())).read().unwrap();
+        for e in cad.entities_mut() {
+            let data = &mut e.common_mut().extended_data;
+            let kept: Vec<_> =
+                data.records().iter().filter(|r| r.application_name != "OXIDRAFT_DIM").cloned().collect();
+            *data = Default::default();
+            for r in kept {
+                data.add_record(r);
+            }
+        }
         let back = crate::imported_from(&mut cad).unwrap().document;
         let breaks = back.entities().find_map(|e| match &e.geometry {
             Geometry::Dimension { extra, .. } => Some(extra.breaks.clone()),

@@ -54,6 +54,9 @@ pub struct Settings {
     pub toolbars: Vec<String>,
     /// Where toolbars are that aren't docked at the top, by name.
     pub toolbar_places: Vec<(String, crate::menubar::ToolbarPlace)>,
+    /// Annotative scales and dimension breaks saved in AutoCAD's own form
+    /// too (NATIVESAVE), untested in AutoCAD itself: off unless chosen.
+    pub native_save: bool,
     /// Menus and toolbars customization files brought (CUILOAD).
     pub menus: Vec<crate::menubar::CustomMenu>,
     pub custom_toolbars: Vec<crate::menubar::CustomToolbar>,
@@ -142,6 +145,7 @@ impl OxidraftApp {
 
     /// Uses `settings` from now on, the look unchanged, and keeps them.
     pub(crate) fn keep_settings(&mut self, settings: Settings) {
+        oxidraft_io_dwg::set_native_objects(settings.native_save);
         self.engine.vars.color_theme = u8::from(settings.color_theme == ColorTheme::Light);
         self.engine.aliases = settings.aliases.clone();
         if settings.papers != self.settings.papers {
@@ -201,6 +205,15 @@ impl OxidraftApp {
                         });
                     ui.end_row();
                 });
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Open and Save").strong());
+                ui.checkbox(
+                    &mut d.settings.native_save,
+                    "Save annotative scales and dimension breaks in AutoCAD's own form too",
+                )
+                .on_hover_text(
+                    "Written as AutoCAD keeps them, besides Oxidraft's own data. Not yet tried in AutoCAD itself, so off unless you choose it.",
+                );
                 ui.add_space(6.0);
                 ui.separator();
                 let row = egui::vec2(ui.available_width().max(260.0), 24.0);
@@ -263,6 +276,7 @@ mod tests {
             menubar: true,
             toolbars: vec!["Draw".into()],
             toolbar_places: vec![("Draw".into(), crate::menubar::ToolbarPlace::Float(10.0, 20.0))],
+            native_save: true,
             menus: vec![crate::menubar::CustomMenu {
                 name: "Site".into(),
                 items: vec![crate::menubar::MenuEntry {

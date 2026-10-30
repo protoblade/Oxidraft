@@ -243,6 +243,18 @@ pub fn load_dxf(path: impl AsRef<Path>) -> Result<Imported, Error> {
 
 /// The drawing as acadrust holds it, layouts and all, ready to write as
 /// `version` (fields are AutoCAD 2004's: older versions get their values).
+/// Whether annotative scales and dimension breaks go out in AutoCAD's own
+/// form too, besides Oxidraft's data (off unless set: untested in AutoCAD).
+static NATIVE_OBJECTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_native_objects(on: bool) {
+    NATIVE_OBJECTS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn native_objects() -> bool {
+    NATIVE_OBJECTS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The handles in DXF text, each with the kind of object it's on.
 fn written_handles(dxf: &[u8]) -> HashMap<u64, String> {
     let text = String::from_utf8_lossy(dxf);
@@ -286,6 +298,10 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
         }
     }
     layouts::finish(&mut cad, doc);
+    if native_objects() {
+        annotative::write(&mut cad, doc, &handles);
+        dimbreaks::write(&mut cad, doc, &handles);
+    }
     groups::finish(&mut cad, doc, &handles);
     settings::finish(&mut cad, doc);
     // MTEXT columns, as acadrust keeps them.
