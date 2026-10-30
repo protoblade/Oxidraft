@@ -13,6 +13,7 @@ use oxidraft_model::Document;
 /// AutoCAD's sheet set files (.dst), as acadrust reads and writes them.
 pub use acadrust::sheet_set;
 
+mod annotative;
 mod dimassoc;
 mod dynblocks;
 mod fields;
@@ -146,6 +147,7 @@ fn imported_from(cad: &mut CadDocument) -> Result<Imported, Error> {
     annotative_styles(cad, &mut imported.document);
     mtext_layout(cad, &mut imported);
     dynblocks::import(cad, &mut imported);
+    annotative::restore(cad, &mut imported);
     Ok(imported)
 }
 
@@ -212,6 +214,11 @@ pub fn read_dxf(bytes: &[u8]) -> Result<Imported, Error> {
         && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
     {
         dynblocks::import(&cad, &mut imported);
+    }
+    if bytes.windows(21).any(|w| w == b"ACDB_ANNOTATIONSCALES")
+        && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
+    {
+        annotative::restore(&cad, &mut imported);
     }
     Ok(imported)
 }
