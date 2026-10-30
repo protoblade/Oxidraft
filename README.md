@@ -62,7 +62,7 @@ What AutoCAD LT has that Oxidraft doesn't, yet:
 - **Sheet sets** are Oxidraft's own files (.oxss), not AutoCAD's .dst.
 - **Interface:** `CUI`'s panels hold buttons a command each (no flyouts, images or split buttons), and AutoCAD's .cuix files aren't read.
 - **Autodesk's cloud:** `SHARE` makes a package rather than a link; Markup Assist and Traces.
-- **Saved for AutoCAD in Oxidraft's own data:** dimension breaks, jogs and inspection, annotative scales and drawing settings round-trip in Oxidraft but show plain in AutoCAD. Fields naming objects come back as fields only with those objects. `SPELL` uses the system word list (macOS, Linux), so on Windows only the words you add.
+- **Saved for AutoCAD in Oxidraft's own data:** dimension breaks, jogs and inspection, annotative scales and drawing settings round-trip in Oxidraft but show plain in AutoCAD. Fields naming objects come back as fields only with those objects.
 
 - **Also not yet:** DGN V8 files (V7 ones are read and written) and DWF6 files (DWFx ones are read).
 

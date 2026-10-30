@@ -17,17 +17,31 @@ use crate::{app::OxidraftApp, theme};
 const WORD_LISTS: [&str; 3] =
     ["/usr/share/dict/words", "/usr/share/dict/american-english", "/usr/share/dict/british-english"];
 
-/// The system's words, in lowercase (empty if it has no word list).
+/// The words Oxidraft carries, for systems without a list of their own
+/// (Windows): Webster's Second, as FreeBSD keeps it (see assets).
+const OWN_WORDS: &[u8] = include_bytes!("../assets/words.gz");
+
+/// The system's words, in lowercase; Oxidraft's own where it has none.
 fn dictionary() -> &'static HashSet<String> {
     static WORDS: OnceLock<HashSet<String>> = OnceLock::new();
     WORDS.get_or_init(|| {
-        WORD_LISTS
+        let system: HashSet<String> = WORD_LISTS
             .iter()
             .filter_map(|p| std::fs::read_to_string(p).ok())
             .flat_map(|s| s.lines().map(|w| w.trim().to_lowercase()).collect::<Vec<_>>())
             .filter(|w| !w.is_empty())
-            .collect()
+            .collect();
+        if !system.is_empty() {
+            return system;
+        }
+        own_words()
     })
+}
+
+fn own_words() -> HashSet<String> {
+    let mut text = String::new();
+    let _ = std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(OWN_WORDS), &mut text);
+    text.lines().filter(|w| !w.is_empty()).map(str::to_string).collect()
 }
 
 /// True if `word` is a word: in the lists, or made from one by the
@@ -488,5 +502,12 @@ mod tests {
     fn changes_the_right_occurrence() {
         assert_eq!(replace_nth("teh cat and teh dog", "teh", 1, "the"), "teh cat and the dog");
         assert_eq!(replace_nth(r"\Pteh", "teh", 0, "the"), r"\Pthe");
+    }
+
+    #[test]
+    fn its_own_words_where_the_system_has_none() {
+        let own = super::own_words();
+        assert!(own.len() > 200_000);
+        assert!(own.contains("drawing") && own.contains("window") && !own.contains("drawnig"));
     }
 }
