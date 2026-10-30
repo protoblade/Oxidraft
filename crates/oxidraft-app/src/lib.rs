@@ -29,6 +29,7 @@ mod etransmit;
 mod fields;
 mod files;
 mod fonts;
+mod handwriting;
 mod icons;
 mod image_out;
 mod last_cmds;

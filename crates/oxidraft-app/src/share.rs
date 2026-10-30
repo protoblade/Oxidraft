@@ -212,6 +212,9 @@ impl OxidraftApp {
         self.engine.log(format!(
             "Markup \"{name}\" laid over the sheet on layer MARKUP{taken}: turn the layer off to compare, PDFIMPORT to take its lines."
         ));
+        // What's handwritten on it in a colored pen, as text where it's
+        // written (read in the background).
+        self.read_handwriting(file, origin, u, v);
         Ok(())
     }
 }

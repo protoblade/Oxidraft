@@ -122,6 +122,8 @@ pub struct OxidraftApp {
     /// the button images of your own, read.
     pub(crate) cui: Option<crate::customize::CuiDialog>,
     pub(crate) cui_load: Option<crate::cuix::CuiLoadDialog>,
+    /// MARKUPIMPORT's handwriting being read, in the background.
+    pub(crate) handwriting: Option<crate::handwriting::Pending>,
     /// A CUI macro's rest after a pause, and how many inputs the command
     /// had then: it goes on after the user's.
     pub(crate) macro_rest: Option<(String, usize)>,
@@ -378,6 +380,7 @@ impl OxidraftApp {
             plotter_manager: None,
             cui: None,
             cui_load: None,
+            handwriting: None,
             macro_rest: None,
             toolbars_dialog: None,
             button_images: Default::default(),
@@ -1366,6 +1369,7 @@ impl OxidraftApp {
 impl eframe::App for OxidraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.take_handwriting(&ctx);
         // Lengths and angles everywhere show in the drawing's units.
         oxidraft_model::units::set_current(self.doc.units());
         // The text styles' fonts, and those MTEXT names inline, for the

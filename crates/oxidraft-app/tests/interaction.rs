@@ -3313,6 +3313,68 @@ fn sheet_sets_share_and_markup() {
     assert!(
         on_markup.iter().any(|g| matches!(g, Geometry::Polyline { vertices, closed: true } if vertices.len() == 3))
     );
+    // A scanned plot written on in red pen: the writing read as text where
+    // it is, the plot's own black text not (macOS reads it).
+    #[cfg(target_os = "macos")]
+    {
+        let content =
+            "BT /F1 40 Tf 1 0 0 rg 60 300 Td (Move door here) Tj ET BT /F1 40 Tf 0 0 0 rg 60 120 Td (PLAN) Tj ET";
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 400] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"
+                .to_string(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        ];
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend(b"xref\n0 6\n0000000000 65535 f \n");
+        for o in offsets {
+            pdf.extend(format!("{o:010} 00000 n \n").bytes());
+        }
+        pdf.extend(format!("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").bytes());
+        let px = oxidraft_raster::render_pdf_data(pdf, 0, 120.0).unwrap();
+        let picture = oxidraft_plot::Picture { width: px.width, height: px.height, rgba: px.rgba };
+        let scan = dir.join("scan.png");
+        std::fs::write(&scan, oxidraft_plot::png::png(&picture, false)).unwrap();
+        h.state_mut().markup_import_file(&scan).unwrap();
+        // Read in the background, then added.
+        let start = std::time::Instant::now();
+        while h.state().reading_handwriting() && start.elapsed().as_secs() < 120 {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let doc = h.state_mut().document_mut();
+        let image = doc
+            .entities()
+            .filter_map(|e| match &e.geometry {
+                Geometry::Image { image, origin, u, v, .. } if image.contains("scan") => Some((*origin, *u, *v)),
+                _ => None,
+            })
+            .next()
+            .expect("the scan laid over the sheet");
+        let read: Vec<(String, Point)> = doc
+            .entities()
+            .filter(|e| e.layer == "MARKUP")
+            .filter_map(|e| match &e.geometry {
+                Geometry::Text { content, position, .. } => Some((content.clone(), *position)),
+                _ => None,
+            })
+            .collect();
+        let (_, at) = read.iter().find(|(t, _)| t == "Move door here").expect("the red writing read");
+        assert!(!read.iter().any(|(t, _)| t == "PLAN"), "the plot's own text left out");
+        // A tenth of the way across, three quarters up.
+        let (origin, u, v) = image;
+        let along = (*at - origin).dot(u) / u.dot(u);
+        let up = (*at - origin).dot(v) / v.dot(v);
+        assert!((along - 0.1).abs() < 0.03 && (up - 0.78).abs() < 0.06, "{along} {up}");
+    }
     std::fs::remove_dir_all(&dir).ok();
 }
 

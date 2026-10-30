@@ -43,5 +43,29 @@ workspace = true
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
+# Handwriting on scanned markups read by macOS's Vision (MARKUPIMPORT).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSError",
+    "NSGeometry",
+    "NSKeyValueCoding",
+    "NSString",
+    "NSValue",
+] }
+objc2-vision = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "VNObservation",
+    "VNRecognizeTextRequest",
+    "VNRequest",
+    "VNRequestHandler",
+    "VNTypes",
+] }
+
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["eframe", "wgpu"] }
