@@ -3081,6 +3081,7 @@ fn customization_files_and_macros() {
       <Workspace UID="WS_1" MenuBar="on"><Name>Site Design</Name>
         <WorkspaceToolbar ToolbarId="TB_SITE" Display="1"/>
         <WorkspaceRibbonRoot><WorkspaceRibbonTabSourceReference TabId="T1"/></WorkspaceRibbonRoot>
+        <WorkspaceDockableWindow Name="Properties" Show="yes"/>
       </Workspace>
     </WorkspaceRoot></MenuRoot>
   </MenuGroup>
@@ -3112,6 +3113,7 @@ fn customization_files_and_macros() {
     let workspaces = h.state().workspaces();
     let site = workspaces.iter().find(|w| w.name == "Site Design").expect("its workspace");
     assert_eq!((site.menubar, site.toolbars.clone(), site.ribbon_tab), (true, vec!["Site".to_string()], 100));
+    assert!(site.properties && !site.layers, "its palettes");
     assert_eq!(workspaces.iter().filter(|w| w.name.starts_with("Drafting")).count(), 1);
     h.run_steps(2);
     // Its tab, and its buttons running their macros.

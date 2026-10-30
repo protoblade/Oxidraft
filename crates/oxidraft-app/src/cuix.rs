@@ -215,6 +215,28 @@ pub struct CuiWorkspace {
     pub menubar: bool,
     pub toolbars: Vec<String>,
     pub tab: Option<String>,
+    /// The palettes (dockable windows) it shows, by their names.
+    pub palettes: Vec<String>,
+}
+
+/// The palette a dockable window's name is: Properties, Layers, Tool
+/// Palettes, DesignCenter, QuickCalc or External References.
+pub(crate) fn palette_of(name: &str) -> Option<&'static str> {
+    let n = name.to_ascii_lowercase().replace([' ', '_', '-'], "");
+    [
+        ("propert", "properties"),
+        ("layer", "layers"),
+        ("toolpalette", "tool_palettes"),
+        ("designcenter", "design_center"),
+        ("adcenter", "design_center"),
+        ("quickcalc", "quickcalc"),
+        ("calculator", "quickcalc"),
+        ("externalreference", "xrefs"),
+        ("xref", "xrefs"),
+    ]
+    .into_iter()
+    .find(|(key, _)| n.contains(key))
+    .map(|(_, palette)| palette)
 }
 
 /// The file name in a path written either way.
@@ -434,13 +456,37 @@ pub fn read_customization(
         ["Display", "Show", "Visible", "ToolbarVisible"].iter().filter_map(|a| e.attr(a)).all(|v| !hidden(v))
     };
     let target = |e: &Element, names: &HashMap<String, String>| e.attrs.iter().find_map(|(_, v)| names.get(v).cloned());
+    // Dockable windows (palettes) named where they're defined, by UID.
+    let mut windows = Vec::new();
+    for d in &docs {
+        d.every(&|e| !e.name.starts_with("Workspace") && e.name.contains("DockableWindow"), &mut windows);
+    }
+    let window_names: HashMap<String, String> = windows
+        .iter()
+        .filter_map(|e| {
+            let name =
+                Some(text_of(e, "Name")).filter(|n| !n.is_empty()).or_else(|| e.attr("Name").map(str::to_string))?;
+            Some((e.attr("UID").or_else(|| e.attr("ID"))?.to_string(), name))
+        })
+        .collect();
     let mut workspaces = Vec::new();
     for w in every("Workspace") {
         let name = Some(text_of(w, "Name")).filter(|n| !n.is_empty()).or_else(|| w.attr("Name").map(str::to_string));
         let Some(name) = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) else { continue };
-        let (mut bars, mut tabs) = (Vec::new(), Vec::new());
+        let (mut bars, mut tabs, mut docked) = (Vec::new(), Vec::new(), Vec::new());
         w.every(&|e| e.name == "WorkspaceToolbar", &mut bars);
         w.every(&|e| e.name == "WorkspaceRibbonTabSourceReference", &mut tabs);
+        w.every(&|e| e.name == "WorkspaceDockableWindow", &mut docked);
+        // A window's name: as defined elsewhere, or as it names itself.
+        let palettes = docked
+            .iter()
+            .filter(|d| shown(d))
+            .filter_map(|d| {
+                target(d, &window_names)
+                    .or_else(|| Some(text_of(d, "Name")).filter(|n| !n.is_empty()))
+                    .or_else(|| d.attrs.iter().map(|(_, v)| v.clone()).find(|v| palette_of(v).is_some()))
+            })
+            .collect();
         workspaces.push(CuiWorkspace {
             name,
             menubar: w
@@ -448,6 +494,7 @@ pub fn read_customization(
                 .is_some_and(|v| ["on", "true", "yes", "1", "show"].contains(&v.trim().to_ascii_lowercase().as_str())),
             toolbars: bars.iter().filter(|t| shown(t)).filter_map(|t| target(t, &toolbar_names)).collect(),
             tab: tabs.iter().filter(|t| shown(t)).find_map(|t| target(t, &tab_names)),
+            palettes,
         });
     }
     let used: std::collections::HashSet<&str> = commands.iter().map(|c| c.image.as_str()).collect();
@@ -571,12 +618,19 @@ impl OxidraftApp {
             if settings.workspaces.iter().any(|x| x.name.eq_ignore_ascii_case(&name)) {
                 name = format!("{name} ({})", c.group);
             }
+            let shows = |palette: &str| w.palettes.iter().any(|p| palette_of(p) == Some(palette));
             settings.workspaces.push(crate::customize::Workspace {
                 name,
                 menubar: w.menubar,
                 toolbars,
                 ribbon_tab,
                 group: c.group.clone(),
+                properties: shows("properties"),
+                layers: shows("layers"),
+                tool_palettes: shows("tool_palettes"),
+                design_center: shows("design_center"),
+                quickcalc: shows("quickcalc"),
+                xrefs: shows("xrefs"),
                 ..Default::default()
             });
         }
@@ -877,13 +931,27 @@ mod tests {
     <WorkspaceToolbar ToolbarId="TB1" Display="0"/><WorkspaceToolbar ToolbarId="TB2" Display="1"/>
     <WorkspaceToolbar ToolbarId="ELSEWHERE"/>
     <WorkspaceRibbonRoot><WorkspaceRibbonTabSourceReference TabId="NONE"/></WorkspaceRibbonRoot>
+    <WorkspaceDockableWindow DockableWindowId="DW_PROPS" Show="yes"/>
+    <WorkspaceDockableWindow DockableWindowId="DW_CALC" Show="no"/>
+    <WorkspaceDockableWindow Name="External References"/>
   </Workspace></WorkspaceRoot>
+  <DockableWindowRoot><DockableWindow UID="DW_PROPS"><Name>Properties</Name></DockableWindow>
+    <DockableWindow UID="DW_CALC" Name="QuickCalc"/></DockableWindowRoot>
 </MenuRoot></MenuGroup></CustSection>"#;
         let c = read_customization(xml.as_bytes(), "x", Vec::new()).unwrap();
         assert_eq!(
             c.workspaces,
-            [CuiWorkspace { name: "Plain".into(), menubar: false, toolbars: vec!["Two".into()], tab: None }]
+            [CuiWorkspace {
+                name: "Plain".into(),
+                menubar: false,
+                toolbars: vec!["Two".into()],
+                tab: None,
+                palettes: vec!["Properties".into(), "External References".into()],
+            }]
         );
+        assert_eq!(palette_of("External References"), Some("xrefs"));
+        assert_eq!(palette_of("TOOL_PALETTES"), Some("tool_palettes"));
+        assert_eq!(palette_of("Sheet Set Manager"), None);
     }
 
     #[test]
