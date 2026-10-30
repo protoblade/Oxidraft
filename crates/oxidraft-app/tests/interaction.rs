@@ -3914,4 +3914,16 @@ fn insertobj_embeds_the_file() {
     assert_eq!(doc.embedded_file("notes.txt"), Some(&b"Site notes"[..]), "kept even with the file gone");
     let links: Vec<String> = doc.entities().filter_map(|e| e.hyperlink.as_ref().map(|l| l.url.clone())).collect();
     assert_eq!(links, ["embedded:notes.txt", "embedded:notes.txt"], "the frame and its name");
+    // Opened in its own program and saved there: the drawing's copy follows.
+    let copy = h.state_mut().open_embedded("notes.txt").expect("a copy to open");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&copy, b"Site notes, revised").unwrap();
+    let start = std::time::Instant::now();
+    while h.state_mut().document_mut().embedded_file("notes.txt") != Some(&b"Site notes, revised"[..])
+        && start.elapsed().as_secs() < 10
+    {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    assert_eq!(h.state_mut().document_mut().embedded_file("notes.txt"), Some(&b"Site notes, revised"[..]));
 }

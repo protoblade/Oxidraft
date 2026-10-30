@@ -126,6 +126,10 @@ pub struct OxidraftApp {
     pub(crate) handwriting: Option<crate::handwriting::Pending>,
     /// SHARE's upload, in the background: the links, once it's done.
     pub(crate) sharing: Option<std::sync::mpsc::Receiver<Result<Vec<String>, String>>>,
+    /// Embedded files opened from the drawing: each one's name, its copy,
+    /// and when that was last written; and when they were last looked at.
+    pub(crate) embedded_open: Vec<(String, std::path::PathBuf, Option<std::time::SystemTime>)>,
+    pub(crate) embedded_checked: Option<std::time::Instant>,
     /// A CUI macro's rest after a pause, and how many inputs the command
     /// had then: it goes on after the user's.
     pub(crate) macro_rest: Option<(String, usize)>,
@@ -384,6 +388,8 @@ impl OxidraftApp {
             cui_load: None,
             handwriting: None,
             sharing: None,
+            embedded_open: Vec::new(),
+            embedded_checked: None,
             macro_rest: None,
             toolbars_dialog: None,
             button_images: Default::default(),
@@ -1374,6 +1380,7 @@ impl eframe::App for OxidraftApp {
         let ctx = ui.ctx().clone();
         self.take_handwriting(&ctx);
         self.take_share(&ctx);
+        self.take_embedded_edits(&ctx);
         // Lengths and angles everywhere show in the drawing's units.
         oxidraft_model::units::set_current(self.doc.units());
         // The text styles' fonts, and those MTEXT names inline, for the

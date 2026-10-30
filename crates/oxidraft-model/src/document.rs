@@ -1418,6 +1418,17 @@ impl Document {
         name
     }
 
+    /// The embedded file `name`'s contents changed to `bytes` (edited in
+    /// its own program): whether it was there to change.
+    pub fn update_embedded_file(&mut self, name: &str, bytes: Vec<u8>) -> bool {
+        let Some(old) = self.embedded.get_mut(name) else { return false };
+        if **old != bytes {
+            *old = std::sync::Arc::new(bytes);
+            self.revision += 1;
+        }
+        true
+    }
+
     /// ULAYERS: the layers of PDF underlay `name` turned off.
     pub fn pdf_layers_off(&self, name: &str) -> &[String] {
         self.pdf_layers_off.get(&name.to_ascii_uppercase()).map_or(&[], Vec::as_slice)

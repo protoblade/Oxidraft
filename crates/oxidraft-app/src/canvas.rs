@@ -1393,16 +1393,13 @@ impl OxidraftApp {
 
     /// Where a hyperlink goes: web addresses as they are, files relative
     /// to the drawing's folder.
-    pub(crate) fn link_target(&self, url: &str) -> String {
-        // A file embedded in the drawing: a copy of it to open.
+    pub(crate) fn link_target(&mut self, url: &str) -> String {
+        // A file embedded in the drawing: a copy of it to open, watched so
+        // what's saved in it comes back into the drawing.
         if let Some(name) = url.strip_prefix(oxidraft_io_dxf::EMBEDDED_PREFIX)
-            && let Some(bytes) = self.doc.embedded_file(name)
+            && let Some(file) = self.open_embedded(name)
         {
-            let dir = std::env::temp_dir().join("oxidraft-embedded");
-            let file = dir.join(name.replace(['/', '\\'], "_"));
-            if std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, bytes)).is_ok() {
-                return format!("file://{}", file.display());
-            }
+            return format!("file://{}", file.display());
         }
         if url.contains("://") || url.starts_with("mailto:") {
             return url.to_string();

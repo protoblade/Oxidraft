@@ -192,6 +192,50 @@ impl OxidraftApp {
         self.engine.log(format!("{file} inserted, {how}: Cmd/Ctrl-click it to open it."));
     }
 
+    /// A copy of embedded file `name` to open in its own program (in a
+    /// folder of the drawing's embedded files), watched: what's saved in
+    /// it comes back into the drawing, as AutoCAD's OLE editing does.
+    pub fn open_embedded(&mut self, name: &str) -> Option<std::path::PathBuf> {
+        let bytes = self.doc.embedded_file(name)?;
+        let dir = std::env::temp_dir().join("oxidraft-embedded");
+        let file = dir.join(name.replace(['/', '\\'], "_"));
+        std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, bytes)).ok()?;
+        let written = std::fs::metadata(&file).and_then(|m| m.modified()).ok();
+        self.embedded_open.retain(|(n, _, _)| n != name);
+        self.embedded_open.push((name.to_string(), file.clone(), written));
+        Some(file)
+    }
+
+    /// Embedded files saved in their programs since they were opened: their
+    /// new contents into the drawing (looked at every second or so).
+    pub(crate) fn take_embedded_edits(&mut self, ctx: &eframe::egui::Context) {
+        if self.embedded_open.is_empty() {
+            return;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        if self.embedded_checked.is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(900)) {
+            return;
+        }
+        self.embedded_checked = Some(std::time::Instant::now());
+        let mut changed = Vec::new();
+        for (name, file, written) in &mut self.embedded_open {
+            let now = std::fs::metadata(&*file).and_then(|m| m.modified()).ok();
+            if now.is_some() && now != *written {
+                *written = now;
+                if let Ok(bytes) = std::fs::read(&*file) {
+                    changed.push((name.clone(), bytes));
+                }
+            }
+        }
+        for (name, bytes) in changed {
+            if self.doc.embedded_file(&name).is_some_and(|b| b != bytes.as_slice())
+                && self.doc.update_embedded_file(&name, bytes)
+            {
+                self.engine.log(format!("{name} was changed: what's in the drawing now is what was saved."));
+            }
+        }
+    }
+
     /// EXPORT and DXFOUT: a copy of the drawing in another format (or a
     /// PDF), leaving the drawing's own file as it is.
     pub(crate) fn export(&mut self, dxf_only: bool) {
