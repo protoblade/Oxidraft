@@ -76,6 +76,9 @@ fn run_font(f: &RunFormat, style_font: &str) -> String {
     f.font_name().filter(found).or_else(|| f.font.clone().filter(found)).unwrap_or_else(|| style_font.to_string())
 }
 
+/// How big a stacked fraction's parts are, as AutoCAD's TSTACKSIZE: 70%.
+const STACK: f64 = 0.7;
+
 /// The space tracking adds after each character: AutoCAD's 2 opens the
 /// gaps between letters by about a quarter of their height.
 fn gap(tracking: f64, height: f64) -> f64 {
@@ -105,15 +108,22 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
         runs.iter().enumerate().flat_map(|(i, r)| r.text.chars().map(move |c| (c, i))).collect();
     let wrap = if *width > 0.0 { width / (height * wf) } else { 0.0 };
     let lines = font::wrap_lines(content, wrap, |s| text_width(style_font, big, s));
-    // A line's pieces, matched to the characters in order.
+    // A line's pieces, matched to the characters in order; and whether it
+    // starts a paragraph (for its indent).
     let mut k = 0;
+    let mut starts: Vec<bool> = Vec::with_capacity(lines.len());
     let lines: Vec<Vec<(String, usize)>> = lines
         .iter()
         .map(|line| {
             let mut out: Vec<(String, usize)> = Vec::new();
+            let mut first = true;
             for c in line.chars() {
                 while k < chars.len() && chars[k].0 != c {
                     k += 1;
+                }
+                if first {
+                    starts.push(k == 0 || chars.get(k - 1).is_some_and(|p| p.0 == '\n'));
+                    first = false;
                 }
                 let run = chars.get(k).map_or(0, |x| x.1);
                 k += 1;
@@ -122,19 +132,38 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
                     _ => out.push((c.to_string(), run)),
                 }
             }
+            if first {
+                starts.push(true);
+            }
             out
         })
         .collect();
     let run_wf = |r: usize| runs[r].format.width_factor.unwrap_or(1.0) * wf;
+    // A stacked fraction's parts' widths (at STACK of the height), and the
+    // slash's for a diagonal one.
+    let stack_widths = |r: usize| {
+        let (top, bottom, _) = runs[r].stack.as_ref()?;
+        let h = height * runs[r].format.height * run_wf(r);
+        let w = |s: &str| text_width(&fonts[r], big, s) * h;
+        Some((w(top) * STACK, w(bottom) * STACK, w("/")))
+    };
     // A piece's width in the drawing, its characters spaced by its tracking.
     let piece_width = |text: &str, r: usize| {
         let f = &runs[r].format;
+        if let (Some((wt, wb, ws)), Some((_, _, kind))) = (stack_widths(r), &runs[r].stack) {
+            return if *kind == '#' { wt + ws + wb } else { wt.max(wb) };
+        }
         let n = text.chars().count() as f64;
         text_width(&fonts[r], big, text) * height * f.height * run_wf(r) + n * gap(f.tracking, height * f.height)
     };
+    // A line's indent: its paragraph's left one, and the first line's too.
+    let indent = |i: usize, line: &[(String, usize)]| {
+        let (first, left) = line.first().map_or((0.0, 0.0), |(_, r)| runs[*r].format.indent);
+        left + if starts.get(i).copied().unwrap_or(false) { first } else { 0.0 }
+    };
     let line_width = |line: &[(String, usize)]| line.iter().map(|(t, r)| piece_width(t, *r)).sum::<f64>();
     let tallest = |line: &[(String, usize)]| line.iter().map(|(_, r)| runs[*r].format.height).fold(1.0, f64::max);
-    let widest = lines.iter().map(|l| line_width(l)).fold(0.0, f64::max);
+    let widest = lines.iter().enumerate().map(|(i, l)| indent(i, l) + line_width(l)).fold(0.0, f64::max);
     // Baselines below the top: a tall line pushes those under it down.
     let step = if style_shx.is_some() { LINE_SPACING } else { style_face.row_height() / 0.7 };
     let mut baselines = Vec::with_capacity(lines.len());
@@ -148,12 +177,51 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
     let span = baselines.last().copied().unwrap_or(*height);
     let (fx, fy) = attach.fractions();
     let mut out = Vec::new();
-    for (line, base) in lines.iter().zip(&baselines) {
-        let mut x = -fx * widest;
+    for (i, (line, base)) in lines.iter().zip(&baselines).enumerate() {
+        let mut x = -fx * widest + indent(i, line);
         for (text, r) in line {
             let f = &runs[*r].format;
             let w = piece_width(text, *r);
             let start = *position + Point::new(x, fy * span - base).rotated_about(Point::ORIGIN, *rotation);
+            // A stacked fraction: its parts small, over a bar, across a
+            // slash, or (tolerances) one over the other.
+            if let (Some((wt, wb, ws)), Some((top, bottom, kind))) = (stack_widths(*r), &runs[*r].stack) {
+                let h = height * f.height;
+                let part = |text: &str, dx: f64, dy: f64, scale: f64, width: f64, underline: bool| Piece {
+                    text: text.to_string(),
+                    at: start + Point::new(dx, dy).rotated_about(Point::ORIGIN, *rotation),
+                    rotation: *rotation,
+                    height: h * scale,
+                    font: fonts[*r].clone(),
+                    big_font: big_font.to_string(),
+                    color: f.color,
+                    width_factor: run_wf(*r),
+                    oblique: f.oblique.unwrap_or(look.oblique),
+                    width,
+                    underline,
+                    overline: false,
+                    strike: false,
+                };
+                match kind {
+                    '#' => out.extend([
+                        part(top, 0.0, 0.45 * h, STACK, wt, false),
+                        part("/", wt, 0.0, 1.0, ws, false),
+                        part(bottom, wt + ws, -0.15 * h, STACK, wb, false),
+                    ]),
+                    '^' => out.extend([
+                        part(top, 0.0, 0.55 * h, STACK, wt, false),
+                        part(bottom, 0.0, -0.25 * h, STACK, wb, false),
+                    ]),
+                    // The bar at 0.4 of the height: an underline across.
+                    _ => out.extend([
+                        part(top, (w - wt) / 2.0, 0.55 * h, STACK, wt, false),
+                        part(bottom, (w - wb) / 2.0, -0.25 * h, STACK, wb, false),
+                        part("", 0.0, 0.6 * h, 1.0, w, true),
+                    ]),
+                }
+                x += w;
+                continue;
+            }
             let piece = Piece {
                 text: text.clone(),
                 at: start,
@@ -229,5 +297,24 @@ mod tests {
         assert_eq!(tracked.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["A", "B", "C"]);
         let untracked = formatted_pieces(&text("{\\T1;ABC}\\L"), "", "");
         assert!(tracked[2].at.x > untracked[0].width * 0.6, "{tracked:?}");
+    }
+
+    #[test]
+    fn stacked_fractions_and_indents() {
+        let pieces = formatted_pieces(&text("A\\S1/2;B"), "", "");
+        let texts: Vec<&str> = pieces.iter().map(|p| p.text.as_str()).collect();
+        assert_eq!(texts, ["A", "1", "2", "", "B"]);
+        let (one, two, bar) = (&pieces[1], &pieces[2], &pieces[3]);
+        assert!(one.at.y > 0.0 && two.at.y < 0.0, "one over the other");
+        assert!((one.height - 1.4).abs() < 1e-9, "70% of 2");
+        assert!(bar.underline && bar.rules()[0].0.y > two.at.y && bar.rules()[0].0.y < one.at.y);
+        assert!(pieces[4].at.x > one.at.x, "B after it");
+        let diagonal = formatted_pieces(&text("\\S3#4;"), "", "");
+        assert_eq!(diagonal.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["3", "/", "4"]);
+        // Indents: the first line 4 in, the next ones 2.
+        let indented = formatted_pieces(&text("\\pi2,l2;First\\PSecond"), "", "");
+        assert!((indented[0].at.x - 4.0).abs() < 1e-9, "{indented:?}");
+        let second = indented.iter().find(|p| p.text == "Second").unwrap();
+        assert!((second.at.x - 4.0).abs() < 1e-9, "a new paragraph's first line, indented too");
     }
 }

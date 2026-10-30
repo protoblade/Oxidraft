@@ -165,6 +165,10 @@ pub fn plain_text(s: &str) -> String {
 pub struct Run {
     pub text: String,
     pub format: RunFormat,
+    /// A stacked fraction (`\S1/2;`): its top, its bottom, and how it's
+    /// stacked — `/` over a bar, `#` across a slash, `^` with no bar. Its
+    /// text is the two with a `/` between.
+    pub stack: Option<(String, String, char)>,
 }
 
 /// How a [`Run`] looks, as MTEXT's inline codes set it.
@@ -189,6 +193,9 @@ pub struct RunFormat {
     pub oblique: Option<f64>,
     /// `\T`: the space between characters, as a multiple of the usual.
     pub tracking: f64,
+    /// `\p`: the paragraph's first line's indent (from the left indent)
+    /// and its left indent, in drawing units.
+    pub indent: (f64, f64),
 }
 
 impl Default for RunFormat {
@@ -205,6 +212,7 @@ impl Default for RunFormat {
             width_factor: None,
             oblique: None,
             tracking: 1.0,
+            indent: (0.0, 0.0),
         }
     }
 }
@@ -226,7 +234,9 @@ impl RunFormat {
 /// Whether MTEXT `s` changes font, height, color or lines inline, so it
 /// can't be shown in one format.
 pub fn is_formatted(s: &str) -> bool {
-    ["\\f", "\\F", "\\H", "\\C", "\\L", "\\O", "\\K", "\\W", "\\Q", "\\T"].iter().any(|code| s.contains(code))
+    ["\\f", "\\F", "\\H", "\\C", "\\L", "\\O", "\\K", "\\W", "\\Q", "\\T", "\\S", "\\p"]
+        .iter()
+        .any(|code| s.contains(code))
 }
 
 /// MTEXT's text in runs of one format each: fonts (`\f…;`, `\F…;`),
@@ -250,8 +260,8 @@ pub fn mtext_runs(s: &str, height: f64) -> Vec<Run> {
         taken
     };
     let push = |runs: &mut Vec<Run>, format: &RunFormat, text: &str| match runs.last_mut() {
-        Some(last) if last.format == *format => last.text.push_str(text),
-        _ => runs.push(Run { text: text.to_string(), format: format.clone() }),
+        Some(last) if last.format == *format && last.stack.is_none() => last.text.push_str(text),
+        _ => runs.push(Run { text: text.to_string(), format: format.clone(), stack: None }),
     };
     while let Some(c) = chars.next() {
         match c {
@@ -286,7 +296,18 @@ pub fn mtext_runs(s: &str, height: f64) -> Vec<Run> {
             Some('M' | 'm') if chars.peek() == Some(&'+') => {
                 chars.by_ref().take(6).for_each(drop);
             }
-            Some('S') => push(&mut runs, &format, &until_semicolon(&mut chars).replace(['^', '#'], "/")),
+            Some('S') => {
+                let value = until_semicolon(&mut chars);
+                match value.find(['/', '#', '^']) {
+                    Some(at) => {
+                        let kind = value[at..].chars().next().unwrap_or('/');
+                        let (top, bottom) = (value[..at].to_string(), value[at + 1..].to_string());
+                        let text = format!("{top}/{bottom}");
+                        runs.push(Run { text, format: format.clone(), stack: Some((top, bottom, kind)) });
+                    }
+                    None => push(&mut runs, &format, &value),
+                }
+            }
             Some(code @ ('f' | 'F')) => {
                 let value = until_semicolon(&mut chars);
                 let mut parts = value.split('|');
@@ -341,7 +362,20 @@ pub fn mtext_runs(s: &str, height: f64) -> Vec<Run> {
                     }
                 }
             }
-            Some('A' | 'c' | 'p') => {
+            // Paragraph indents: `i` the first line's, `l` the left one.
+            Some('p') => {
+                for item in until_semicolon(&mut chars).trim_start_matches('x').split(',') {
+                    let (code, v) = item.split_at(item.len().min(1));
+                    if let Ok(v) = v.parse::<f64>() {
+                        match code {
+                            "i" => format.indent.0 = v,
+                            "l" => format.indent.1 = v,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            Some('A' | 'c') => {
                 until_semicolon(&mut chars);
             }
             Some('L') => format.underline = true,
