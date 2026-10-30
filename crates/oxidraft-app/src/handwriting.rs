@@ -255,7 +255,9 @@ fn recognize(png: &[u8]) -> Result<Vec<Read>, String> {
 /// a picture `size` pixels big.
 #[cfg_attr(any(target_os = "macos", windows), allow(dead_code))]
 fn tesseract_lines(tsv: &str, (w, h): (u32, u32)) -> Vec<Read> {
-    let mut lines: Vec<((u32, u32, u32), Vec<String>, (f64, f64, f64, f64))> = Vec::new();
+    // Each line: its block, paragraph and number, its words, its box.
+    type Line = ((u32, u32, u32), Vec<String>, (f64, f64, f64, f64));
+    let mut lines: Vec<Line> = Vec::new();
     for row in tsv.lines().skip(1) {
         let f: Vec<&str> = row.split('\t').collect();
         let [level, _, block, par, line, _, left, top, width, height, _, text] = f[..] else { continue };
