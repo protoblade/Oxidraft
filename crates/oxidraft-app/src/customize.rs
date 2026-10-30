@@ -394,6 +394,7 @@ impl OxidraftApp {
                         .add(egui::TextEdit::singleline(&mut d.panel.2).desired_width(140.0).hint_text("LINE, CIRCLE"));
                     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Panel commands"));
                     fields.push(r.id);
+                    // `A|B|C`: a split button.
                     let commands: Vec<String> = d
                         .panel
                         .2
@@ -412,7 +413,10 @@ impl OxidraftApp {
                         d.panel.2.clear();
                     }
                 });
-                ui.colored_label(theme::text_dim(), "A tab that isn't the ribbon's is made for its panels.");
+                ui.colored_label(
+                    theme::text_dim(),
+                    "A tab that isn't the ribbon's is made for its panels; CIRCLE|ARC is a split button.",
+                );
                 ui.add_space(8.0);
                 ui.label(RichText::new("Shortcut Menu").strong());
                 let mut remove = None;

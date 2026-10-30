@@ -404,25 +404,50 @@ impl OxidraftApp {
         out
     }
 
-    /// CUI's panels on tab `tab`: a button a command.
+    /// CUI's panels on tab `tab`: a button a command, with the ribbon's
+    /// icon where it has one; `A|B|C` is a split button, A with B and C
+    /// in its drop-down.
     fn custom_panels(&mut self, ui: &mut Ui, tab: &str) {
         let panels: Vec<crate::settings::RibbonPanel> =
             self.settings.ribbon_panels.iter().filter(|p| p.tab.eq_ignore_ascii_case(tab)).cloned().collect();
         for p in panels {
             ribbon_panel(ui, &p.name, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.set_max_width(220.0);
-                    for c in &p.commands {
-                        let tip = oxidraft_commands::COMMANDS
-                            .iter()
-                            .find(|i| i.name.eq_ignore_ascii_case(c))
-                            .map_or_else(|| c.clone(), |i| format!("{} ({})", i.description, i.name));
-                        if ui.button(c.to_string()).on_hover_text(tip).clicked() {
-                            self.run(c);
+                    ui.set_max_width(240.0);
+                    for entry in &p.commands {
+                        let mut split = entry.split('|').map(str::trim).filter(|c| !c.is_empty());
+                        let Some(main) = split.next() else { continue };
+                        let others: Vec<&str> = split.collect();
+                        self.custom_button(ui, main);
+                        if !others.is_empty() {
+                            let more = format!("More like {main}");
+                            let r = ui.menu_button("+", |ui| {
+                                for c in others {
+                                    if ui.button(c).on_hover_text(command_tip(c)).clicked() {
+                                        self.run(c);
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &more));
+                            r.response.on_hover_text(more.clone());
                         }
                     }
                 });
             });
+        }
+    }
+
+    /// A CUI panel's command: the ribbon's own tool (its icon) when it has
+    /// one, else a button with its name.
+    fn custom_button(&mut self, ui: &mut Ui, command: &str) {
+        match known_tool(command) {
+            Some(t) => self.small_tool(ui, t),
+            None => {
+                if ui.button(command).on_hover_text(command_tip(command)).clicked() {
+                    self.run(command);
+                }
+            }
         }
     }
 
@@ -1641,6 +1666,39 @@ fn paint_small(ui: &mut Ui, t: &Tool, enabled: bool) -> Response {
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, t.label));
     }
     response
+}
+
+/// The ribbon's tool that runs `command`, if it has one.
+fn known_tool(command: &str) -> Option<&'static Tool> {
+    let lists: [&[Tool]; 17] = [
+        LAYOUT_TOOLS,
+        VIEWPORT_TOOLS,
+        DRAW_LARGE,
+        DRAW_SMALL,
+        DRAW_MORE,
+        MODIFY_MORE,
+        BLOCK_SMALL,
+        BLOCK_DEFINITION,
+        LAYER_TOOLS,
+        LAYERS_MORE,
+        ANNOTATION_LARGE,
+        ANNOTATION_SMALL,
+        ANNOTATE_TEXT,
+        ANNOTATE_DIMENSIONS,
+        ANNOTATE_DIMENSIONS_MORE,
+        UTILITIES_LARGE,
+        UTILITIES_SMALL,
+    ];
+    let same = |t: &&Tool| t.command.is_some_and(|c| c.eq_ignore_ascii_case(command));
+    lists.into_iter().flatten().chain(MODIFY_GRID.iter().flatten()).find(same)
+}
+
+/// What a command does, for its button's tip.
+fn command_tip(command: &str) -> String {
+    oxidraft_commands::COMMANDS
+        .iter()
+        .find(|i| i.name.eq_ignore_ascii_case(command))
+        .map_or_else(|| command.to_string(), |i| format!("{} ({})", i.description, i.name))
 }
 
 fn ribbon_panel(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {

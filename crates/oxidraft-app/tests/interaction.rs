@@ -2967,7 +2967,7 @@ fn workspaces_and_cui() {
     // A ribbon panel on a tab of its own, and a command on the shortcut menu.
     field(&mut h, "Panel tab", "Tools");
     field(&mut h, "Panel name", "Mine");
-    field(&mut h, "Panel commands", "circle, line");
+    field(&mut h, "Panel commands", "line, circle|arc");
     h.get_by_label("Add Panel").click();
     h.run_steps(1);
     field(&mut h, "Menu command", "zoom");
@@ -2981,12 +2981,19 @@ fn workspaces_and_cui() {
     assert!(h.state_mut().engine_mut().is_active(), "the shortcut started CIRCLE");
     h.key_press(Key::Escape);
     h.run_steps(2);
-    // The Tools tab, its panel's LINE.
+    // The Tools tab: LINE as the ribbon's own tool, CIRCLE with ARC in its drop-down.
     h.get_by_label("Tools").click();
     h.run_steps(2);
-    h.get_by_label("LINE").click();
+    h.get_by_label("Line").click();
     h.run_steps(2);
     assert_eq!(h.state_mut().engine_mut().active_name(), Some("LINE"));
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    h.get_by_label("More like CIRCLE").click();
+    h.run_steps(2);
+    h.get_by_label("ARC").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("ARC"));
 }
 
 #[test]
