@@ -15,6 +15,7 @@ pub use acadrust::sheet_set;
 
 mod annotative;
 mod dimassoc;
+mod dimbreaks;
 mod dynblocks;
 mod fields;
 mod groups;
@@ -148,6 +149,7 @@ fn imported_from(cad: &mut CadDocument) -> Result<Imported, Error> {
     mtext_layout(cad, &mut imported);
     dynblocks::import(cad, &mut imported);
     annotative::restore(cad, &mut imported);
+    dimbreaks::restore(cad, &mut imported);
     Ok(imported)
 }
 
@@ -214,6 +216,11 @@ pub fn read_dxf(bytes: &[u8]) -> Result<Imported, Error> {
         && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
     {
         dynblocks::import(&cad, &mut imported);
+    }
+    if bytes.windows(9).any(|w| w == b"BREAKDATA")
+        && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
+    {
+        dimbreaks::restore(&cad, &mut imported);
     }
     if bytes.windows(21).any(|w| w == b"ACDB_ANNOTATIONSCALES")
         && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
