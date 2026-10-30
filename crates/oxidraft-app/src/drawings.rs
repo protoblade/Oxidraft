@@ -1,16 +1,16 @@
 //! Several drawings in one window, each in a file tab as in AutoCAD: new
 //! and opened drawings get tabs of their own, Ctrl+Tab and SWITCHWINDOWS
 //! go from one to the next, CLOSE closes the current one and CLOSEALL
-//! them all. SYSWINDOWS (CASCADE, TILE) lays the open drawings out over
-//! the drawing area, to pick one from.
+//! them all. SYSWINDOWS (CASCADE, TILE) lays the open drawings out side
+//! by side, each in a window of its own to work in (the current one in
+//! the main window); closing one's window puts it back in the tabs, and
+//! QVDRAWINGCLOSE all of them.
 
 use std::path::PathBuf;
 
-use eframe::egui::{self, Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
-use oxidraft_model::MODEL;
+use eframe::egui::{self, Rect, pos2, vec2};
 
 use crate::app::OxidraftApp;
-use crate::theme;
 
 /// How SYSWINDOWS lays the drawings out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,8 +41,15 @@ pub enum TabRequest {
 pub struct Drawings {
     list: Vec<OxidraftApp>,
     active: usize,
-    /// The drawings laid out to pick from (SYSWINDOWS).
-    arranged: Option<Arrange>,
+    /// The drawings laid out side by side (SYSWINDOWS), each in its slot.
+    arranged: Option<Arranged>,
+}
+
+/// Drawings in windows of their own: each one's slot (by its number in
+/// the list), and where the main window was before.
+struct Arranged {
+    slots: Vec<(usize, Rect)>,
+    main_was: Option<Rect>,
 }
 
 impl OxidraftApp {
@@ -76,6 +83,11 @@ impl Drawings {
 
     pub fn current(&mut self) -> &mut OxidraftApp {
         &mut self.list[self.active]
+    }
+
+    /// Drawing `i`, current or not.
+    pub fn drawing(&mut self, i: usize) -> Option<&mut OxidraftApp> {
+        self.list.get_mut(i)
     }
 
     pub fn len(&self) -> usize {
@@ -122,7 +134,13 @@ impl Drawings {
     /// Does what the current drawing asked.
     pub fn handle(&mut self, ctx: &egui::Context, request: TabRequest) {
         match request {
-            TabRequest::Switch(i) => self.switch(ctx, i),
+            // A drawing in a window of its own comes back to the tabs first.
+            TabRequest::Switch(i) => {
+                if self.arranged.as_ref().is_some_and(|a| a.slots.iter().any(|(d, _)| *d == i)) {
+                    self.put_back(ctx);
+                }
+                self.switch(ctx, i)
+            }
             TabRequest::Next(back) => {
                 let n = self.list.len();
                 let to = if back { (self.active + n - 1) % n } else { (self.active + 1) % n };
@@ -164,6 +182,7 @@ impl Drawings {
                     self.list[0].new_drawing();
                     return;
                 }
+                self.put_back(ctx);
                 self.list.remove(i);
                 if self.active > i || self.active >= self.list.len() {
                     self.active = self.active.saturating_sub(1);
@@ -196,8 +215,8 @@ impl Drawings {
                     app.new_drawing();
                 }
             }
-            TabRequest::Arrange(a) => self.arranged = (self.list.len() > 1).then_some(a),
-            TabRequest::CloseArranged => self.arranged = None,
+            TabRequest::Arrange(a) => self.arrange(ctx, a),
+            TabRequest::CloseArranged => self.put_back(ctx),
         }
     }
 
@@ -214,15 +233,20 @@ impl Drawings {
         }
     }
 
-    /// The drawings laid out over the drawing area (SYSWINDOWS), each
-    /// shown whole; a click makes one current, Esc goes back.
-    fn arranged_ui(&mut self, ctx: &egui::Context, arrange: Arrange) {
-        let area = self.list[self.active].drawing_rect;
-        if !area.is_positive() || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.arranged = None;
+    /// SYSWINDOWS: the drawings side by side over where the main window
+    /// is, the current one in it, each other in a window of its own.
+    fn arrange(&mut self, ctx: &egui::Context, arrange: Arrange) {
+        let n = self.list.len();
+        if n < 2 {
             return;
         }
-        let n = self.list.len();
+        let was = ctx.input(|i| i.viewport().outer_rect);
+        let area = self
+            .arranged
+            .as_ref()
+            .and_then(|a| a.main_was)
+            .or(was)
+            .unwrap_or(Rect::from_min_size(pos2(40.0, 40.0), vec2(1600.0, 1000.0)));
         let rects: Vec<Rect> = (0..n)
             .map(|i| match arrange {
                 Arrange::Vertical => {
@@ -234,61 +258,82 @@ impl Drawings {
                     Rect::from_min_size(pos2(area.left(), area.top() + h * i as f32), vec2(area.width(), h))
                 }
                 Arrange::Cascade => {
-                    let step = 28.0;
-                    let size = (area.size() - vec2(step, step) * (n - 1) as f32).max(vec2(200.0, 150.0)) * 0.9;
-                    Rect::from_min_size(area.min + vec2(step, step) * i as f32 + vec2(8.0, 8.0), size)
+                    let step = 32.0;
+                    let size = (area.size() - vec2(step, step) * (n - 1) as f32).max(vec2(640.0, 480.0));
+                    Rect::from_min_size(area.min + vec2(step, step) * i as f32, size)
                 }
             })
             .collect();
-        let mut picked = None;
-        egui::Area::new(egui::Id::unique("arranged_drawings")).order(egui::Order::Foreground).fixed_pos(area.min).show(
-            ctx,
-            |ui| {
-                ui.painter().rect_filled(area, 0.0, theme::model_bg());
-                for (i, rect) in rects.iter().enumerate() {
-                    let r = ui.interact(*rect, egui::Id::unique(("arranged", i)), Sense::click());
-                    let d = &self.list[i];
-                    let frame = if i == self.active { theme::accent() } else { theme::text_dim() };
-                    ui.painter().rect_filled(rect.shrink(2.0), 4.0, theme::model_bg());
-                    let items: Vec<_> = d
-                        .doc
-                        .space_in_draw_order(MODEL)
-                        .into_iter()
-                        .flat_map(|e| d.doc.expanded_styled(e))
-                        .take(20_000)
-                        .collect();
-                    let body = Rect::from_min_max(rect.min + vec2(0.0, 22.0), rect.max);
-                    crate::blocks::paint_preview(ui, body.shrink(4.0), &items);
-                    let title = Rect::from_min_size(rect.min, vec2(rect.width(), 22.0)).shrink(2.0);
-                    ui.painter().rect_filled(title, 3.0, theme::tab());
-                    let dirty = if d.is_dirty() { "*" } else { "" };
-                    ui.painter().text(
-                        title.left_center() + vec2(8.0, 0.0),
-                        Align2::LEFT_CENTER,
-                        format!("{}{dirty}", d.file_name()),
-                        egui::FontId::proportional(12.0),
-                        theme::text(),
-                    );
-                    let stroke = Stroke::new(if r.hovered() { 2.0 } else { 1.0 }, frame);
-                    ui.painter().rect_stroke(rect.shrink(2.0), 4.0, stroke, egui::StrokeKind::Inside);
-                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, d.file_name()));
-                    if r.clicked() {
-                        picked = Some(i);
-                    }
-                }
-                ui.painter().text(
-                    area.center_bottom() - vec2(0.0, 14.0),
-                    Align2::CENTER_CENTER,
-                    "Click a drawing to work in it; Esc goes back.",
-                    egui::FontId::proportional(12.0),
-                    Color32::from_gray(160),
-                );
-            },
-        );
-        if let Some(i) = picked {
-            self.switch(ctx, i);
-            self.arranged = None;
+        // The current drawing first, in the main window.
+        let order: Vec<usize> = std::iter::once(self.active).chain((0..n).filter(|i| *i != self.active)).collect();
+        let slots: Vec<(usize, Rect)> = order.into_iter().zip(rects).collect();
+        let main = slots[0].1;
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(main.min));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(main.size()));
+        let main_was = self.arranged.as_ref().map_or(was, |a| a.main_was);
+        self.arranged = Some(Arranged { slots, main_was });
+    }
+
+    /// The drawings back in the tabs, the main window where it was.
+    fn put_back(&mut self, ctx: &egui::Context) {
+        if let Some(a) = self.arranged.take()
+            && let Some(was) = a.main_was
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(was.min));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(was.size()));
         }
+    }
+
+    /// The drawings in windows of their own, each worked in there; one
+    /// whose window is closed goes back to the tabs.
+    fn windows(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let Some(a) = &self.arranged else { return };
+        // Only where there can be windows of their own: two drawings in one
+        // would share their panels.
+        if ctx.embed_viewports() {
+            return;
+        }
+        let slots = a.slots.clone();
+        let tabs: Vec<(String, bool)> = self.list.iter().map(|d| (d.file_name(), d.is_dirty())).collect();
+        let mut closed = Vec::new();
+        let mut requests = Vec::new();
+        for (i, rect) in slots.into_iter().filter(|(i, _)| *i != self.active) {
+            let Some(app) = self.list.get_mut(i) else { continue };
+            app.tabs = tabs.clone();
+            app.tab = i;
+            let builder = egui::ViewportBuilder::default()
+                .with_title(format!("{} - Oxidraft", app.file_name()))
+                .with_position(rect.min)
+                .with_inner_size(rect.size());
+            let id = egui::ViewportId::from_hash_of(("drawing_window", i));
+            let close = ctx.show_viewport_immediate(id, builder, |ui, _| {
+                eframe::App::ui(app, ui, frame);
+                ui.ctx().input(|i| i.viewport().close_requested())
+            });
+            if close {
+                closed.push(i);
+            }
+            // What it asks of the window (a new drawing, opening one) is the main window's.
+            if let Some(r) = app.tab_request.take() {
+                requests.push(r);
+            }
+        }
+        if let Some(a) = &mut self.arranged {
+            a.slots.retain(|(i, _)| !closed.contains(i));
+            if a.slots.len() < 2 {
+                self.put_back(ctx);
+            }
+        }
+        for r in requests {
+            self.handle(ctx, r);
+        }
+    }
+
+    /// The drawings in windows of their own, by their number in the list.
+    pub fn in_windows(&self) -> Vec<usize> {
+        self.arranged
+            .as_ref()
+            .map_or_else(Vec::new, |a| a.slots.iter().map(|s| s.0).filter(|i| *i != self.active).collect())
     }
 
     /// One frame of the window: the current drawing, with the tabs of all.
@@ -303,9 +348,7 @@ impl Drawings {
         if let Some(request) = self.list[self.active].tab_request.take() {
             self.handle(&ctx, request);
         }
-        if let Some(arrange) = self.arranged {
-            self.arranged_ui(&ctx, arrange);
-        }
+        self.windows(&ctx, frame);
     }
 }
 

@@ -2902,15 +2902,31 @@ fn several_drawings_in_file_tabs() {
     }
     assert_eq!(h.state().names(), ["Drawing1.dxf", "Drawing2.dxf", "site.dxf"]);
     assert_eq!(h.state().active(), 2);
-    // SYSWINDOWS, tiled: the drawings side by side; a click picks one.
+    // SYSWINDOWS, tiled: the others side by side, each in a window of its own to work in.
     type_in(&mut h, "syswindows");
     type_in(&mut h, "v");
-    h.get_by_role_and_label(Role::Button, "site.dxf");
-    h.get_by_role_and_label(Role::Button, "Drawing1.dxf").click();
+    assert_eq!(h.state().in_windows(), [0, 1]);
+    let other = h.state_mut().drawing(0).unwrap();
+    other.type_command("LINE");
+    other.type_command("0,0");
+    other.type_command("10,10");
+    other.type_command("");
+    h.run_steps(2);
+    assert_eq!(h.state_mut().drawing(0).unwrap().document_mut().len(), 2, "drawn in its window");
+    assert_eq!(h.state().active(), 2, "the main window's still site.dxf");
+    // QVDRAWINGCLOSE: back in the tabs; then the first one picked.
+    type_in(&mut h, "qvdrawingclose");
+    assert!(h.state().in_windows().is_empty());
+    let ctx = h.ctx.clone();
+    h.state_mut().handle(&ctx, oxidraft_app::drawings::TabRequest::Switch(0));
     h.run_steps(2);
     assert_eq!(h.state().active(), 0);
-    // CLOSE: its tab goes (it has no changes to ask about).
+    // CLOSE: its tab goes (asking about its change first).
     type_in(&mut h, "close");
+    h.state_mut().current().document_mut();
+    let ctx = h.ctx.clone();
+    h.state_mut().handle(&ctx, oxidraft_app::drawings::TabRequest::Close(0));
+    h.run_steps(1);
     assert_eq!(h.state().names(), ["Drawing2.dxf", "site.dxf"]);
     std::fs::remove_dir_all(&dir).ok();
 }
