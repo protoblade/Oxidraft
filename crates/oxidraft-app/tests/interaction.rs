@@ -3276,6 +3276,23 @@ fn sheet_sets_share_and_markup() {
     assert!(zip.starts_with(b"PK\x03\x04"));
     let text = String::from_utf8_lossy(&zip);
     assert!(text.contains("Drawing1.dwg") && text.contains("Drawing1.pdf"));
+    // SHARE with a share location: the sheets and the package put there,
+    // and the links given.
+    let public = dir.join("public");
+    h.state_mut().set_share_location(&public.to_string_lossy(), "https://example.com/shared");
+    type_all(&mut h, &["share"]);
+    let start = std::time::Instant::now();
+    while h.state().sharing() && start.elapsed().as_secs() < 60 {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let put: Vec<String> =
+        std::fs::read_dir(&public).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(put.len(), 2, "{put:?}");
+    assert!(put.iter().any(|n| n.starts_with("Drawing1-") && n.ends_with(".pdf")));
+    let said = h.state_mut().engine_mut().history().join("\n");
+    assert!(said.contains("https://example.com/shared/Drawing1-"), "{said}");
+    h.state_mut().set_share_location("", "");
     // MARKUP: a plot laid back over its sheet, on layer MARKUP.
     let plotted = dir.join("plot.pdf");
     type_all(&mut h, &["plot"]);

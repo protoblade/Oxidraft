@@ -58,6 +58,11 @@ pub struct Settings {
     /// packages) saved in AutoCAD's own form too (NATIVESAVE), untested in
     /// AutoCAD itself: off unless chosen.
     pub native_save: bool,
+    /// Where SHARE puts what it shares (a folder, or an http(s) folder
+    /// that takes PUT, as WebDAV does), and the address it's seen at
+    /// (the same, if empty): SHARE then gives a link.
+    pub share_location: String,
+    pub share_link: String,
     /// Menus and toolbars customization files brought (CUILOAD).
     pub menus: Vec<crate::menubar::CustomMenu>,
     pub custom_toolbars: Vec<crate::menubar::CustomToolbar>,
@@ -215,6 +220,18 @@ impl OxidraftApp {
                 .on_hover_text(
                     "Written as AutoCAD keeps them, besides Oxidraft's own data. Not yet tried in AutoCAD itself, so off unless you choose it.",
                 );
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Share").strong());
+                egui::Grid::new("share_location").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+                    ui.label("Share to:").on_hover_text(
+                        "A folder (one a web server or a sync service publishes), or an http(s) folder that takes uploads (WebDAV); user:password@ in it signs in",
+                    );
+                    ui.text_edit_singleline(&mut d.settings.share_location);
+                    ui.end_row();
+                    ui.label("Seen at:").on_hover_text("The address that folder is seen at, if not the same");
+                    ui.text_edit_singleline(&mut d.settings.share_link);
+                    ui.end_row();
+                });
                 ui.add_space(6.0);
                 ui.separator();
                 let row = egui::vec2(ui.available_width().max(260.0), 24.0);
@@ -278,6 +295,8 @@ mod tests {
             toolbars: vec!["Draw".into()],
             toolbar_places: vec![("Draw".into(), crate::menubar::ToolbarPlace::Float(10.0, 20.0))],
             native_save: true,
+            share_location: "https://dav.example.com/shared".into(),
+            share_link: "https://example.com/shared".into(),
             menus: vec![crate::menubar::CustomMenu {
                 name: "Site".into(),
                 items: vec![crate::menubar::MenuEntry {

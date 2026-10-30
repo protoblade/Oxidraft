@@ -124,6 +124,8 @@ pub struct OxidraftApp {
     pub(crate) cui_load: Option<crate::cuix::CuiLoadDialog>,
     /// MARKUPIMPORT's handwriting being read, in the background.
     pub(crate) handwriting: Option<crate::handwriting::Pending>,
+    /// SHARE's upload, in the background: the links, once it's done.
+    pub(crate) sharing: Option<std::sync::mpsc::Receiver<Result<Vec<String>, String>>>,
     /// A CUI macro's rest after a pause, and how many inputs the command
     /// had then: it goes on after the user's.
     pub(crate) macro_rest: Option<(String, usize)>,
@@ -381,6 +383,7 @@ impl OxidraftApp {
             cui: None,
             cui_load: None,
             handwriting: None,
+            sharing: None,
             macro_rest: None,
             toolbars_dialog: None,
             button_images: Default::default(),
@@ -1370,6 +1373,7 @@ impl eframe::App for OxidraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.take_handwriting(&ctx);
+        self.take_share(&ctx);
         // Lengths and angles everywhere show in the drawing's units.
         oxidraft_model::units::set_current(self.doc.units());
         // The text styles' fonts, and those MTEXT names inline, for the

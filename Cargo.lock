@@ -2929,6 +2929,7 @@ name = "oxidraft-app"
 version = "0.10.0"
 dependencies = [
  "arboard",
+ "base64",
  "chrono",
  "eframe",
  "egui_kittest",

@@ -26,6 +26,8 @@ eframe.workspace = true
 arboard = "3"
 rfd.workspace = true
 ureq = { version = "3", features = ["json"] }
+# SHARE to a server of your own: its basic authorization.
+base64 = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # zlib-rs: inflating with a preset dictionary (W2D's compressed blocks).
