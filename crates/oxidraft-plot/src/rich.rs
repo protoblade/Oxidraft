@@ -106,8 +106,37 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
     // Each character with its run, in the order plain_text has them.
     let chars: Vec<(char, usize)> =
         runs.iter().enumerate().flat_map(|(i, r)| r.text.chars().map(move |c| (c, i))).collect();
-    let wrap = if *width > 0.0 { width / (height * wf) } else { 0.0 };
-    let lines = font::wrap_lines(content, wrap, |s| text_width(style_font, big, s));
+    // Each paragraph wrapped in its own width: the text's, less its
+    // indents (and its first line's).
+    let mut paragraph_runs = vec![chars.first().map_or(0, |c| c.1)];
+    for (k, (c, r)) in chars.iter().enumerate() {
+        if *c == '\n' {
+            paragraph_runs.push(chars.get(k + 1).map_or(*r, |n| n.1));
+        }
+    }
+    let plain: String = chars.iter().map(|c| c.0).collect();
+    let mut lines: Vec<String> = Vec::new();
+    for (p, paragraph) in plain.split('\n').enumerate() {
+        if *width <= 0.0 {
+            lines.push(paragraph.to_string());
+            continue;
+        }
+        let f = paragraph_runs.get(p).and_then(|r| runs.get(*r)).map(|r| &r.format);
+        let ((first, left), right) = f.map_or(((0.0, 0.0), 0.0), |f| (f.indent, f.right_indent));
+        let wrap =
+            |first_line: bool| ((width / height - left - right - if first_line { first } else { 0.0 }) / wf).max(1e-6);
+        let (mut line, mut first_line) = (String::new(), true);
+        for word in paragraph.split(' ') {
+            let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if !line.is_empty() && text_width(style_font, big, &candidate) > wrap(first_line) {
+                lines.push(std::mem::replace(&mut line, word.to_string()));
+                first_line = false;
+            } else {
+                line = candidate;
+            }
+        }
+        lines.push(line);
+    }
     // A line's pieces, matched to the characters in order; and whether it
     // starts a paragraph (for its indent).
     let mut k = 0;
@@ -164,16 +193,25 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
         height * (left + if starts.get(i).copied().unwrap_or(false) { first } else { 0.0 })
     };
     // Where a line's pieces start (a tab going to the next stop: its own,
-    // else every 4 heights), and how long it is.
+    // else every 4 heights; what follows it, up to the next tab, centered
+    // on a `c` stop and ending at an `r` one), and how long it is.
     let layout_line = |i: usize, line: &[(String, usize)]| {
         let mut x = indent(i, line);
         let mut starts = Vec::with_capacity(line.len());
-        for (t, r) in line {
+        for (j, (t, r)) in line.iter().enumerate() {
             starts.push(x);
             if t == "\t" {
                 let every = 4.0 * height;
-                let stop = runs[*r].format.tabs.iter().map(|s| s * height).find(|s| *s > x + 1e-9);
-                x = stop.unwrap_or(((x / every).floor() + 1.0) * every);
+                let stop = runs[*r].format.tabs.iter().map(|(s, k)| (s * height, *k)).find(|(s, _)| *s > x + 1e-9);
+                let (at, kind) = stop.unwrap_or((((x / every).floor() + 1.0) * every, 'l'));
+                let follows: f64 =
+                    line[j + 1..].iter().take_while(|(t, _)| t != "\t").map(|(t, r)| piece_width(t, *r)).sum();
+                x = match kind {
+                    'c' => at - follows / 2.0,
+                    'r' => at - follows,
+                    _ => at,
+                }
+                .max(x);
             } else {
                 x += piece_width(t, *r);
             }
@@ -181,7 +219,9 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
         (starts, x)
     };
     let tallest = |line: &[(String, usize)]| line.iter().map(|(_, r)| runs[*r].format.height).fold(1.0, f64::max);
-    let widest = lines.iter().enumerate().map(|(i, l)| layout_line(i, l).1).fold(0.0, f64::max);
+    // A line's paragraph's right indent.
+    let right = |line: &[(String, usize)]| line.first().map_or(0.0, |(_, r)| runs[*r].format.right_indent * height);
+    let widest = lines.iter().enumerate().map(|(i, l)| layout_line(i, l).1 + right(l)).fold(0.0, f64::max);
     // Baselines below the top, the text's line spacing between them: a tall
     // line pushes those under it down. In columns, each column's lines
     // start at the top again: as many as its height holds (static
@@ -219,10 +259,11 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
     for (i, (line, base)) in lines.iter().zip(&baselines).enumerate() {
         let (xs, length) = layout_line(i, line);
         let column_x = column_step * column_of[i] as f64;
-        // Centered or right aligned within the widest line.
+        // Centered or right aligned within the widest line, less its
+        // right indent.
         let aligned = match line.first().map_or('l', |(_, r)| runs[*r].format.align) {
-            'c' => (widest - length) / 2.0,
-            'r' => widest - length,
+            'c' => (widest - right(line) - length) / 2.0,
+            'r' => widest - right(line) - length,
             _ => 0.0,
         };
         for ((text, r), at) in line.iter().zip(&xs) {
@@ -367,6 +408,27 @@ mod tests {
     }
 
     #[test]
+    fn right_indents_wrap_their_paragraphs_narrower() {
+        let probe = formatted_pieces(&text("WALL WALL"), "", "")[0].width;
+        let lines = |content: &str| {
+            let mut g = text(content);
+            if let Geometry::Text { width, .. } = &mut g {
+                *width = probe + 0.5;
+            }
+            formatted_pieces(&g, "", "").len()
+        };
+        assert_eq!(lines("WALL WALL WALL WALL"), 2);
+        // In heights (2): room for one word a line.
+        let r = probe * 0.4 / 2.0;
+        assert_eq!(lines(&format!("\\pxr{r};WALL WALL WALL WALL")), 4);
+        // A first line's indent narrows that line alone.
+        assert_eq!(lines(&format!("\\pxi{r};WALL WALL WALL WALL")), 3);
+        // Right aligned: the right indent kept clear.
+        let pieces = formatted_pieces(&text("\\pxr3,qr;WALL\\PWALL WALL"), "", "");
+        assert!((pieces[0].at.x + pieces[0].width - (pieces[1].at.x + pieces[1].width)).abs() < 1e-9);
+    }
+
+    #[test]
     fn tab_stops_and_centered_paragraphs() {
         // A stop at 15 heights (30): the second column starts there; with
         // none, every 4 heights (8).
@@ -374,6 +436,14 @@ mod tests {
         let at = |t: &str| pieces.iter().find(|p| p.text == t).unwrap().at.x;
         assert!((at("B") - 30.0).abs() < 1e-9, "{pieces:?}");
         assert!((at("D") - 30.0).abs() < 1e-9, "the stop holds for the paragraph after");
+        // Right-aligned and centered stops: what follows ends at 10 heights
+        // (20), or is centered on them.
+        let right = formatted_pieces(&text("\\pxtr10;A^IBB"), "", "");
+        let bb = right.iter().find(|p| p.text == "BB").unwrap();
+        assert!((bb.at.x + bb.width - 20.0).abs() < 1e-9, "{right:?}");
+        let centered = formatted_pieces(&text("\\pxtc10;A^IBB"), "", "");
+        let bb = centered.iter().find(|p| p.text == "BB").unwrap();
+        assert!((bb.at.x + bb.width / 2.0 - 20.0).abs() < 1e-9, "{centered:?}");
         let plain = formatted_pieces(&text("\\pqc;A^IB"), "", "");
         assert!((plain.iter().find(|p| p.text == "B").unwrap().at.x - 8.0).abs() < 1e-9);
         // Centered: a short line between the ends of a longer one.

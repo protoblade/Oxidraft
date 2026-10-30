@@ -224,9 +224,13 @@ pub struct RunFormat {
     /// `\p`: the paragraph's first line's indent (from the left indent)
     /// and its left indent, in multiples of the text's height.
     pub indent: (f64, f64),
+    /// `\p…r…;`: its right indent, in multiples of the text's height: its
+    /// lines wrap that far in from the text's width.
+    pub right_indent: f64,
     /// `\p…t…;`: its tab stops, in multiples of the text's height from the
-    /// left.
-    pub tabs: Vec<f64>,
+    /// left, and how what follows one lines up with it: `l` starting at it,
+    /// `c` centered on it, `r` ending at it.
+    pub tabs: Vec<(f64, char)>,
     /// `\pq…;`: how its lines align: `l`eft, `c`enter or `r`ight.
     pub align: char,
 }
@@ -246,6 +250,7 @@ impl Default for RunFormat {
             oblique: None,
             tracking: 1.0,
             indent: (0.0, 0.0),
+            right_indent: 0.0,
             tabs: Vec::new(),
             align: 'l',
         }
@@ -403,27 +408,30 @@ pub fn mtext_runs(s: &str, height: f64) -> Vec<Run> {
                     }
                 }
             }
-            // Paragraphs: `i` the first line's indent, `l` the left one, `t`
-            // the tab stops (more numbers after it are stops too), `q` how
-            // its lines align.
+            // Paragraphs: `i` the first line's indent, `l` the left one, `r`
+            // the right one, `t` the tab stops (everything after it is stops
+            // too: numbers, centered `c` and right-aligned `r` ones), `q`
+            // how its lines align.
             Some('p') => {
                 let mut in_tabs = false;
+                // A tab stop: `4`, `c4` or `r4`.
+                let stop = |item: &str| {
+                    let kind = item.chars().next().filter(|c| matches!(c, 'c' | 'r')).unwrap_or('l');
+                    item.trim_start_matches(['c', 'r']).parse::<f64>().ok().map(|v| (v, kind))
+                };
                 for item in until_semicolon(&mut chars).trim_start_matches('x').split(',') {
                     let item = item.trim();
-                    // Tab stops after the first: numbers, centered (`c`) or
-                    // right-aligned (`r`) ones taken as plain stops.
-                    if in_tabs && let Ok(v) = item.trim_start_matches(['c', 'r']).parse::<f64>() {
-                        format.tabs.push(v);
+                    if in_tabs {
+                        format.tabs.extend(stop(item));
                         continue;
                     }
-                    in_tabs = false;
                     let (code, v) = item.split_at(item.len().min(1));
                     match (code, v.parse::<f64>()) {
                         ("i", Ok(v)) => format.indent.0 = v,
                         ("l", Ok(v)) => format.indent.1 = v,
-                        ("t", first) => {
-                            let first = first.ok().or_else(|| v.trim_start_matches(['c', 'r']).parse().ok());
-                            format.tabs = first.into_iter().collect();
+                        ("r", Ok(v)) => format.right_indent = v,
+                        ("t", _) => {
+                            format.tabs = stop(v).into_iter().collect();
                             in_tabs = true;
                         }
                         ("q", _) => format.align = v.chars().next().unwrap_or('l'),
