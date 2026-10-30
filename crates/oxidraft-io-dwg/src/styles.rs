@@ -373,14 +373,7 @@ mod tests {
         assert!(cad.header.limit_check);
         // Without Oxidraft's record, as AutoCAD would save them: read from
         // its objects, in DWG and in DXF.
-        if let Some(ObjectType::Dictionary(d)) = cad.objects.get_mut(&root) {
-            d.entries.retain(|(n, _)| !n.starts_with("OXIDRAFT"));
-        }
-        let ours: Vec<String> =
-            cad.app_ids.iter().map(|a| a.name.clone()).filter(|n| n.starts_with("OXIDRAFT")).collect();
-        for name in ours {
-            cad.app_ids.remove(&name);
-        }
+        without_oxidraft(&mut cad);
         let check = |back: &Document, how: &str| {
             assert_eq!((back.leader_style(), back.table_style()), (leader, table), "{how}");
             assert_eq!((back.picture_frame(false), back.wipeout_frame()), (0, 2), "{how}");

@@ -247,18 +247,35 @@ pub fn load_dxf(path: impl AsRef<Path>) -> Result<Imported, Error> {
     read_dxf(&std::fs::read(path).map_err(|e| e.to_string())?)
 }
 
-/// The drawing as acadrust holds it, layouts and all, ready to write as
-/// `version` (fields are AutoCAD 2004's: older versions get their values).
-/// Whether annotative scales and dimension breaks go out in AutoCAD's own
-/// form too, besides Oxidraft's data (off unless set: untested in AutoCAD).
+/// Whether what Oxidraft can't check against AutoCAD goes out in AutoCAD's
+/// own form too, besides Oxidraft's data (NATIVESAVE; off unless set).
+#[cfg(not(test))]
 static NATIVE_OBJECTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+#[cfg(not(test))]
 pub fn set_native_objects(on: bool) {
     NATIVE_OBJECTS.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+#[cfg(not(test))]
 pub fn native_objects() -> bool {
     NATIVE_OBJECTS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+// In tests, each test's own (they run side by side).
+#[cfg(test)]
+thread_local! {
+    static NATIVE_OBJECTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub fn set_native_objects(on: bool) {
+    NATIVE_OBJECTS.with(|n| n.set(on));
+}
+
+#[cfg(test)]
+pub fn native_objects() -> bool {
+    NATIVE_OBJECTS.with(std::cell::Cell::get)
 }
 
 /// The handles in DXF text, each with the kind of object it's on.
@@ -280,6 +297,8 @@ fn written_handles(dxf: &[u8]) -> HashMap<u64, String> {
     out
 }
 
+/// The drawing as acadrust holds it, layouts and all, ready to write as
+/// `version` (fields are AutoCAD 2004's: older versions get their values).
 fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
     let mut dxf = Vec::new();
     let handles = oxidraft_io_dxf::write_with_handles(doc, &mut dxf).map_err(|e| e.to_string())?;
