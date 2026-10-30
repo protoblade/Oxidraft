@@ -21,6 +21,7 @@ mod fields;
 mod groups;
 mod layouts;
 mod mleaders;
+mod ole;
 mod settings;
 
 pub type Error = String;
@@ -150,6 +151,7 @@ fn imported_from(cad: &mut CadDocument) -> Result<Imported, Error> {
     dynblocks::import(cad, &mut imported);
     annotative::restore(cad, &mut imported);
     dimbreaks::restore(cad, &mut imported);
+    ole::restore(cad, &mut imported);
     Ok(imported)
 }
 
@@ -216,6 +218,11 @@ pub fn read_dxf(bytes: &[u8]) -> Result<Imported, Error> {
         && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
     {
         dynblocks::import(&cad, &mut imported);
+    }
+    if bytes.windows(9).any(|w| w == b"OLE2FRAME")
+        && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
+    {
+        ole::restore(&cad, &mut imported);
     }
     if bytes.windows(9).any(|w| w == b"BREAKDATA")
         && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())

@@ -68,6 +68,7 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document) {
     let linked = |name: &str| {
         let url = format!("{}{name}", oxidraft_io_dxf::EMBEDDED_PREFIX);
         doc.all_entities().any(|e| e.hyperlink.as_ref().is_some_and(|l| l.url == url))
+            || doc.image_defs().any(|d| d.path == url)
     };
     let embedded: Vec<_> = doc.embedded_files().filter(|(n, _)| linked(n)).collect();
     if !embedded.is_empty() {

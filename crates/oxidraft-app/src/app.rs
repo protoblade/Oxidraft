@@ -527,6 +527,7 @@ impl OxidraftApp {
     /// Replaces the drawing and zooms to its extents.
     pub fn set_document(&mut self, doc: Document) {
         self.engine.cancel(&mut self.doc);
+        crate::xref::copy_out_embedded(&doc);
         self.doc = doc;
         self.saved_revision = self.doc.revision();
         self.zoom_extents_pending = true;

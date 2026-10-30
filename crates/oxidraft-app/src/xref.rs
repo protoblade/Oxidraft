@@ -38,6 +38,10 @@ pub(crate) struct AttachDialog {
 /// from the drawing's folder unless it's absolute; failing that, a file of
 /// that name in the drawing's folder, where AutoCAD looks next.
 pub(crate) fn resolve(host: Option<&Path>, saved: &str) -> Option<PathBuf> {
+    // A file kept in the drawing: its copy, made when the drawing came in.
+    if saved.starts_with(oxidraft_io_dxf::EMBEDDED_PREFIX) {
+        return embedded().lock().ok()?.get(saved).cloned().filter(|p| p.is_file());
+    }
     let saved = Path::new(&saved.replace('\\', "/")).to_path_buf();
     let dir = host.and_then(Path::parent);
     let mut candidates = Vec::new();
@@ -50,6 +54,30 @@ pub(crate) fn resolve(host: Option<&Path>, saved: &str) -> Option<PathBuf> {
         candidates.push(d.join(name));
     }
     candidates.into_iter().find(|p| p.is_file())
+}
+
+/// The files kept in drawings that have been copied out to be shown, by
+/// their saved address (`embedded:name`).
+fn embedded() -> &'static std::sync::Mutex<std::collections::HashMap<String, PathBuf>> {
+    static FILES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, PathBuf>>> =
+        std::sync::OnceLock::new();
+    FILES.get_or_init(Default::default)
+}
+
+/// Copies out the files `doc` keeps that its images show, so they load as
+/// any other picture.
+pub(crate) fn copy_out_embedded(doc: &Document) {
+    let dir = std::env::temp_dir().join(format!("oxidraft-embedded-{}", std::process::id()));
+    for def in doc.image_defs() {
+        let Some(name) = def.path.strip_prefix(oxidraft_io_dxf::EMBEDDED_PREFIX) else { continue };
+        let Some(bytes) = doc.embedded_file(name) else { continue };
+        let file = dir.join(name.replace(['/', '\\'], "_"));
+        if std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, bytes)).is_ok()
+            && let Ok(mut files) = embedded().lock()
+        {
+            files.insert(def.path.clone(), file);
+        }
+    }
 }
 
 /// `to` written from the folder `from`, like "../survey/site.dwg".
