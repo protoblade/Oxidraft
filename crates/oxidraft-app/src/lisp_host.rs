@@ -33,6 +33,9 @@ enum Waiting {
     Ask(Slot, EntData),
     /// PAUSE in `(command ...)`: an input to the command, counted from this.
     Pause(usize),
+    /// grread: its prompt's answer, or with tracking the cursor leaving
+    /// where it was.
+    GrRead(Slot, bool, Option<oxidraft_geom::Point>),
 }
 
 #[derive(Default)]
@@ -175,6 +178,15 @@ impl OxidraftApp {
                     a => a,
                 })
             }
+            Waiting::GrRead(slot, track, from) => match { slot.borrow_mut().take() } {
+                Some(answer) => Reply::Answer(answer),
+                None if *track && self.cursor.is_some() && self.cursor != *from => {
+                    let at = self.cursor.unwrap_or_default();
+                    self.engine.end_asked(&mut self.doc);
+                    Reply::Answer(Answer::Moved(at))
+                }
+                None => return None,
+            },
             Waiting::Pause(fed) if self.engine.inputs_fed() != *fed => Reply::Unit,
             Waiting::Pause(_) if !self.engine.is_active() => Reply::Cancelled,
             Waiting::Pause(_) => return None,
@@ -229,10 +241,26 @@ impl OxidraftApp {
                 Reply::Unit
             }
             Request::ReadFile(name) => Reply::File(self.lisp_file(&name)),
+            // Asked within the command running, which goes on after.
             Request::Ask(ask, filter) => {
                 let slot = Slot::default();
-                self.engine.run_with("APPLOAD", "", Box::new(LispAsk::new(ask, slot.clone())), &mut self.doc);
+                self.engine.ask_within("APPLOAD", Box::new(LispAsk::new(ask, slot.clone())), &mut self.doc);
                 self.lisp.waiting = Some(Waiting::Ask(slot, filter));
+                return None;
+            }
+            Request::GrRead(track) => {
+                let slot = Slot::default();
+                let ask = oxidraft_commands::lisp_ask::Ask {
+                    kind: oxidraft_commands::lisp_ask::AskKind::GrRead,
+                    prompt: String::new(),
+                    base: None,
+                    keywords: Vec::new(),
+                    no_null: false,
+                    no_zero: false,
+                    no_negative: false,
+                };
+                self.engine.ask_within("APPLOAD", Box::new(LispAsk::new(ask, slot.clone())), &mut self.doc);
+                self.lisp.waiting = Some(Waiting::GrRead(slot, track, self.cursor));
                 return None;
             }
             Request::EntGet(id) => Reply::Data(self.doc.entity(EntityId(id)).map(ent_data)),

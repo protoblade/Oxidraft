@@ -77,6 +77,8 @@ pub enum Request {
     EntDel(u64),
     EntNext(Option<u64>),
     EntLast,
+    /// grread: a click, a key, or (tracking) the cursor's next place.
+    GrRead(bool),
     /// ssget's modes that don't ask: X, L, P, I, W and C.
     SsGet(String, Vec<[f64; 2]>, EntData),
     /// Sent when a job ends: what it gave (the value shown, and what's
@@ -480,6 +482,7 @@ fn answer_value(a: Answer) -> Result<Value, String> {
         Answer::Entity(id, p) => Value::List(vec![Value::Ename(id.0), Value::from_point(p)]),
         Answer::Selection(ids) if ids.is_empty() => Value::Nil,
         Answer::Selection(ids) => Value::PickSet(Rc::new(RefCell::new(ids.into_iter().map(|i| i.0).collect()))),
+        Answer::Moved(p) => Value::from_point(p),
         Answer::Nothing => Value::Nil,
         Answer::Cancelled => return Err(CANCELLED.into()),
     })
@@ -1126,6 +1129,17 @@ impl Lisp {
                 self.ask(host, AskKind::Str { spaces }, &a, Vec::new())?
             }
             "ENTSEL" | "NENTSEL" => self.ask(host, AskKind::EntSel, &a, Vec::new())?,
+            // (3 point) a click, (2 code) a key (13 Enter), (5 point) the
+            // cursor moved, when tracking.
+            "GRREAD" => match host.call(Request::GrRead(arg(0).truthy())) {
+                Reply::Answer(Answer::Point(p)) => Value::List(vec![Value::Int(3), Value::from_point(p)]),
+                Reply::Answer(Answer::Moved(p)) => Value::List(vec![Value::Int(5), Value::from_point(p)]),
+                Reply::Answer(Answer::Text(t)) if !t.is_empty() => {
+                    Value::List(vec![Value::Int(2), Value::Int(t.chars().next().map_or(13, |c| c as i64))])
+                }
+                Reply::Answer(Answer::Text(_) | Answer::Nothing) => Value::List(vec![Value::Int(2), Value::Int(13)]),
+                _ => return Err(CANCELLED.into()),
+            },
             "SSGET" => {
                 let mut mode = String::new();
                 let mut points = Vec::new();

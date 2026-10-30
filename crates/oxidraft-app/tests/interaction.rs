@@ -3422,3 +3422,40 @@ fn text_boxes_are_measured_in_the_font() {
     let (w, i) = (width(wide), width(narrow));
     assert!(w > 2.0 * i, "W is wider than i: {w} and {i}");
 }
+
+#[test]
+fn autolisp_asks_within_a_command_and_reads_the_mouse() {
+    let mut h = app_with_line();
+    let history = |h: &mut Harness<'_, OxidraftApp>| h.state_mut().engine_mut().history().to_vec();
+    // (getpoint) at LINE's prompt: LINE goes on with the point.
+    let before = h.state_mut().document_mut().len();
+    h.state_mut().type_command("LINE");
+    h.state_mut().type_command("0,0");
+    h.state_mut().type_command("(getpoint)");
+    h.state_mut().type_command("10,5");
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("LINE"), "{:?}", history(&mut h));
+    h.state_mut().type_command("");
+    h.run();
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.len(), before + 1);
+    assert!(
+        matches!(doc.entities().last().unwrap().geometry, Geometry::Line { end, .. } if end == Point::new(10.0, 5.0))
+    );
+    // grread: a click (here typed), a key.
+    h.state_mut().type_command("(setq g (grread))");
+    h.state_mut().type_command("5,6");
+    h.state_mut().type_command("(setq k (grread))");
+    h.state_mut().type_command("a");
+    h.state_mut().type_command("(list g k)");
+    h.run();
+    assert!(history(&mut h).iter().any(|l| l == "((3 (5 6 0)) (2 97))"), "{:?}", history(&mut h));
+    // Tracking: the cursor's move answers it.
+    h.state_mut().type_command("(setq m (car (grread T)))");
+    h.event(Event::PointerMoved(Pos2::new(600.0, 400.0)));
+    h.run_steps(2);
+    h.event(Event::PointerMoved(Pos2::new(620.0, 410.0)));
+    h.run_steps(2);
+    h.state_mut().type_command("!m");
+    h.run();
+    assert_eq!(history(&mut h).last().map(String::as_str), Some("5"), "{:?}", history(&mut h));
+}

@@ -19,10 +19,14 @@ pub enum AskKind {
     Angle,
     Real,
     Int,
-    Str { spaces: bool },
+    Str {
+        spaces: bool,
+    },
     Kword,
     EntSel,
     SsGet,
+    /// grread: a click or what's typed (the cursor's moves are the app's).
+    GrRead,
 }
 
 /// One question, with what INITGET set for it.
@@ -48,6 +52,8 @@ pub enum Answer {
     Keyword(String),
     Entity(EntityId, Point),
     Selection(Vec<EntityId>),
+    /// grread with tracking: the cursor moved there.
+    Moved(Point),
     /// Enter, or a pick that missed.
     Nothing,
     Cancelled,
@@ -138,6 +144,7 @@ impl Command for LispAsk {
                 (AskKind::Point | AskKind::Corner | AskKind::Dist | AskKind::Angle, _) => "Specify point",
                 (AskKind::EntSel, _) => "Select object",
                 (AskKind::SsGet, _) => "Select objects",
+                (AskKind::GrRead, _) => "Pick a point or press a key",
                 _ => "Enter a value",
             }
             .to_string()
@@ -170,7 +177,7 @@ impl Command for LispAsk {
     }
 
     fn wants_text(&self) -> bool {
-        matches!(self.ask.kind, AskKind::Str { .. })
+        matches!(self.ask.kind, AskKind::Str { .. } | AskKind::GrRead)
     }
 
     fn text_with_spaces(&self) -> bool {
@@ -183,6 +190,11 @@ impl Command for LispAsk {
             Input::Enter if matches!(self.ask.kind, AskKind::Str { .. }) => self.answer(Answer::Text(String::new())),
             Input::Enter => self.answer(Answer::Nothing),
             Input::Keyword(k) => self.answer(Answer::Keyword(k.to_string())),
+            // grread: a point typed is a click there.
+            Input::Text(t) if self.ask.kind == AskKind::GrRead => match crate::parse_input(&t, None, &[], false) {
+                Ok(Input::Point(p)) => self.answer(Answer::Point(p)),
+                _ => self.answer(Answer::Text(t)),
+            },
             Input::Text(t) => self.answer(Answer::Text(t)),
             Input::Selection(s) => self.answer(Answer::Selection(s.ids)),
             Input::Pick { at, .. } => match ctx.pick(at) {
@@ -197,7 +209,7 @@ impl Command for LispAsk {
                 _ => Err("Requires a point.".into()),
             },
             Input::Point(p) => match self.ask.kind {
-                AskKind::Point | AskKind::Corner => self.answer(Answer::Point(p)),
+                AskKind::Point | AskKind::Corner | AskKind::GrRead => self.answer(Answer::Point(p)),
                 AskKind::Dist | AskKind::Angle => match self.base() {
                     Some(b) if self.ask.kind == AskKind::Dist => self.number(b.distance(p)),
                     Some(b) => {

@@ -2158,6 +2158,9 @@ enum Gathering {
 /// command-line history.
 pub struct Engine {
     active: Option<Active>,
+    /// The command set aside while a LISP prompt typed at its own prompt
+    /// is answered (see [`Engine::ask_within`]).
+    set_aside: Option<Active>,
     /// MULTIPLE: the command started again each time it ends.
     repeat: Option<&'static CommandInfo>,
     last_command: Option<&'static CommandInfo>,
@@ -2219,6 +2222,7 @@ impl Engine {
         Self {
             repeat: None,
             active: None,
+            set_aside: None,
             last_command: None,
             last_point: None,
             history: Vec::new(),
@@ -3116,6 +3120,8 @@ impl Engine {
             return;
         }
         self.repeat = None;
+        // Esc at a prompt asked within a command cancels that one too.
+        self.set_aside = None;
         match self.active.take() {
             Some(a) => {
                 self.log("*Cancel*");
@@ -3337,6 +3343,8 @@ impl Engine {
         self.history.extend(messages);
         match result {
             Ok(Step::Continue) => {}
+            // A prompt asked within another command: that one goes on.
+            Ok(Step::Done) if self.set_aside.is_some() => self.active = self.set_aside.take(),
             Ok(Step::Done) => {
                 let info = self.active.take().map(|a| a.info);
                 // DIMASSOC 2: new dimensions follow what they measure.
@@ -3359,6 +3367,31 @@ impl Engine {
                 }
             }
             Err(e) => self.log(e),
+        }
+    }
+
+    /// A prompt the app makes (AutoLISP's getpoint and the like), asked
+    /// within the command running if there is one: that one is set aside,
+    /// its step left open, and goes on once the prompt is answered.
+    pub fn ask_within(&mut self, info_name: &str, cmd: Box<dyn Command>, doc: &mut Document) -> bool {
+        let Some(info) = find(info_name) else { return false };
+        if self.active.is_none() || self.set_aside.is_some() {
+            return self.run_with(info_name, "", cmd, doc);
+        }
+        self.window_start = None;
+        self.set_aside = self.active.take();
+        self.active = Some(Active { info, cmd });
+        true
+    }
+
+    /// Ends a prompt asked within another command without its answer
+    /// (grread's cursor moved): that one goes on.
+    pub fn end_asked(&mut self, doc: &mut Document) {
+        if self.set_aside.is_some() {
+            self.active = self.set_aside.take();
+        } else if self.active.is_some() {
+            self.active = None;
+            doc.commit();
         }
     }
 
