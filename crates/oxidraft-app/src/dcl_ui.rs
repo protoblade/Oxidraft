@@ -8,7 +8,14 @@ use eframe::egui::{self, Ui};
 
 use crate::app::OxidraftApp;
 use crate::dcl::{Dcl, Tile, keyed};
-use crate::lisp::{DclAnswer, DclCall, Reply};
+use crate::lisp::{DclAnswer, DclCall, ImageOp, Reply};
+
+/// An image tile's size in pixels: its width in characters, its height in
+/// lines.
+fn image_size(tile: &Tile) -> egui::Vec2 {
+    let n = |a: &str, d: f32| tile.attr(a).and_then(|v| v.parse::<f32>().ok()).unwrap_or(d);
+    egui::vec2(n("width", 10.0) * 8.0, n("height", 3.0) * 16.0)
+}
 
 /// A dialog open: its tiles, their values and lists, those disabled, and
 /// what's been done in it not yet sent.
@@ -18,6 +25,8 @@ pub(crate) struct OpenDialog {
     lists: HashMap<String, Vec<String>>,
     disabled: HashSet<String>,
     focus: Option<String>,
+    /// What programs drew in image tiles, by key.
+    images: HashMap<String, Vec<ImageOp>>,
     /// start_dialog has shown it.
     pub(crate) running: bool,
     /// done_dialog's status, once it's called.
@@ -44,6 +53,7 @@ impl OpenDialog {
             lists,
             disabled: HashSet::new(),
             focus: None,
+            images: HashMap::new(),
             running: false,
             done: None,
             events: VecDeque::new(),
@@ -87,7 +97,33 @@ impl OpenDialog {
                     });
                 });
             }
-            "button" | "image_button" => {
+            // Drawn as the program drew it; an image button is picked where it's clicked.
+            "image" | "image_button" => {
+                let size = image_size(tile);
+                let sense = if tile.kind == "image_button" { egui::Sense::click() } else { egui::Sense::hover() };
+                let (rect, r) = ui.allocate_exact_size(size, sense);
+                let painter = ui.painter_at(rect);
+                let at = |x: f64, y: f64| rect.min + egui::vec2(x as f32, y as f32);
+                let color = |c: i64| crate::theme::aci(u8::try_from(c.clamp(0, 255)).unwrap_or(7));
+                for op in self.images.get(&key).into_iter().flatten() {
+                    match *op {
+                        ImageOp::Fill { x, y, w, h, color: c } => {
+                            painter.rect_filled(
+                                egui::Rect::from_min_size(at(x, y), egui::vec2(w as f32, h as f32)),
+                                0.0,
+                                color(c),
+                            );
+                        }
+                        ImageOp::Vector { x1, y1, x2, y2, color: c } => {
+                            painter.line_segment([at(x1, y1), at(x2, y2)], egui::Stroke::new(1.0, color(c)));
+                        }
+                    }
+                }
+                if r.clicked() {
+                    self.event(&key, String::new(), 1);
+                }
+            }
+            "button" => {
                 let r = ui.add_enabled(enabled, egui::Button::new(if label.is_empty() { key.clone() } else { label }));
                 if self.focus.as_deref() == Some(&key) {
                     r.request_focus();
@@ -191,14 +227,6 @@ impl OpenDialog {
                     self.values.insert(key.clone(), v.clone());
                     self.event(&key, v, 3);
                 }
-            }
-            "image" => {
-                let (w, h) = (tile.attr("width"), tile.attr("height"));
-                let size = egui::vec2(
-                    w.and_then(|w| w.parse::<f32>().ok()).unwrap_or(10.0) * 8.0,
-                    h.and_then(|h| h.parse::<f32>().ok()).unwrap_or(3.0) * 16.0,
-                );
-                ui.allocate_space(size);
             }
             // text, errtile and the spacers: their value, else their label.
             _ => {
@@ -344,6 +372,19 @@ impl OxidraftApp {
                     }
                 }
                 Some(Reply::Unit)
+            }
+            DclCall::Image(key, ops) => {
+                if let Some(d) = &mut self.lisp.dialog {
+                    d.images.insert(key, ops);
+                }
+                Some(Reply::Unit)
+            }
+            DclCall::Size(key) => {
+                let d = self.lisp.dialog.as_ref();
+                let size = d
+                    .and_then(|d| keyed(&d.tile).into_iter().find(|t| t.key() == Some(key.as_str())).map(image_size))
+                    .unwrap_or_default();
+                text(format!("{},{}", size.x as i64, size.y as i64))
             }
             DclCall::List(key, op, index, items) => {
                 if let Some(d) = &mut self.lisp.dialog {

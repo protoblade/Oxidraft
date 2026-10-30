@@ -124,6 +124,18 @@ pub enum DclCall {
     /// end_list: a list's key, how (1 change, 2 add to, 3 new), the item
     /// changed, the items.
     List(String, i64, Option<usize>, Vec<String>),
+    /// end_image: an image tile's drawing (fill_image and vector_image).
+    Image(String, Vec<ImageOp>),
+    /// dimx_tile and dimy_tile: an image tile's size in pixels.
+    Size(String),
+}
+
+/// What's drawn in a DCL image tile, in its pixels from the top left, in
+/// an AutoCAD color.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImageOp {
+    Fill { x: f64, y: f64, w: f64, h: f64, color: i64 },
+    Vector { x1: f64, y1: f64, x2: f64, y2: f64, color: i64 },
 }
 
 #[derive(Debug)]
@@ -556,6 +568,8 @@ pub struct Lisp {
     actions: HashMap<String, String>,
     /// A DCL list being built: key, how, which item, the items.
     list: Option<(String, i64, Option<usize>, Vec<String>)>,
+    /// A DCL image being drawn: its key and what's drawn.
+    image: Option<(String, Vec<ImageOp>)>,
 }
 
 impl Lisp {
@@ -1350,6 +1364,36 @@ impl Lisp {
                 host.call(Request::Dcl(DclCall::Done(status)));
                 Value::List(vec![Value::Int(0), Value::Int(0)])
             }
+            "START_IMAGE" => {
+                self.image = Some((arg(0).text()?.to_string(), Vec::new()));
+                arg(0)
+            }
+            "FILL_IMAGE" | "VECTOR_IMAGE" => {
+                let n = nums()?;
+                let (Some(img), [a, b, c, d, color]) = (&mut self.image, n.as_slice()) else {
+                    return Err("bad argument: an image's coordinates and color".into());
+                };
+                let color = *color as i64;
+                img.1.push(if name == "FILL_IMAGE" {
+                    ImageOp::Fill { x: *a, y: *b, w: *c, h: *d, color }
+                } else {
+                    ImageOp::Vector { x1: *a, y1: *b, x2: *c, y2: *d, color }
+                });
+                arg(4)
+            }
+            "END_IMAGE" => {
+                if let Some((key, ops)) = self.image.take() {
+                    host.call(Request::Dcl(DclCall::Image(key, ops)));
+                }
+                Value::Nil
+            }
+            "DIMX_TILE" | "DIMY_TILE" => match host.call(Request::Dcl(DclCall::Size(arg(0).text()?.to_string()))) {
+                Reply::Dcl(DclAnswer::Text(t)) => {
+                    let (w, h) = t.split_once(',').unwrap_or(("0", "0"));
+                    Value::Int(if name == "DIMX_TILE" { w } else { h }.parse().unwrap_or(0))
+                }
+                _ => Value::Nil,
+            },
             "TERM_DIALOG" => {
                 host.call(Request::Dcl(DclCall::Term));
                 Value::Nil

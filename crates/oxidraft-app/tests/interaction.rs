@@ -3473,6 +3473,7 @@ fn autolisp_dcl_dialogs() {
             : toggle { key = "loud"; label = "Loud"; }
             : popup_list { key = "size"; label = "Size"; }
             : button { key = "greet"; label = "Greet"; }
+            : image { key = "pic"; width = 10; height = 2; }
             ok_cancel;
         }"#,
     )
@@ -3486,6 +3487,7 @@ fn autolisp_dcl_dialogs() {
   (new_dialog "hello" id)
   (start_list "size") (mapcar 'add_list '("Small" "Large")) (end_list)
   (set_tile "size" "1")
+  (start_image "pic") (fill_image 0 0 (setq w (dimx_tile "pic")) (setq ht (dimy_tile "pic")) 1) (vector_image 0 0 w ht 7) (end_image)
   (action_tile "greet" "(setq greeted (get_tile \"name\")) (set_tile \"name\" \"Done\")")
   (action_tile "accept" "(setq loud (get_tile \"loud\") size (get_tile \"size\")) (done_dialog 1)")
   (setq r (start_dialog))
@@ -3509,6 +3511,8 @@ fn autolisp_dcl_dialogs() {
     h.run();
     let history = h.state_mut().engine_mut().history().to_vec();
     assert!(history.iter().any(|l| l == "status 1 World loud 1 size 1"), "{history:?}");
+    h.state_mut().type_command("(list w ht)");
+    assert_eq!(h.state_mut().engine_mut().history().last().map(String::as_str), Some("(80 32)"), "the image's pixels");
     assert!(h.query_by_label("Greet").is_none(), "the dialog closed");
     // Cancel: status 0.
     let id_src = format!("(setq id (load_dialog \"{}\"))", dcl.display().to_string().replace('\\', "/"));
