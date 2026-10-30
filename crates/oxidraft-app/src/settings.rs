@@ -52,6 +52,8 @@ pub struct Settings {
     /// The classic menu bar (MENUBAR) and the toolbars shown, by name.
     pub menubar: bool,
     pub toolbars: Vec<String>,
+    /// Where toolbars are that aren't docked at the top, by name.
+    pub toolbar_places: Vec<(String, crate::menubar::ToolbarPlace)>,
     /// Menus and toolbars customization files brought (CUILOAD).
     pub menus: Vec<crate::menubar::CustomMenu>,
     pub custom_toolbars: Vec<crate::menubar::CustomToolbar>,
@@ -260,6 +262,7 @@ mod tests {
             }],
             menubar: true,
             toolbars: vec!["Draw".into()],
+            toolbar_places: vec![("Draw".into(), crate::menubar::ToolbarPlace::Float(10.0, 20.0))],
             menus: vec![crate::menubar::CustomMenu {
                 name: "Site".into(),
                 items: vec![crate::menubar::MenuEntry {

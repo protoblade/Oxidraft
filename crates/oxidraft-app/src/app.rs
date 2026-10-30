@@ -1066,8 +1066,8 @@ impl OxidraftApp {
                     }
                 }
                 UiRequest::Workspace(option, name, new) => self.workspace_option(&option, &name, &new),
-                UiRequest::Toolbar(name, show) => {
-                    if let Err(e) = self.show_toolbar(&name, show) {
+                UiRequest::Toolbar(name, option) => {
+                    if let Err(e) = self.toolbar_option(&name, &option) {
                         self.engine.log(e);
                     }
                 }
@@ -1433,6 +1433,9 @@ impl eframe::App for OxidraftApp {
         self.cui_dialog(&ctx);
         self.cui_load_dialog(&ctx);
         self.toolbars_dialog(&ctx);
+        if !self.clean_screen {
+            self.floating_toolbars(&ctx);
+        }
         self.sheet_set_palette(&ctx);
         self.traces_palette(&ctx);
         self.quick_view_layouts(&ctx);

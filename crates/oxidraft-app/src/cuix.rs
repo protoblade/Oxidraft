@@ -406,6 +406,17 @@ pub fn read_customization(data: &[u8], fallback: &str) -> Result<Customization, 
     Ok(Customization { group, commands, panels: placed, shortcuts, menus, toolbars, images })
 }
 
+/// The command a macro starts (`^C^C_LINE` starts LINE), if it starts one
+/// rather than AutoLISP.
+pub(crate) fn macro_command(text: &str) -> Option<String> {
+    let mut rest = text.trim().trim_start_matches('*');
+    while let Some(r) = rest.strip_prefix("^C").or_else(|| rest.strip_prefix("^c")) {
+        rest = r;
+    }
+    let word = rest.split([' ', ';', '\\']).next()?.trim_start_matches(['_', '.', '\'']);
+    (!word.is_empty() && !word.starts_with('(')).then(|| word.to_ascii_uppercase())
+}
+
 /// A macro's stretch up to a pause (or its end) as what's entered: a
 /// space or `;` ends each; the last is entered at the macro's end unless
 /// an Enter or a pause ends it.
@@ -751,6 +762,13 @@ mod tests {
     </RibbonTabSourceCollection>
   </RibbonRoot>
 </CustSection>"#;
+
+    #[test]
+    fn the_command_a_macro_starts() {
+        assert_eq!(macro_command("^C^C_line").as_deref(), Some("LINE"));
+        assert_eq!(macro_command("*^C^C._circle;\\2;").as_deref(), Some("CIRCLE"));
+        assert_eq!(macro_command("^C^C(princ)"), None);
+    }
 
     #[test]
     fn macros_split_at_enters_and_pauses() {

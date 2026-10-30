@@ -463,10 +463,33 @@ impl OxidraftApp {
         if self.custom_command(command).is_some() {
             return self.custom_button(ui, command);
         }
-        let r = match known_tool(command) {
-            Some(t) => {
-                let r = icon_button(ui, t.icon, 16.0, true, t.tip);
-                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t.label.replace('\n', " ")));
+        // The ribbon's icon, or one of the other commands with an icon of
+        // their own.
+        let icon = known_tool(command).map(|t| (t.icon, t.label.replace('\n', " "), t.tip.to_string())).or_else(|| {
+            let icon = match command {
+                "QNEW" | "NEW" => Icon::New,
+                "OPEN" => Icon::Open,
+                "QSAVE" | "SAVE" => Icon::Save,
+                "U" | "UNDO" => Icon::Undo,
+                "REDO" => Icon::Redo,
+                "PLOT" => Icon::Plot,
+                "PREVIEW" => Icon::PlotPreview,
+                "PAN" => Icon::Pan,
+                "ZOOM" => Icon::Zoom,
+                "MATCHPROP" => Icon::MatchProperties,
+                "PROPERTIES" => Icon::Properties,
+                "QUICKCALC" => Icon::Calculator,
+                "LAYER" => Icon::LayerProperties,
+                "TEXT" => Icon::SingleLineText,
+                _ => return None,
+            };
+            let name = command[..1].to_string() + &command[1..].to_ascii_lowercase();
+            Some((icon, name, command_tip(command)))
+        });
+        let r = match icon {
+            Some((icon, label, tip)) => {
+                let r = icon_button(ui, icon, 16.0, true, &tip);
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
                 r
             }
             None => {
@@ -498,16 +521,20 @@ impl OxidraftApp {
     }
 
     /// A CUI panel's command: one of your own with its image (if it has
-    /// one) and name; else the ribbon's own tool (its icon) when it has
-    /// one, else a button with its name.
+    /// one; else the ribbon's icon for the command its macro runs, as
+    /// AutoCAD's own commands show theirs) and name; else the ribbon's own
+    /// tool (its icon) when it has one, else a button with its name.
     fn custom_button(&mut self, ui: &mut Ui, command: &str) {
         if let Some(c) = self.custom_command(command).cloned() {
-            let r = match self.button_image(ui.ctx(), &c.image) {
-                Some(t) => ui.add(egui::Button::image_and_text(
+            let image = self.button_image(ui.ctx(), &c.image);
+            let tool = crate::cuix::macro_command(&c.macro_text).and_then(|m| known_tool(&m));
+            let r = match (image, tool) {
+                (Some(t), _) => ui.add(egui::Button::image_and_text(
                     egui::Image::new(&t).fit_to_exact_size(egui::vec2(16.0, 16.0)),
                     c.name.as_str(),
                 )),
-                None => ui.button(c.name.as_str()),
+                (None, Some(t)) => paint_small_labeled(ui, t.icon, &c.name, true),
+                (None, None) => ui.button(c.name.as_str()),
             };
             if r.on_hover_text(self.button_tip(command)).clicked() {
                 self.run_macro(&c.macro_text);
@@ -1720,23 +1747,26 @@ fn paint_large(ui: &mut Ui, t: &Tool, enabled: bool) -> Response {
 
 /// A small ribbon button: its icon, then its label if it has one.
 fn paint_small(ui: &mut Ui, t: &Tool, enabled: bool) -> Response {
+    paint_small_labeled(ui, t.icon, t.label, enabled)
+}
+
+/// A small button: an icon, and a label beside it.
+fn paint_small_labeled(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> Response {
     let font = FontId::proportional(11.5);
-    let text_w = if t.label.is_empty() {
+    let text_w = if label.is_empty() {
         0.0
     } else {
-        ui.painter().layout_no_wrap(t.label.into(), font.clone(), theme::text()).size().x + 6.0
+        ui.painter().layout_no_wrap(label.into(), font.clone(), theme::text()).size().x + 6.0
     };
-    let (rect, response) = ui.allocate_exact_size(
-        vec2(24.0 + text_w.max(if t.label.is_empty() { 0.0 } else { 46.0 }), 24.0),
-        Sense::click(),
-    );
+    let (rect, response) = ui
+        .allocate_exact_size(vec2(24.0 + text_w.max(if label.is_empty() { 0.0 } else { 46.0 }), 24.0), Sense::click());
     paint_hover(ui, rect, &response, enabled);
     let color = if enabled { theme::text() } else { theme::text_disabled() };
-    let icon = Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0));
-    icons::paint(ui.painter(), icon, t.icon, color, enabled);
-    if !t.label.is_empty() {
-        ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, t.label, font, color);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, t.label));
+    let at = Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0));
+    icons::paint(ui.painter(), at, icon, color, enabled);
+    if !label.is_empty() {
+        ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, color);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     }
     response
 }

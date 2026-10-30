@@ -110,8 +110,8 @@ impl Command for WorkspaceCmd {
     }
 }
 
-/// -TOOLBAR: a toolbar's name (or ALL), then Show or Hide. The app keeps
-/// the toolbars.
+/// -TOOLBAR: a toolbar's name (or ALL), then Show, Hide, a side to dock
+/// it at (Left, Right, Top, Bottom) or Float. The app keeps the toolbars.
 #[derive(Default)]
 pub struct ToolbarCmd {
     name: Option<String>,
@@ -121,7 +121,9 @@ impl Command for ToolbarCmd {
     fn prompt(&self) -> Prompt {
         match self.name {
             None => Prompt::new("Enter toolbar name or [ALL]").with_keywords(&["ALL"]),
-            Some(_) => Prompt::new("Enter an option").with_keywords(&["Show", "Hide"]).with_default("Show"),
+            Some(_) => Prompt::new("Enter an option")
+                .with_keywords(&["Show", "Hide", "Left", "Right", "Top", "Bottom", "Float"])
+                .with_default("Show"),
         }
     }
 
@@ -132,14 +134,14 @@ impl Command for ToolbarCmd {
             (None, Input::Enter) => return Ok(Step::Done),
             (None, _) => return Err("Enter a toolbar's name.".into()),
             (Some(name), Input::Keyword(k)) => {
-                ctx.ui = Some(UiRequest::Toolbar(name.clone(), k != "Hide"));
+                ctx.ui = Some(UiRequest::Toolbar(name.clone(), k.to_string()));
                 return Ok(Step::Done);
             }
             (Some(name), Input::Enter) => {
-                ctx.ui = Some(UiRequest::Toolbar(name.clone(), true));
+                ctx.ui = Some(UiRequest::Toolbar(name.clone(), "Show".into()));
                 return Ok(Step::Done);
             }
-            _ => return Err("Show or Hide?".into()),
+            _ => return Err("Show, Hide, Left, Right, Top, Bottom or Float?".into()),
         }
         Ok(Step::Continue)
     }

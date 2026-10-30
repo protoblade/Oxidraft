@@ -86,6 +86,7 @@ pub fn dgn_bytes(doc: &oxidraft_model::Document) -> Vec<u8> {
     dgn::write_dgn(doc)
 }
 pub use layers::LAYER_MANAGER;
+pub use menubar::ToolbarPlace;
 pub use settings::Settings;
 pub use wblock::{Afterwards, WblockSource};
 

@@ -2,8 +2,9 @@
 //! AutoCAD LT has — File, Edit, View, Insert, Format, Tools, Draw,
 //! Dimension, Modify, Window and Help — each item a command; TOOLBAR lists
 //! the toolbars (Standard, Draw, Modify, Dimension, Layers, Text, Inquiry,
-//! Zoom) to show docked under the ribbon, and -TOOLBAR shows or hides one
-//! by name. A customization file's menus and toolbars (CUILOAD) join them.
+//! Zoom) to show, docked under the ribbon (or at the bottom, left or right)
+//! or floating, and -TOOLBAR shows, hides, docks or floats one by name. A
+//! customization file's menus and toolbars (CUILOAD) join them.
 
 use eframe::egui::{self, Ui};
 use serde::{Deserialize, Serialize};
@@ -435,6 +436,18 @@ pub struct CustomToolbar {
     pub group: String,
 }
 
+/// Where a toolbar is: docked at a side of the drawing area, or floating
+/// with its window's corner here.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub enum ToolbarPlace {
+    #[default]
+    Top,
+    Bottom,
+    Left,
+    Right,
+    Float(f32, f32),
+}
+
 /// The Toolbars dialog (TOOLBAR).
 #[derive(Default)]
 pub(crate) struct ToolbarsDialog;
@@ -482,6 +495,29 @@ impl OxidraftApp {
             }
         }
         self.keep_settings(settings);
+        Ok(())
+    }
+
+    /// -TOOLBAR's options: Show, Hide, a side to dock at, or Float.
+    pub fn toolbar_option(&mut self, name: &str, option: &str) -> Result<(), String> {
+        let show = option != "Hide";
+        self.show_toolbar(name, show)?;
+        let place = match option {
+            "Top" => ToolbarPlace::Top,
+            "Bottom" => ToolbarPlace::Bottom,
+            "Left" => ToolbarPlace::Left,
+            "Right" => ToolbarPlace::Right,
+            "Float" => ToolbarPlace::Float(240.0, 200.0),
+            _ => return Ok(()),
+        };
+        let names: Vec<String> = self
+            .toolbar_names()
+            .into_iter()
+            .filter(|n| name.eq_ignore_ascii_case("ALL") || n.eq_ignore_ascii_case(name.trim()))
+            .collect();
+        for n in names {
+            self.place_toolbar(&n, place);
+        }
         Ok(())
     }
 
@@ -542,60 +578,190 @@ impl OxidraftApp {
         }
     }
 
-    /// The toolbars shown, docked under the ribbon.
-    pub(crate) fn toolbars(&mut self, ui: &mut Ui) {
-        let shown: Vec<String> =
-            self.toolbar_names().into_iter().filter(|n| self.settings.toolbars.iter().any(|s| s == n)).collect();
-        if shown.is_empty() {
-            return;
+    /// Where toolbar `name` is: docked at a side, or floating.
+    pub fn toolbar_place(&self, name: &str) -> ToolbarPlace {
+        self.settings
+            .toolbar_places
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map_or(ToolbarPlace::Top, |(_, p)| *p)
+    }
+
+    /// Docks toolbar `name` at a side, or floats it.
+    pub fn place_toolbar(&mut self, name: &str, place: ToolbarPlace) {
+        let mut settings = self.settings.clone();
+        settings.toolbar_places.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+        if place != ToolbarPlace::Top {
+            settings.toolbar_places.push((name.to_string(), place));
         }
-        let frame = egui::Frame::NONE.fill(theme::ribbon()).inner_margin(egui::Margin::symmetric(6, 2));
-        egui::Panel::top("toolbars").frame(frame).show_separator_line(true).show(ui, |ui| {
-            // In rows as wide as the window, by how wide each was last time.
-            let width_id = |n: &str| egui::Id::unique(("toolbar_width", n.to_string()));
-            let available = ui.available_width();
-            let mut rows: Vec<Vec<String>> = vec![Vec::new()];
-            let mut x = 0.0;
-            for name in shown {
-                let w = ui.ctx().data(|d| d.get_temp::<f32>(width_id(&name))).unwrap_or(0.0);
-                if x > 0.0 && x + w > available {
-                    rows.push(Vec::new());
-                    x = 0.0;
+        self.keep_settings(settings);
+    }
+
+    fn shown_at(&self, side: impl Fn(ToolbarPlace) -> bool) -> Vec<String> {
+        self.toolbar_names()
+            .into_iter()
+            .filter(|n| self.settings.toolbars.iter().any(|s| s == n) && side(self.toolbar_place(n)))
+            .collect()
+    }
+
+    /// A toolbar: its grip (its name as a tip; right-click to dock it at
+    /// a side, float or hide it) and its buttons, in a row or a column.
+    fn toolbar_strip(&mut self, ui: &mut Ui, name: &str, vertical: bool) -> egui::Response {
+        let commands = self.toolbar_commands(name);
+        let mut placed = None;
+        let group = ui.group(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(1.0, 1.0);
+            let strip = |ui: &mut Ui, add: &mut dyn FnMut(&mut Ui)| {
+                if vertical {
+                    ui.vertical(|ui| add(ui));
+                } else {
+                    ui.horizontal(|ui| add(ui));
                 }
-                x += w + 4.0;
-                rows.last_mut().into_iter().for_each(|r| r.push(name.clone()));
-            }
-            for row in rows {
-                ui.horizontal(|ui| {
-                    for name in row {
-                        let commands = self.toolbar_commands(&name);
-                        let group = ui.group(|ui| {
-                            ui.spacing_mut().item_spacing.x = 1.0;
-                            ui.horizontal(|ui| {
-                                // Its grip: two short lines, its name as a tip.
-                                let (rect, r) = ui.allocate_exact_size(egui::vec2(6.0, 20.0), egui::Sense::hover());
-                                for x in [rect.left() + 1.5, rect.left() + 4.5] {
-                                    ui.painter().line_segment(
-                                        [egui::pos2(x, rect.top() + 3.0), egui::pos2(x, rect.bottom() - 3.0)],
-                                        egui::Stroke::new(1.0, theme::text_dim()),
-                                    );
-                                }
-                                r.on_hover_text(&name);
-                                for c in &commands {
-                                    if c.is_empty() {
-                                        ui.add_space(6.0);
-                                    } else {
-                                        self.toolbar_button(ui, c);
-                                    }
-                                }
-                            })
-                        });
-                        let w = group.response.rect.width();
-                        ui.ctx().data_mut(|d| d.insert_temp(width_id(&name), w));
+            };
+            strip(ui, &mut |ui: &mut Ui| {
+                let size = if vertical { egui::vec2(20.0, 6.0) } else { egui::vec2(6.0, 20.0) };
+                let (rect, r) = ui.allocate_exact_size(size, egui::Sense::click());
+                let stroke = egui::Stroke::new(1.0, theme::text_dim());
+                for k in [1.5, 4.5] {
+                    let line = if vertical {
+                        [egui::pos2(rect.left() + 3.0, rect.top() + k), egui::pos2(rect.right() - 3.0, rect.top() + k)]
+                    } else {
+                        [
+                            egui::pos2(rect.left() + k, rect.top() + 3.0),
+                            egui::pos2(rect.left() + k, rect.bottom() - 3.0),
+                        ]
+                    };
+                    ui.painter().line_segment(line, stroke);
+                }
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{name} toolbar")));
+                let r = r.on_hover_text(name);
+                r.context_menu(|ui| {
+                    for (label, place) in [
+                        ("Dock at Top", ToolbarPlace::Top),
+                        ("Dock at Bottom", ToolbarPlace::Bottom),
+                        ("Dock at Left", ToolbarPlace::Left),
+                        ("Dock at Right", ToolbarPlace::Right),
+                        ("Float", ToolbarPlace::Float(240.0, 200.0)),
+                    ] {
+                        if ui.button(label).clicked() {
+                            placed = Some(Some(place));
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Hide").clicked() {
+                        placed = Some(None);
+                        ui.close();
                     }
                 });
-            }
+                for c in &commands {
+                    if c.is_empty() {
+                        ui.add_space(6.0);
+                    } else {
+                        self.toolbar_button(ui, c);
+                    }
+                }
+            });
         });
+        match placed {
+            Some(Some(place)) => self.place_toolbar(name, place),
+            Some(None) => {
+                let _ = self.show_toolbar(name, false);
+            }
+            None => {}
+        }
+        group.response
+    }
+
+    /// The toolbars docked at the top (under the ribbon) or the bottom, in
+    /// rows as wide as the window, by how wide each was last time.
+    fn toolbar_rows(&mut self, ui: &mut Ui, shown: Vec<String>) {
+        let width_id = |n: &str| egui::Id::unique(("toolbar_width", n.to_string()));
+        let available = ui.available_width();
+        let mut rows: Vec<Vec<String>> = vec![Vec::new()];
+        let mut x = 0.0;
+        for name in shown {
+            let w = ui.ctx().data(|d| d.get_temp::<f32>(width_id(&name))).unwrap_or(0.0);
+            if x > 0.0 && x + w > available {
+                rows.push(Vec::new());
+                x = 0.0;
+            }
+            x += w + 4.0;
+            rows.last_mut().into_iter().for_each(|r| r.push(name.clone()));
+        }
+        for row in rows {
+            ui.horizontal(|ui| {
+                for name in row {
+                    let w = self.toolbar_strip(ui, &name, false).rect.width();
+                    ui.ctx().data_mut(|d| d.insert_temp(width_id(&name), w));
+                }
+            });
+        }
+    }
+
+    /// The toolbars shown that are docked: at the top under the ribbon,
+    /// at the bottom, or in columns at the left or right.
+    pub(crate) fn toolbars(&mut self, ui: &mut Ui) {
+        let frame = egui::Frame::NONE.fill(theme::ribbon()).inner_margin(egui::Margin::symmetric(6, 2));
+        let top = self.shown_at(|p| p == ToolbarPlace::Top);
+        if !top.is_empty() {
+            egui::Panel::top("toolbars")
+                .frame(frame)
+                .show_separator_line(true)
+                .show(ui, |ui| self.toolbar_rows(ui, top));
+        }
+        let bottom = self.shown_at(|p| p == ToolbarPlace::Bottom);
+        if !bottom.is_empty() {
+            egui::Panel::bottom("toolbars_bottom")
+                .frame(frame)
+                .show_separator_line(true)
+                .show(ui, |ui| self.toolbar_rows(ui, bottom));
+        }
+        let side = egui::Frame::NONE.fill(theme::ribbon()).inner_margin(egui::Margin::symmetric(2, 6));
+        for (place, id) in [(ToolbarPlace::Left, "toolbars_left"), (ToolbarPlace::Right, "toolbars_right")] {
+            let shown = self.shown_at(|p| p == place);
+            if shown.is_empty() {
+                continue;
+            }
+            let panel = if place == ToolbarPlace::Left { egui::Panel::left(id) } else { egui::Panel::right(id) };
+            panel.frame(side).resizable(false).show_separator_line(true).show(ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    for name in shown {
+                        self.toolbar_strip(ui, &name, true);
+                    }
+                });
+            });
+        }
+    }
+
+    /// The floating toolbars, each in a window of its own; closing one
+    /// hides it.
+    pub(crate) fn floating_toolbars(&mut self, ctx: &egui::Context) {
+        for name in self.shown_at(|p| matches!(p, ToolbarPlace::Float(..))) {
+            let ToolbarPlace::Float(x, y) = self.toolbar_place(&name) else { continue };
+            let mut open = true;
+            let shown = egui::Window::new(&name)
+                .id(egui::Id::unique(("floating_toolbar", name.clone())))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .auto_sized()
+                .default_pos([x, y])
+                .constrain_to(self.dialog_area(ctx))
+                .show(ctx, |ui| {
+                    self.toolbar_strip(ui, &name, false);
+                });
+            if !open {
+                let _ = self.show_toolbar(&name, false);
+            } else if let Some(r) = shown
+                && r.response.drag_stopped()
+            {
+                let at = r.response.rect.min;
+                if self.toolbar_place(&name) != ToolbarPlace::Float(at.x, at.y) {
+                    self.place_toolbar(&name, ToolbarPlace::Float(at.x, at.y));
+                }
+            }
+        }
     }
 
     /// TOOLBAR: the toolbars, each to show or hide.

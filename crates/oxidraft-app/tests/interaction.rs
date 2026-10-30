@@ -3018,6 +3018,19 @@ fn menu_bar_and_toolbars() {
     assert_eq!(h.state_mut().engine_mut().active_name(), Some("ZOOM"));
     h.key_press(Key::Escape);
     h.run_steps(2);
+    // Docked at the left; floating, in a window of its own that closes.
+    type_all(&mut h, &["-toolbar", "zoom", "left"]);
+    h.run_steps(2);
+    assert_eq!(h.state().toolbar_place("Zoom"), oxidraft_app::ToolbarPlace::Left);
+    h.get_by_label("Zoom W").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("ZOOM"), "its button still works");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    type_all(&mut h, &["-toolbar", "inquiry", "float"]);
+    h.run_steps(2);
+    assert!(h.query_by_label("Inquiry").is_some(), "its window");
+    assert!(matches!(h.state().toolbar_place("Inquiry"), oxidraft_app::ToolbarPlace::Float(..)));
     type_all(&mut h, &["-toolbar", "all", "hide"]);
     assert!(h.state().toolbars_shown().is_empty());
     type_all(&mut h, &["-toolbar", "nothing", "show"]);
