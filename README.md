@@ -8,7 +8,7 @@ snaps, polar tracking, dynamic input, grips and window/crossing selection, and
 DWG and DXF files. The goal is to cover the commands that make up most day-to-day 2D
 work (LINE, PLINE, OFFSET, TRIM, FILLET, LAYER, DIM, HATCH…).
 
-> Status: early prototype (v0.10). Expect breaking changes.
+> Status: early prototype (v0.11). Expect breaking changes.
 
 ## What works today
 
@@ -145,7 +145,7 @@ Adding a command is usually one new file plus one entry in `COMMANDS`.
 
 ## Roadmap
 
-- **v0.11:** dynamic block authoring, DWFx and DGN underlays, tables linked to spreadsheets
+- **v0.12:** the forms saved for AutoCAD with `NATIVESAVE` (and DGN V8 files) tried in AutoCAD and MicroStation, and saved by default; handwriting read on Windows
 
 ## Contributing
 
