@@ -122,7 +122,9 @@ fn keep_known_xdata(cad: &mut CadDocument) {
                     "OXIDRAFT_DYN",
                 ]
                 .contains(&r.application_name.as_str())
-                    || dimension && ["ACAD", "OXIDRAFT_DIM"].contains(&r.application_name.as_str())
+                    || dimension
+                        && ["ACAD", "OXIDRAFT_DIM", "ACAD_DSTYLE_DIMJAG_POSITION"]
+                            .contains(&r.application_name.as_str())
             })
             .cloned()
             .collect();
@@ -1074,6 +1076,32 @@ mod tests {
         for version in [Version::R2018, Version::R2000] {
             check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
         }
+        // AutoCAD's own jog data is there; a dimension with only that (as
+        // AutoCAD writes them) comes in jogged.
+        let mut cad = DxfReader::from_reader(Cursor::new(dxf)).and_then(|r| r.read()).unwrap();
+        let mut found = false;
+        for e in cad.entities_mut() {
+            let data = &mut e.common_mut().extended_data;
+            if let Some(r) = data.get_record("ACAD_DSTYLE_DIMJAG_POSITION") {
+                let values: Vec<String> = r.values.iter().map(|v| format!("{v:?}")).collect();
+                assert!(
+                    values[0].contains("387") && values[2].contains("389") && values[3].contains("30"),
+                    "{values:?}"
+                );
+                found = true;
+                let jag = r.clone();
+                *data = Default::default();
+                data.add_record(jag);
+            }
+        }
+        assert!(found, "ACAD_DSTYLE_DIMJAG_POSITION written");
+        let autocad = DxfWriter::new(&cad).write_to_vec().unwrap();
+        let back = read_dxf(&autocad).unwrap().document;
+        let jog = back.entities().find_map(|e| match &e.geometry {
+            Geometry::Dimension { extra, .. } => extra.jog,
+            _ => None,
+        });
+        assert_eq!(jog, Some(Point::new(30.0, 10.0)));
     }
 
     /// A multileader as AutoCAD makes it, without Oxidraft's data: one

@@ -1,5 +1,7 @@
 //! What Oxidraft adds to a linear dimension, in its XDATA: a style
-//! override as AutoCAD keeps DIMOVERRIDE's (ACAD DSTYLE), and its breaks,
+//! override as AutoCAD keeps DIMOVERRIDE's (ACAD DSTYLE), a jog as AutoCAD
+//! keeps DIMJOGLINE's (ACAD_DSTYLE_DIMJAG_POSITION: 387, 3, 389 and the
+//! jog's point, as Autodesk's developer guide gives it), and its breaks,
 //! jog and inspection data (OXIDRAFT_DIM).
 
 use dxf::{XData, XDataItem};
@@ -8,6 +10,9 @@ use oxidraft_model::Geometry;
 use oxidraft_model::annotation::{DimExtra, DimStyle, Inspection, InspectionShape};
 
 pub(crate) const APP: &str = "OXIDRAFT_DIM";
+
+/// AutoCAD's application for a linear dimension's jog.
+pub(crate) const JAG_APP: &str = "ACAD_DSTYLE_DIMJAG_POSITION";
 
 /// The dimension variables an override sets, by their DXF group codes.
 const DIMTXT: i16 = 140;
@@ -39,6 +44,15 @@ pub(crate) fn xdata(g: &Geometry) -> Vec<XData> {
         vars.extend([XDataItem::Integer(DIMDEC), XDataItem::Integer(s.decimals as i16)]);
         let items = vec![XDataItem::Str("DSTYLE".into()), XDataItem::ControlGroup(vars)];
         out.push(XData { application_name: "ACAD".into(), items });
+    }
+    if let Some(j) = extra.jog {
+        let items = vec![
+            XDataItem::Integer(387),
+            XDataItem::Integer(3),
+            XDataItem::Integer(389),
+            XDataItem::ThreeReals(j.x, j.y, 0.0),
+        ];
+        out.push(XData { application_name: JAG_APP.into(), items });
     }
     let mut items = Vec::new();
     for (a, b) in &extra.breaks {
@@ -100,6 +114,16 @@ pub(crate) fn read(x_data: &[XData], base: DimStyle, extra: &mut DimExtra) {
                 }
                 if any {
                     extra.style = Some(style);
+                }
+            }
+            // AutoCAD's jog: its point.
+            JAG_APP => {
+                if let Some(p) = x.items.iter().find_map(|i| match i {
+                    XDataItem::ThreeReals(x, y, _) => Some(Point::new(*x, *y)),
+                    XDataItem::WorldSpacePosition(p) => Some(Point::new(p.x, p.y)),
+                    _ => None,
+                }) {
+                    extra.jog = Some(p);
                 }
             }
             APP => {

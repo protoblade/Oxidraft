@@ -1209,7 +1209,11 @@ fn build(doc: &Document) -> Built {
     let dims: Vec<_> = doc.all_entities().flat_map(|e| dim_xdata::xdata(&e.geometry)).collect();
     for x in &dims {
         if !apps.contains(&x.application_name.as_str()) {
-            apps.push(if x.application_name == "ACAD" { "ACAD" } else { dim_xdata::APP });
+            apps.push(match x.application_name.as_str() {
+                "ACAD" => "ACAD",
+                dim_xdata::JAG_APP => dim_xdata::JAG_APP,
+                _ => dim_xdata::APP,
+            });
         }
     }
     for name in apps {
