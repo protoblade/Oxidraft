@@ -3,6 +3,8 @@
 //! typeface, turned as it's drawn, and pictures as bitmaps over their
 //! bounds; other programs scale it as they place it.
 
+use oxidraft_geom::Point;
+
 use crate::sheet::{Item, Rgb, Sheet};
 
 /// A metafile being written: its records, and the largest one's size.
@@ -17,6 +19,33 @@ struct Wmf {
 
 /// The most pixels a side a picture keeps: metafiles stay a sensible size.
 const MOST_PIXELS: u32 = 2000;
+
+/// A picture turned or slanted over the parallelogram from `origin` along
+/// `u` and `v`, made again upright over its bounds (`bounds` min, its
+/// size), the rest white: metafiles don't turn bitmaps.
+fn upright(p: &crate::Picture, origin: Point, u: Point, v: Point, min: Point, size: Point) -> crate::Picture {
+    // As fine as the picture is along its sides, up to MOST_PIXELS.
+    let k = (f64::from(p.width) / u.length().max(1e-9)).max(f64::from(p.height) / v.length().max(1e-9));
+    let k = k.min(f64::from(MOST_PIXELS) / size.x.max(size.y).max(1e-9));
+    let (w, h) = (((size.x * k).ceil() as u32).max(1), ((size.y * k).ceil() as u32).max(1));
+    let det = u.x * v.y - u.y * v.x;
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let q = Point::new(min.x + (f64::from(x) + 0.5) / k, min.y + size.y - (f64::from(y) + 0.5) / k) - origin;
+            // Where it is along u (s) and v (t).
+            let (s, t) = ((q.x * v.y - q.y * v.x) / det, (u.x * q.y - u.y * q.x) / det);
+            if det.abs() < 1e-12 || !(0.0..1.0).contains(&s) || !(0.0..1.0).contains(&t) {
+                rgba.extend([255, 255, 255, 0]);
+                continue;
+            }
+            let (sx, sy) = ((s * f64::from(p.width)) as u32, ((1.0 - t) * f64::from(p.height)) as u32);
+            let i = ((sy.min(p.height - 1) * p.width + sx.min(p.width - 1)) * 4) as usize;
+            rgba.extend_from_slice(&p.rgba[i..i + 4]);
+        }
+    }
+    crate::Picture { width: w, height: h, rgba }
+}
 
 /// A device-independent bitmap of the picture: 24-bit, rows bottom to top,
 /// over white; scaled down to fit [`MOST_PIXELS`].
@@ -183,6 +212,14 @@ impl Wmf {
                         corners.iter().fold((f64::MAX, f64::MIN), |(a, b), c| (a.min(c.x), b.max(c.x)));
                     let (min_y, max_y) =
                         corners.iter().fold((f64::MAX, f64::MIN), |(a, b), c| (a.min(c.y), b.max(c.y)));
+                    // Turned, slanted or flipped: made upright over its bounds.
+                    let square = u.y.abs() < 1e-9 && v.x.abs() < 1e-9 && u.x > 0.0 && v.y > 0.0;
+                    let p = if square {
+                        p
+                    } else {
+                        let (min, size) = (Point::new(min_x, min_y), Point::new(max_x - min_x, max_y - min_y));
+                        std::sync::Arc::new(upright(&p, *origin, *u, *v, min, size))
+                    };
                     let (w, h, bits) = dib(&p, *gray);
                     let (left, top) = (self.x(min_x), self.y(max_y));
                     let width = (self.x(max_x) as i16).saturating_sub(left as i16) as u16;
@@ -313,5 +350,27 @@ mod tests {
         let at = data.windows(4).position(|w| w == [40, 0, 0, 0]).unwrap();
         assert_eq!(&data[at + 4..at + 12], &[2, 0, 0, 0, 1, 0, 0, 0]);
         assert_eq!(&data[at + 40..at + 48], &[0, 0, 255, 255, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_turned_picture_made_upright() {
+        // Red then blue left to right, turned a quarter: red at the bottom.
+        let p = crate::Picture { width: 2, height: 1, rgba: vec![255, 0, 0, 255, 0, 0, 255, 255] };
+        let out = upright(
+            &p,
+            Point::new(10.0, 0.0),
+            Point::new(0.0, 10.0),
+            Point::new(-5.0, 0.0),
+            Point::new(5.0, 0.0),
+            Point::new(5.0, 10.0),
+        );
+        let px = |x: u32, y: u32| {
+            let i = ((y * out.width + x) * 4) as usize;
+            [out.rgba[i], out.rgba[i + 1], out.rgba[i + 2]]
+        };
+        let (w, h) = (out.width, out.height);
+        assert!(h > w, "standing up: {w} by {h}");
+        assert_eq!(px(w / 2, h - 1), [255, 0, 0], "red at the bottom");
+        assert_eq!(px(w / 2, 0), [0, 0, 255], "blue at the top");
     }
 }

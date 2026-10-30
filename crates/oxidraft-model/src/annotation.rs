@@ -196,6 +196,10 @@ pub struct RunFormat {
     /// `\p`: the paragraph's first line's indent (from the left indent)
     /// and its left indent, in drawing units.
     pub indent: (f64, f64),
+    /// `\p…t…;`: its tab stops, in drawing units from the left.
+    pub tabs: Vec<f64>,
+    /// `\pq…;`: how its lines align: `l`eft, `c`enter or `r`ight.
+    pub align: char,
 }
 
 impl Default for RunFormat {
@@ -213,6 +217,8 @@ impl Default for RunFormat {
             oblique: None,
             tracking: 1.0,
             indent: (0.0, 0.0),
+            tabs: Vec::new(),
+            align: 'l',
         }
     }
 }
@@ -234,7 +240,7 @@ impl RunFormat {
 /// Whether MTEXT `s` changes font, height, color or lines inline, so it
 /// can't be shown in one format.
 pub fn is_formatted(s: &str) -> bool {
-    ["\\f", "\\F", "\\H", "\\C", "\\L", "\\O", "\\K", "\\W", "\\Q", "\\T", "\\S", "\\p"]
+    ["\\f", "\\F", "\\H", "\\C", "\\L", "\\O", "\\K", "\\W", "\\Q", "\\T", "\\S", "\\p", "^I", "\t"]
         .iter()
         .any(|code| s.contains(code))
 }
@@ -276,6 +282,12 @@ pub fn mtext_runs(s: &str, height: f64) -> Vec<Run> {
                 continue;
             }
             '\\' => {}
+            // `^I` is a tab.
+            '^' if chars.peek() == Some(&'I') => {
+                chars.next();
+                push(&mut runs, &format, "\t");
+                continue;
+            }
             c => {
                 push(&mut runs, &format, c.encode_utf8(&mut [0; 4]));
                 continue;
@@ -362,16 +374,28 @@ pub fn mtext_runs(s: &str, height: f64) -> Vec<Run> {
                     }
                 }
             }
-            // Paragraph indents: `i` the first line's, `l` the left one.
+            // Paragraphs: `i` the first line's indent, `l` the left one, `t`
+            // the tab stops (more numbers after it are stops too), `q` how
+            // its lines align.
             Some('p') => {
+                let mut in_tabs = false;
                 for item in until_semicolon(&mut chars).trim_start_matches('x').split(',') {
+                    let item = item.trim();
+                    if in_tabs && let Ok(v) = item.parse::<f64>() {
+                        format.tabs.push(v);
+                        continue;
+                    }
+                    in_tabs = false;
                     let (code, v) = item.split_at(item.len().min(1));
-                    if let Ok(v) = v.parse::<f64>() {
-                        match code {
-                            "i" => format.indent.0 = v,
-                            "l" => format.indent.1 = v,
-                            _ => {}
+                    match (code, v.parse::<f64>()) {
+                        ("i", Ok(v)) => format.indent.0 = v,
+                        ("l", Ok(v)) => format.indent.1 = v,
+                        ("t", Ok(v)) => {
+                            format.tabs = vec![v];
+                            in_tabs = true;
                         }
+                        ("q", _) => format.align = v.chars().next().unwrap_or('l'),
+                        _ => {}
                     }
                 }
             }

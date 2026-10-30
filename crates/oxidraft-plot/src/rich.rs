@@ -127,8 +127,9 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
                 }
                 let run = chars.get(k).map_or(0, |x| x.1);
                 k += 1;
+                // A tab is a piece of its own, to go to the next stop.
                 match out.last_mut() {
-                    Some((text, r)) if *r == run => text.push(c),
+                    Some((text, r)) if *r == run && c != '\t' && text != "\t" => text.push(c),
                     _ => out.push((c.to_string(), run)),
                 }
             }
@@ -161,9 +162,25 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
         let (first, left) = line.first().map_or((0.0, 0.0), |(_, r)| runs[*r].format.indent);
         left + if starts.get(i).copied().unwrap_or(false) { first } else { 0.0 }
     };
-    let line_width = |line: &[(String, usize)]| line.iter().map(|(t, r)| piece_width(t, *r)).sum::<f64>();
+    // Where a line's pieces start (a tab going to the next stop: its own,
+    // else every 4 heights), and how long it is.
+    let layout_line = |i: usize, line: &[(String, usize)]| {
+        let mut x = indent(i, line);
+        let mut starts = Vec::with_capacity(line.len());
+        for (t, r) in line {
+            starts.push(x);
+            if t == "\t" {
+                let every = 4.0 * height;
+                let stop = runs[*r].format.tabs.iter().copied().find(|s| *s > x + 1e-9);
+                x = stop.unwrap_or(((x / every).floor() + 1.0) * every);
+            } else {
+                x += piece_width(t, *r);
+            }
+        }
+        (starts, x)
+    };
     let tallest = |line: &[(String, usize)]| line.iter().map(|(_, r)| runs[*r].format.height).fold(1.0, f64::max);
-    let widest = lines.iter().enumerate().map(|(i, l)| indent(i, l) + line_width(l)).fold(0.0, f64::max);
+    let widest = lines.iter().enumerate().map(|(i, l)| layout_line(i, l).1).fold(0.0, f64::max);
     // Baselines below the top: a tall line pushes those under it down.
     let step = if style_shx.is_some() { LINE_SPACING } else { style_face.row_height() / 0.7 };
     let mut baselines = Vec::with_capacity(lines.len());
@@ -178,8 +195,18 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
     let (fx, fy) = attach.fractions();
     let mut out = Vec::new();
     for (i, (line, base)) in lines.iter().zip(&baselines).enumerate() {
-        let mut x = -fx * widest + indent(i, line);
-        for (text, r) in line {
+        let (xs, length) = layout_line(i, line);
+        // Centered or right aligned within the widest line.
+        let aligned = match line.first().map_or('l', |(_, r)| runs[*r].format.align) {
+            'c' => (widest - length) / 2.0,
+            'r' => widest - length,
+            _ => 0.0,
+        };
+        for ((text, r), at) in line.iter().zip(&xs) {
+            if text == "\t" {
+                continue;
+            }
+            let x = -fx * widest + aligned + at;
             let f = &runs[*r].format;
             let w = piece_width(text, *r);
             let start = *position + Point::new(x, fy * span - base).rotated_about(Point::ORIGIN, *rotation);
@@ -219,7 +246,6 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
                         part("", 0.0, 0.6 * h, 1.0, w, true),
                     ]),
                 }
-                x += w;
                 continue;
             }
             let piece = Piece {
@@ -260,7 +286,6 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
                     cx += cw;
                 }
             }
-            x += w;
         }
     }
     out
@@ -316,5 +341,20 @@ mod tests {
         assert!((indented[0].at.x - 4.0).abs() < 1e-9, "{indented:?}");
         let second = indented.iter().find(|p| p.text == "Second").unwrap();
         assert!((second.at.x - 4.0).abs() < 1e-9, "a new paragraph's first line, indented too");
+    }
+
+    #[test]
+    fn tab_stops_and_centered_paragraphs() {
+        // A stop at 30: the second column starts there; with none, every 4 heights (8).
+        let pieces = formatted_pieces(&text("\\pt30;A^IB\\PC^ID"), "", "");
+        let at = |t: &str| pieces.iter().find(|p| p.text == t).unwrap().at.x;
+        assert!((at("B") - 30.0).abs() < 1e-9, "{pieces:?}");
+        assert!((at("D") - 30.0).abs() < 1e-9, "the stop holds for the paragraph after");
+        let plain = formatted_pieces(&text("\\pqc;A^IB"), "", "");
+        assert!((plain.iter().find(|p| p.text == "B").unwrap().at.x - 8.0).abs() < 1e-9);
+        // Centered: a short line between the ends of a longer one.
+        let centered = formatted_pieces(&text("\\pqc;WWWWWW\\Pi"), "", "");
+        let (wide, short) = (&centered[0], &centered[1]);
+        assert!(short.at.x > wide.at.x && short.at.x + short.width < wide.at.x + wide.width, "{centered:?}");
     }
 }
