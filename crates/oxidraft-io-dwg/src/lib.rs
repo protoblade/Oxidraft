@@ -14,6 +14,7 @@ use oxidraft_model::Document;
 pub use acadrust::sheet_set;
 
 mod dimassoc;
+mod dynblocks;
 mod fields;
 mod groups;
 mod layouts;
@@ -142,6 +143,7 @@ fn imported_from(cad: &mut CadDocument) -> Result<Imported, Error> {
     dimassoc::restore(cad, &mut imported);
     annotative_styles(cad, &mut imported.document);
     mtext_layout(cad, &mut imported);
+    dynblocks::import(cad, &mut imported);
     Ok(imported)
 }
 
@@ -203,6 +205,11 @@ pub fn read_dxf(bytes: &[u8]) -> Result<Imported, Error> {
         && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
     {
         mtext_layout(&cad, &mut imported);
+    }
+    if bytes.windows(18).any(|w| w == b"ACAD_ENHANCEDBLOCK")
+        && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
+    {
+        dynblocks::import(&cad, &mut imported);
     }
     Ok(imported)
 }

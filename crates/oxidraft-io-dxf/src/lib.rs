@@ -38,6 +38,9 @@ pub struct Imported {
     pub skipped: usize,
     /// The objects of model and paper space by their DXF handles.
     pub handles: HashMap<u64, EntityId>,
+    /// The objects in blocks by their DXF handles: the block's name and
+    /// the object's place in it.
+    pub block_handles: HashMap<u64, (String, usize)>,
 }
 
 fn to_dxf(p: Point) -> DxfPoint {
@@ -1952,6 +1955,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         let n = n.to_ascii_lowercase();
         n.starts_with("*model_space") || n.starts_with("*paper_space")
     };
+    let mut block_handles = HashMap::new();
     for b in drawing.blocks().filter(|b| !is_space(&b.name)) {
         // Attached drawings keep their path; whoever opens this reads them.
         // The blocks they bring along come from them too.
@@ -1978,6 +1982,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
                 Some(mut geometry) => {
                     style_attributes(&mut geometry, None, &e.common.layer);
                     attach_clip(&mut geometry, e, &raw.clips);
+                    block_handles.insert(e.common.handle.0, (b.name.clone(), entities.len()));
                     entities.push(BlockEntity {
                         layer: e.common.layer.clone(),
                         color: from_dxf_color(&e.common.color),
@@ -1990,6 +1995,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
             }
         }
         for h in raw.hatches.iter().filter(|h| h.block.as_deref() == Some(b.name.as_str())) {
+            block_handles.insert(h.handle, (b.name.clone(), entities.len()));
             entities.push(BlockEntity {
                 layer: h.layer.clone(),
                 color: h.color,
@@ -2227,7 +2233,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
     read_settings(&mut doc, &raw.layouts);
     // A freshly opened file starts with an empty undo history.
     doc.forget_history();
-    Imported { document: doc, skipped, handles: ids_by_handle }
+    Imported { document: doc, skipped, handles: ids_by_handle, block_handles }
 }
 
 /// Sets imported attributes' layer and color: from the file when known,
