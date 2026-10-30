@@ -180,6 +180,12 @@ pub struct RunFormat {
     pub underline: bool,
     pub overline: bool,
     pub strike: bool,
+    /// `\W`: the width factor, `\Q`: the obliquing angle (degrees); `None`
+    /// for the object's.
+    pub width_factor: Option<f64>,
+    pub oblique: Option<f64>,
+    /// `\T`: the space between characters, as a multiple of the usual.
+    pub tracking: f64,
 }
 
 impl Default for RunFormat {
@@ -193,6 +199,9 @@ impl Default for RunFormat {
             underline: false,
             overline: false,
             strike: false,
+            width_factor: None,
+            oblique: None,
+            tracking: 1.0,
         }
     }
 }
@@ -214,7 +223,7 @@ impl RunFormat {
 /// Whether MTEXT `s` changes font, height, color or lines inline, so it
 /// can't be shown in one format.
 pub fn is_formatted(s: &str) -> bool {
-    ["\\f", "\\F", "\\H", "\\C", "\\L", "\\O", "\\K"].iter().any(|code| s.contains(code))
+    ["\\f", "\\F", "\\H", "\\C", "\\L", "\\O", "\\K", "\\W", "\\Q", "\\T"].iter().any(|code| s.contains(code))
 }
 
 /// MTEXT's text in runs of one format each: fonts (`\f…;`, `\F…;`),
@@ -310,7 +319,26 @@ pub fn mtext_runs(s: &str, height: f64) -> Vec<Run> {
                     _ => None,
                 };
             }
-            Some('A' | 'c' | 'Q' | 'T' | 'W' | 'p') => {
+            Some(code @ ('W' | 'Q' | 'T')) => {
+                let value = until_semicolon(&mut chars);
+                let (number, relative) = match value.strip_suffix(['x', 'X']) {
+                    Some(n) => (n, true),
+                    None => (value.as_str(), false),
+                };
+                if let Ok(v) = number.trim().parse::<f64>() {
+                    match code {
+                        'W' if v > 0.0 => {
+                            format.width_factor =
+                                Some(if relative { format.width_factor.unwrap_or(1.0) * v } else { v });
+                        }
+                        'Q' => format.oblique = Some(v.clamp(-85.0, 85.0)),
+                        // AutoCAD's tracking runs from 0.75 to 4.
+                        'T' => format.tracking = (if relative { format.tracking * v } else { v }).clamp(0.75, 4.0),
+                        _ => {}
+                    }
+                }
+            }
+            Some('A' | 'c' | 'p') => {
                 until_semicolon(&mut chars);
             }
             Some('L') => format.underline = true,
@@ -1535,6 +1563,10 @@ mod tests {
         assert!((runs[3].format.height - 2.0).abs() < 1e-9, "5 is twice 2.5");
         assert!(runs[3].format.underline && !runs[4].format.underline);
         assert!(is_formatted("{\\fArial;x}") && !is_formatted("a\\Pb"));
+        let runs = mtext_runs("a{\\W0.5;\\Q15;\\T2;b}c", 1.0);
+        let f = &runs[1].format;
+        assert_eq!((f.width_factor, f.oblique, f.tracking), (Some(0.5), Some(15.0), 2.0));
+        assert_eq!(runs[2].format, RunFormat::default());
     }
 
     #[test]

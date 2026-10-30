@@ -103,15 +103,6 @@ pub(crate) fn inline_fonts(doc: &oxidraft_model::Document) -> Vec<String> {
     out
 }
 
-/// The font a piece of MTEXT shows in: its bold or italic face if there's
-/// one, else its family, else the style's font. Also whether egui is to
-/// slant it, for italic asked of a face that isn't.
-pub(crate) fn run_font(format: &oxidraft_model::annotation::RunFormat, style_font: &str) -> (String, bool) {
-    let named = format.font_name().filter(|n| !typeface(n).is_default());
-    let found = named.clone().or_else(|| format.font.clone().filter(|n| !typeface(n).is_default()));
-    (found.unwrap_or_else(|| style_font.to_string()), format.italic && named.is_none())
-}
-
 /// A line's width in the font text shows in, in multiples of its height
 /// (capitals are 0.7 of a TrueType font's em; an SHX font's are 1).
 pub(crate) fn measure(font: &str, line: &str) -> Option<f64> {

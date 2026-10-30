@@ -1112,9 +1112,14 @@ impl OxidraftApp {
         if px < 1.5 {
             return;
         }
-        // An SHX font's text: its strokes, as AutoCAD draws them.
         let style = self.doc.text_style(&look.style);
         let font = style.map_or("", |s| s.font.as_str());
+        // MTEXT that changes its look inline: piece by piece, where plots put them.
+        if oxidraft_model::annotation::is_formatted(content) {
+            self.draw_formatted(painter, rect, g, font, style.map_or("", |s| s.big_font.as_str()), stroke);
+            return;
+        }
+        // An SHX font's text: its strokes, as AutoCAD draws them.
         if let Some(shx) = oxidraft_plot::shx::shx_font(font) {
             let big = style.and_then(|s| oxidraft_plot::shx::shx_font(&s.big_font));
             for s in oxidraft_plot::shx::text_strokes(shx, big, g) {
@@ -1126,12 +1131,8 @@ impl OxidraftApp {
         // Few distinct sizes keep egui's glyph cache small while zooming.
         let size = 2f32.powf((px.min(400.0).log2() * 8.0).round() / 8.0);
         let wrap = if *width > 0.0 { (*width * self.view.scale) as f32 } else { f32::INFINITY };
-        let galley = if oxidraft_model::annotation::is_formatted(content) {
-            painter.layout_job(formatted_job(painter.ctx(), content, *height, font, size, stroke.color, wrap))
-        } else {
-            let text = oxidraft_model::annotation::plain_text(content);
-            painter.layout(text, crate::fonts::font_id(painter.ctx(), font, size), stroke.color, wrap)
-        };
+        let text = oxidraft_model::annotation::plain_text(content);
+        let galley = painter.layout(text, crate::fonts::font_id(painter.ctx(), font, size), stroke.color, wrap);
         // Anchor on the type itself, not egui's line box: "top" is the first
         // line's capital height, "bottom" the last line's baseline.
         let baseline = |row: &egui::epaint::text::PlacedRow| {
@@ -1147,6 +1148,42 @@ impl OxidraftApp {
         let pos = anchor - egui::emath::Rot2::from_angle(angle) * offset;
         let shape = egui::epaint::TextShape::new(pos, galley, stroke.color).with_angle(angle);
         paint_text(painter, shape, anchor, look.width_factor as f32, look.oblique as f32, first - offset.y);
+    }
+
+    /// Formatted MTEXT's pieces: each in its font, size, color, width and
+    /// slant, an SHX one as strokes, with its underline and the like.
+    fn draw_formatted(&self, painter: &Painter, rect: Rect, g: &Geometry, font: &str, big: &str, stroke: Stroke) {
+        for piece in oxidraft_plot::rich::formatted_pieces(g, font, big) {
+            let color = piece.color.map_or(stroke.color, theme::aci);
+            let pen = Stroke::new(stroke.width, color);
+            let screen = |p: Point| self.view.to_screen(rect, p);
+            if piece.shx().is_some() {
+                for s in piece.strokes() {
+                    painter.add(Shape::line(s.into_iter().map(screen).collect(), pen));
+                }
+            } else if !piece.text.trim().is_empty() {
+                let px = (piece.height / 0.7 * self.view.scale) as f32;
+                if px < 1.5 {
+                    continue;
+                }
+                // Few distinct sizes, as for plain text; the width makes up the rest.
+                let size = 2f32.powf((px.min(400.0).log2() * 8.0).round() / 8.0);
+                let id = crate::fonts::font_id(painter.ctx(), &piece.font, size);
+                let galley = painter.layout_no_wrap(piece.text.clone(), id, color);
+                let baseline = galley.rows.first().map_or(size * 0.8, |row| {
+                    row.pos.y + row.row.glyphs.first().map_or(row.row.size.y * 0.8, |g| g.pos.y)
+                });
+                let anchor = screen(piece.at);
+                let angle = -((piece.rotation + self.view.rotation) as f32).to_radians();
+                let pos = anchor - egui::emath::Rot2::from_angle(angle) * vec2(0.0, baseline);
+                let shape = egui::epaint::TextShape::new(pos, galley, color).with_angle(angle);
+                let width = piece.width_factor as f32 * px / size;
+                paint_text(painter, shape, anchor, width, piece.oblique as f32, 0.0);
+            }
+            for (a, b) in piece.rules() {
+                painter.line_segment([screen(a), screen(b)], pen);
+            }
+        }
     }
 
     /// Solid fills as triangles; patterns as lines clipped to the boundary
@@ -1605,36 +1642,4 @@ pub(crate) fn paint_text(
         v.pos = anchor + rot * local;
     }
     painter.add(Shape::mesh(mesh));
-}
-
-/// MTEXT that changes font, height, color or lines inline, laid out piece
-/// by piece.
-fn formatted_job(
-    ctx: &egui::Context,
-    content: &str,
-    height: f64,
-    style_font: &str,
-    size: f32,
-    color: Color32,
-    wrap: f32,
-) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob::default();
-    job.wrap.max_width = wrap;
-    for run in oxidraft_model::annotation::mtext_runs(content, height) {
-        let f = &run.format;
-        let (font, slant) = crate::fonts::run_font(f, style_font);
-        let c = f.color.map_or(color, theme::aci);
-        let px = size * f.height as f32;
-        let mut format = egui::TextFormat::simple(crate::fonts::font_id(ctx, &font, px), c);
-        format.italics = slant;
-        let rule = Stroke::new((px / 14.0).max(1.0), c);
-        if f.underline {
-            format.underline = rule;
-        }
-        if f.strike {
-            format.strikethrough = rule;
-        }
-        job.append(&run.text, 0.0, format);
-    }
-    job
 }

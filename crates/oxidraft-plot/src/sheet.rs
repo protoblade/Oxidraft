@@ -350,6 +350,10 @@ impl<'a> Plotter<'a> {
         let wf = if look.width_factor > 0.0 { look.width_factor } else { 1.0 };
         let style = self.doc.text_style(&look.style);
         let font = style.map(|s| s.font.clone()).unwrap_or_default();
+        if oxidraft_model::annotation::is_formatted(content) {
+            let big = style.map(|s| s.big_font.clone()).unwrap_or_default();
+            return self.formatted_text(g, &font, &big, color, pen);
+        }
         // An SHX font's text plots as its strokes, in the object's pen.
         if let Some(shx) = crate::shx::shx_font(&font) {
             let big = style.and_then(|s| crate::shx::shx_font(&s.big_font));
@@ -363,9 +367,6 @@ impl<'a> Plotter<'a> {
             return;
         }
         let face = font::typeface(&font);
-        if oxidraft_model::annotation::is_formatted(content) {
-            return self.formatted_text(g, &font, color, pen);
-        }
         let lines = font::lines_in(face, content, if *width > 0.0 { width / (size * wf) } else { 0.0 });
         let widest = lines.iter().map(|l| face.width(l)).fold(0.0, f64::max) * wf;
         let row = face.row_height();
@@ -391,97 +392,37 @@ impl<'a> Plotter<'a> {
         }
     }
 
-    /// MTEXT that changes font, height, color or lines inline: each line
-    /// in pieces, each piece in its own font, size and color, underlined,
+    /// MTEXT that changes its look inline: each piece in its own font,
+    /// size, color, width and slant (an SHX one as strokes), underlined,
     /// overlined or struck through as it asks.
-    fn formatted_text(&mut self, g: &Geometry, style_font: &str, color: Rgb, pen: f64) {
-        let Geometry::Text { position, height, rotation, width, attach, content, look } = g else { return };
-        let size = height / 0.7;
-        let wf = if look.width_factor > 0.0 { look.width_factor } else { 1.0 };
-        let style_face = font::typeface(style_font);
-        let runs = oxidraft_model::annotation::mtext_runs(content, *height);
-        // Each character with its run, in the order plain_text has them.
-        let chars: Vec<(char, usize)> =
-            runs.iter().enumerate().flat_map(|(i, r)| r.text.chars().map(move |c| (c, i))).collect();
-        let lines = font::lines_in(style_face, content, if *width > 0.0 { width / (size * wf) } else { 0.0 });
-        // A line's pieces: (text, run), matched to the characters in order.
-        let mut k = 0;
-        let pieces: Vec<Vec<(String, usize)>> = lines
-            .iter()
-            .map(|line| {
-                let mut out: Vec<(String, usize)> = Vec::new();
-                for c in line.chars() {
-                    while k < chars.len() && chars[k].0 != c {
-                        k += 1;
-                    }
-                    let run = chars.get(k).map_or(0, |x| x.1);
-                    k += 1;
-                    match out.last_mut() {
-                        Some((text, r)) if *r == run => text.push(c),
-                        _ => out.push((c.to_string(), run)),
-                    }
-                }
-                out
-            })
-            .collect();
-        let face_of = |run: usize| {
-            let f = &runs[run].format;
-            let named = f.font_name().map(|n| font::typeface(&n)).filter(|t| !t.is_default());
-            let family = f.font.as_deref().map(font::typeface).filter(|t| !t.is_default());
-            let name =
-                f.font_name().filter(|_| named.is_some()).or_else(|| f.font.clone().filter(|_| family.is_some()));
-            (named.or(family).unwrap_or(style_face), name.unwrap_or_else(|| style_font.to_string()))
-        };
-        let piece_width = |text: &str, run: usize| face_of(run).0.width(text) * runs[run].format.height * wf;
-        let line_width = |line: &[(String, usize)]| line.iter().map(|(t, r)| piece_width(t, *r)).sum::<f64>();
-        let tallest = |line: &[(String, usize)]| line.iter().map(|(_, r)| runs[*r].format.height).fold(1.0, f64::max);
-        let widest = pieces.iter().map(|l| line_width(l)).fold(0.0, f64::max);
-        let row = style_face.row_height();
-        // Baselines, in ems below the top: a tall line pushes those under it down.
-        let mut baselines = Vec::with_capacity(pieces.len());
-        let mut y = 0.7 * pieces.first().map_or(1.0, |l| tallest(l));
-        for (i, line) in pieces.iter().enumerate() {
-            if i > 0 {
-                y += row * tallest(line);
-            }
-            baselines.push(y);
-        }
-        let span = baselines.last().copied().unwrap_or(0.7);
-        let (fx, fy) = attach.fractions();
-        for (line, base) in pieces.iter().zip(&baselines) {
-            let mut x = -fx * widest;
-            for (text, run) in line {
-                let f = &runs[*run].format;
-                let w = piece_width(text, *run);
-                let local = |dx: f64, dy: f64| {
-                    *position
-                        + (Point::new(x + dx, fy * span - base + dy) * size).rotated_about(Point::ORIGIN, *rotation)
-                };
-                let piece_color = f.color.map_or(color, |c| self.settings.style.rgb(c));
-                if !text.trim().is_empty() {
-                    self.items.push(Item::Text {
-                        at: self.paper(local(0.0, 0.0)),
-                        rotation: rotation + self.twist(),
-                        size: size * f.height * self.unit(),
-                        text: text.clone(),
-                        color: piece_color,
-                        width_factor: wf,
-                        oblique: look.oblique,
-                        font: face_of(*run).1,
-                    });
-                }
-                let rules = [(f.underline, -0.15), (f.overline, 0.85), (f.strike, 0.3)];
-                let paths: Vec<Path> = rules
-                    .iter()
-                    .filter(|(on, _)| *on)
-                    .map(|(_, at)| Path {
-                        points: vec![self.paper(local(0.0, at * f.height)), self.paper(local(w, at * f.height))],
-                        closed: false,
-                    })
+    fn formatted_text(&mut self, g: &Geometry, style_font: &str, big_font: &str, color: Rgb, pen: f64) {
+        for piece in crate::rich::formatted_pieces(g, style_font, big_font) {
+            let piece_color = piece.color.map_or(color, |c| self.settings.style.rgb(c));
+            if piece.shx().is_some() {
+                let paths: Vec<Path> = piece
+                    .strokes()
+                    .into_iter()
+                    .map(|s| Path { points: s.into_iter().map(|p| self.paper(p)).collect(), closed: false })
                     .collect();
                 self.push_stroke(paths, pen, piece_color, false);
-                x += w;
+            } else if !piece.text.trim().is_empty() {
+                self.items.push(Item::Text {
+                    at: self.paper(piece.at),
+                    rotation: piece.rotation + self.twist(),
+                    size: piece.height / 0.7 * self.unit(),
+                    text: piece.text.clone(),
+                    color: piece_color,
+                    width_factor: piece.width_factor,
+                    oblique: piece.oblique,
+                    font: piece.font.clone(),
+                });
             }
+            let paths: Vec<Path> = piece
+                .rules()
+                .into_iter()
+                .map(|(a, b)| Path { points: vec![self.paper(a), self.paper(b)], closed: false })
+                .collect();
+            self.push_stroke(paths, pen, piece_color, false);
         }
     }
 
