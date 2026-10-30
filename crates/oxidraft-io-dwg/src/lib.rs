@@ -22,6 +22,7 @@ mod dimbreaks;
 mod dynblocks;
 mod fields;
 mod groups;
+mod inspection;
 mod layouts;
 mod mleaders;
 mod ole;
@@ -130,7 +131,7 @@ fn keep_known_xdata(cad: &mut CadDocument) {
                 ]
                 .contains(&r.application_name.as_str())
                     || dimension
-                        && ["ACAD", "OXIDRAFT_DIM", "ACAD_DSTYLE_DIMJAG_POSITION"]
+                        && ["ACAD", "OXIDRAFT_DIM", "ACAD_DSTYLE_DIMJAG_POSITION", inspection::APP]
                             .contains(&r.application_name.as_str())
             })
             .cloned()
@@ -334,6 +335,7 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
     if native_objects() {
         annotative::write(&mut cad, doc, &handles);
         dimbreaks::write(&mut cad, doc, &handles);
+        inspection::write(&mut cad, doc, &handles);
         arrays::write(&mut cad, doc, &handles);
     }
     groups::finish(&mut cad, doc, &handles);

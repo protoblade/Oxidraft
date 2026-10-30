@@ -2,7 +2,8 @@
 //! override as AutoCAD keeps DIMOVERRIDE's (ACAD DSTYLE), a jog as AutoCAD
 //! keeps DIMJOGLINE's (ACAD_DSTYLE_DIMJAG_POSITION: 387, 3, 389 and the
 //! jog's point, as Autodesk's developer guide gives it), and its breaks,
-//! jog and inspection data (OXIDRAFT_DIM).
+//! jog and inspection data (OXIDRAFT_DIM). AutoCAD's inspection data
+//! (ACAD_DSTYLE_DIMINSPECT) is read too, and wins over Oxidraft's.
 
 use dxf::{XData, XDataItem};
 use oxidraft_geom::Point;
@@ -13,6 +14,12 @@ pub(crate) const APP: &str = "OXIDRAFT_DIM";
 
 /// AutoCAD's application for a linear dimension's jog.
 pub(crate) const JAG_APP: &str = "ACAD_DSTYLE_DIMJAG_POSITION";
+
+/// AutoCAD's application for DIMINSPECT's data: (1070 code, value) pairs,
+/// as its other dimension overrides — 393 shown (1) or taken off (0), 394
+/// its shape and parts (1 round, 2 angular, 4 none; 16 with the label, 32
+/// with the rate), 395 the label, 396 the rate.
+pub(crate) const INSPECT_APP: &str = "ACAD_DSTYLE_DIMINSPECT";
 
 /// The dimension variables an override sets, by their DXF group codes.
 const DIMTXT: i16 = 140;
@@ -83,6 +90,7 @@ pub(crate) fn xdata(g: &Geometry) -> Vec<XData> {
 /// A dimension's extras from its XDATA; an override starts from `base`,
 /// the drawing's style.
 pub(crate) fn read(x_data: &[XData], base: DimStyle, extra: &mut DimExtra) {
+    let mut acad_inspection = None;
     for x in x_data {
         match x.application_name.as_str() {
             "ACAD" => {
@@ -158,7 +166,43 @@ pub(crate) fn read(x_data: &[XData], base: DimStyle, extra: &mut DimExtra) {
                     }
                 }
             }
+            INSPECT_APP => acad_inspection = Some(inspection(&x.items)),
             _ => {}
         }
     }
+    if let Some(i) = acad_inspection {
+        extra.inspection = i;
+    }
+}
+
+/// The inspection data AutoCAD's record shows, if it's shown.
+fn inspection(items: &[XDataItem]) -> Option<Inspection> {
+    let value = |code: i16| {
+        items.chunks(2).find_map(|pair| match pair {
+            [XDataItem::Integer(c), v] if *c == code => Some(v),
+            _ => None,
+        })
+    };
+    let int = |code| match value(code) {
+        Some(XDataItem::Integer(n)) => Some(*n),
+        _ => None,
+    };
+    let text = |code| match value(code) {
+        Some(XDataItem::Str(s)) => s.clone(),
+        _ => String::new(),
+    };
+    if int(393) != Some(1) {
+        return None;
+    }
+    let flags = int(394).unwrap_or(1);
+    let shape = if flags & 2 != 0 {
+        InspectionShape::Angular
+    } else if flags & 4 != 0 {
+        InspectionShape::None
+    } else {
+        InspectionShape::Round
+    };
+    let label = if flags & 16 != 0 { text(395) } else { String::new() };
+    let rate = if flags & 32 != 0 { text(396) } else { String::new() };
+    Some(Inspection { shape, label, rate })
 }
