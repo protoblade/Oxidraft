@@ -350,7 +350,7 @@ impl<'a> Plotter<'a> {
         let wf = if look.width_factor > 0.0 { look.width_factor } else { 1.0 };
         let style = self.doc.text_style(&look.style);
         let font = style.map(|s| s.font.clone()).unwrap_or_default();
-        if oxidraft_model::annotation::is_formatted(content) {
+        if look.needs_pieces(content) {
             let big = style.map(|s| s.big_font.clone()).unwrap_or_default();
             return self.formatted_text(g, &font, &big, color, pen);
         }

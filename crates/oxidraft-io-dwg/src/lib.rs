@@ -137,7 +137,31 @@ fn imported_from(cad: &mut CadDocument) -> Result<Imported, Error> {
     fields::restore(cad, &mut imported);
     dimassoc::restore(cad, &mut imported);
     annotative_styles(cad, &mut imported.document);
+    mtext_layout(cad, &mut imported);
     Ok(imported)
+}
+
+/// MTEXT's columns and line spacing as acadrust reads them (AutoCAD keeps
+/// columns in an embedded object the DXF reader doesn't know).
+fn mtext_layout(cad: &CadDocument, imported: &mut Imported) {
+    for e in cad.entities() {
+        let acadrust::EntityType::MText(m) = e else { continue };
+        let Some(&id) = imported.handles.get(&e.common().handle.value()) else { continue };
+        let c = &m.column_data;
+        let columns = (c.column_type != 0 && c.column_count > 1).then(|| oxidraft_model::annotation::Columns {
+            count: c.column_count as usize,
+            width: if c.width > 0.0 { c.width } else { m.rectangle_width },
+            gutter: c.gutter.max(0.0),
+            heights: c.heights.clone(),
+        });
+        let spacing = if m.line_spacing_factor > 0.0 { m.line_spacing_factor } else { 1.0 };
+        imported.document.update(id, |e| {
+            if let oxidraft_model::Geometry::Text { look, .. } = &mut e.geometry {
+                look.columns = columns;
+                look.line_spacing = spacing;
+            }
+        });
+    }
 }
 
 /// Text styles AutoCAD marks annotative are so here.
@@ -171,6 +195,11 @@ pub fn read_dxf(bytes: &[u8]) -> Result<Imported, Error> {
     {
         dimassoc::restore(&cad, &mut imported);
     }
+    if bytes.windows(15).any(|w| w == b"Embedded Object")
+        && let Ok(cad) = DxfReader::from_reader(Cursor::new(bytes.to_vec())).and_then(|r| r.read())
+    {
+        mtext_layout(&cad, &mut imported);
+    }
     Ok(imported)
 }
 
@@ -187,6 +216,23 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
     layouts::finish(&mut cad, doc);
     groups::finish(&mut cad, doc, &handles);
     settings::finish(&mut cad, doc);
+    // MTEXT columns, as acadrust keeps them.
+    for e in doc.all_entities() {
+        let oxidraft_model::Geometry::Text { look, .. } = &e.geometry else { continue };
+        let (Some(c), Some(&h)) = (&look.columns, handles.get(&e.id).and_then(|h| h.first())) else { continue };
+        if let Some(acadrust::EntityType::MText(m)) = cad.get_entity_mut(acadrust::types::Handle::new(h)) {
+            // Dynamic columns: their heights set, or found automatically.
+            m.column_data = acadrust::entities::MTextColumnData {
+                column_type: 2,
+                column_count: c.count as i32,
+                flow_reversed: false,
+                auto_height: c.heights.is_empty(),
+                width: c.width,
+                gutter: c.gutter,
+                heights: c.heights.clone(),
+            };
+        }
+    }
     // Annotative text styles as AutoCAD marks them.
     for s in doc.text_styles().iter().filter(|s| s.annotative) {
         if let Some(t) = cad.text_styles.iter_mut().find(|t| t.name.eq_ignore_ascii_case(&s.name)) {
@@ -222,8 +268,12 @@ pub fn write(doc: &Document, version: Version) -> Result<Vec<u8>, Error> {
 /// (2007 is the first to have them). Written by acadrust, which also
 /// writes the layouts' page setups and viewports.
 pub fn write_dxf(doc: &Document) -> Result<Vec<u8>, Error> {
-    // Multileaders need AutoCAD 2007's MULTILEADER.
-    let leaders = doc.all_entities().any(|e| matches!(e.geometry, oxidraft_model::Geometry::Leader { .. }));
+    // Multileaders need AutoCAD 2007's MULTILEADER, MTEXT columns 2008's.
+    let leaders = doc.all_entities().any(|e| match &e.geometry {
+        oxidraft_model::Geometry::Leader { .. } => true,
+        oxidraft_model::Geometry::Text { look, .. } => look.columns.is_some(),
+        _ => false,
+    });
     let newer = oxidraft_io_dxf::needs_newer_version(doc) || leaders;
     let version = if newer { DxfVersion::AC1024 } else { DxfVersion::AC1015 };
     let cad = cad(doc, version)?;
@@ -613,6 +663,39 @@ mod tests {
         // Unset: ByLayer.
         let plain = read(&write(&Document::new(), Version::R2018).unwrap()).unwrap().imported.document;
         assert_eq!(plain.current_props(), &oxidraft_model::CurrentProps::by_layer());
+    }
+
+    #[test]
+    fn mtext_columns_and_line_spacing_survive() {
+        use oxidraft_model::annotation::{Columns, TextLook};
+        let mut doc = Document::new();
+        let look = TextLook {
+            line_spacing: 1.5,
+            columns: Some(Columns { count: 2, width: 40.0, gutter: 5.0, heights: vec![30.0, 30.0] }),
+            ..Default::default()
+        };
+        doc.add(Geometry::Text {
+            position: Point::new(0.0, 50.0),
+            height: 2.5,
+            rotation: 0.0,
+            width: 40.0,
+            attach: oxidraft_model::Attach::TopLeft,
+            content: "Notes\\Pone\\Ptwo".into(),
+            look: look.clone(),
+        });
+        let check = |back: &Document, how: &str| {
+            let got = back.entities().find_map(|e| match &e.geometry {
+                Geometry::Text { look, .. } => Some(look.clone()),
+                _ => None,
+            });
+            let got = got.unwrap_or_default();
+            assert_eq!((got.line_spacing, got.columns), (look.line_spacing, look.columns.clone()), "{how}");
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        check(&read(&write(&doc, Version::R2018).unwrap()).unwrap().imported.document, "DWG");
     }
 
     #[test]

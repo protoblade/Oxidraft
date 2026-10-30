@@ -393,6 +393,14 @@ impl Exporter {
                     rotation_angle: r,
                     x_axis_direction: dxf::Vector::new(r.cos(), r.sin(), 0.0),
                     text_style_name: style_to_dxf(&look.style),
+                    line_spacing_factor: look.line_spacing,
+                    // Dynamic columns: their heights set, or found automatically.
+                    column_type: look.columns.as_ref().map_or(0, |_| 2),
+                    column_count: look.columns.as_ref().map_or(0, |c| c.count as i32),
+                    column_width: look.columns.as_ref().map_or(0.0, |c| c.width),
+                    column_gutter: look.columns.as_ref().map_or(0.0, |c| c.gutter),
+                    column_heights: look.columns.as_ref().map_or_else(Vec::new, |c| c.heights.clone()),
+                    is_column_auto_height: look.columns.as_ref().is_none_or(|c| c.heights.is_empty()),
                     ..Default::default()
                 })]
             }
@@ -1586,6 +1594,7 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
                     style: style_from_dxf(&t.text_style_name),
                     width_factor: if t.relative_x_scale_factor > 0.0 { t.relative_x_scale_factor } else { 1.0 },
                     oblique: oblique_from_dxf(t.oblique_angle),
+                    ..Default::default()
                 },
                 position: from_dxf(if second { &t.second_alignment_point } else { &t.location }),
                 height: t.text_height,
@@ -1616,8 +1625,21 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
             let rotation =
                 if x.x.hypot(x.y) > 1e-9 { x.y.atan2(x.x).to_degrees() } else { m.rotation_angle.to_degrees() };
             // Its width factor and slant are its style's (see `restyle_mtext`).
+            // Its columns (static or dynamic) and line spacing.
+            let columns = (m.column_type > 0 && m.column_count > 1).then(|| oxidraft_model::annotation::Columns {
+                count: m.column_count as usize,
+                width: if m.column_width > 0.0 { m.column_width } else { m.reference_rectangle_width },
+                gutter: m.column_gutter.max(0.0),
+                heights: m.column_heights.clone(),
+            });
+            let line_spacing = if m.line_spacing_factor > 0.0 { m.line_spacing_factor } else { 1.0 };
             Geometry::Text {
-                look: oxidraft_model::TextLook { style: style_from_dxf(&m.text_style_name), ..Default::default() },
+                look: oxidraft_model::TextLook {
+                    style: style_from_dxf(&m.text_style_name),
+                    line_spacing,
+                    columns,
+                    ..Default::default()
+                },
                 position: from_dxf(&m.insertion_point),
                 height: m.initial_text_height,
                 rotation,

@@ -1130,7 +1130,7 @@ impl OxidraftApp {
         let style = self.doc.text_style(&look.style);
         let font = style.map_or("", |s| s.font.as_str());
         // MTEXT that changes its look inline: piece by piece, where plots put them.
-        if oxidraft_model::annotation::is_formatted(content) {
+        if look.needs_pieces(content) {
             self.draw_formatted(painter, rect, g, font, style.map_or("", |s| s.big_font.as_str()), stroke);
             return;
         }

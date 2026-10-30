@@ -55,17 +55,45 @@ pub struct TextLook {
     pub style: String,
     pub width_factor: f64,
     pub oblique: f64,
+    /// MTEXT's line spacing, times the usual.
+    pub line_spacing: f64,
+    /// MTEXT's columns, when it has them.
+    pub columns: Option<Columns>,
+}
+
+/// MTEXT in columns: how many, each one's width, the gutter between them,
+/// and (static columns) each one's height; without heights the lines are
+/// shared out evenly.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Columns {
+    pub count: usize,
+    pub width: f64,
+    pub gutter: f64,
+    pub heights: Vec<f64>,
 }
 
 impl Default for TextLook {
     fn default() -> Self {
-        Self { style: STANDARD.into(), width_factor: 1.0, oblique: 0.0 }
+        Self { style: STANDARD.into(), width_factor: 1.0, oblique: 0.0, line_spacing: 1.0, columns: None }
     }
 }
 
 impl TextLook {
     pub fn of(style: &TextStyle) -> Self {
-        Self { style: style.name.clone(), width_factor: style.width_factor, oblique: style.oblique }
+        Self {
+            style: style.name.clone(),
+            width_factor: style.width_factor,
+            oblique: style.oblique,
+            ..Default::default()
+        }
+    }
+
+    /// Laid out piece by piece (see `oxidraft_plot::rich`): text formatted
+    /// inline, in columns or spaced otherwise than usual.
+    pub fn needs_pieces(&self, content: &str) -> bool {
+        is_formatted(content)
+            || self.columns.as_ref().is_some_and(|c| c.count > 1)
+            || (self.line_spacing - 1.0).abs() > 1e-9
     }
 
     /// Drawn as plain upright characters of their usual width.
@@ -525,7 +553,13 @@ pub fn text_box(
     // Wider characters: fewer to a wrapped line, each line wider.
     let wf = if look.width_factor > 0.0 { look.width_factor } else { 1.0 };
     let (w, h) = text_extent_in(content, height, wrap_width / wf, &look.style);
-    let w = w * wf;
+    let mut w = w * wf;
+    let mut h = height + (h - height) * look.line_spacing;
+    // In columns: as wide as all of them, as high as the tallest.
+    if let Some(c) = look.columns.as_ref().filter(|c| c.count > 1) {
+        w = c.width * c.count as f64 + c.gutter * (c.count - 1) as f64;
+        h = c.heights.iter().copied().fold(height + (h - height) / c.count as f64, f64::max);
+    }
     let (fx, fy) = attach.fractions();
     let (x0, y0) = (-fx * w, -h * (1.0 - fy));
     [(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h)]

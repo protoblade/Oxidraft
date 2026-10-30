@@ -630,6 +630,10 @@ impl OxidraftApp {
                 ("Obliquing", Value::Number(look.oblique)),
                 ("Rotation", Value::Angle(*rotation)),
                 ("Width", Value::Number(*width)),
+                ("Line space factor", Value::Number(look.line_spacing)),
+                // MTEXT's columns: how many (0, none), the gutter between.
+                ("Columns", Value::Number(look.columns.as_ref().map_or(0.0, |c| c.count as f64))),
+                ("Column gutter", Value::Number(look.columns.as_ref().map_or(0.0, |c| c.gutter))),
                 ("Position X", Value::Number(position.x)),
                 ("Position Y", Value::Number(position.y)),
             ],
@@ -919,6 +923,21 @@ fn with_property(g: &Geometry, label: &str, v: f64) -> Option<Geometry> {
         (Geometry::Text { width, .. }, "Width") if v >= 0.0 => *width = v,
         (Geometry::Text { look, .. }, "Width factor") if v > 0.0 => look.width_factor = v,
         (Geometry::Text { look, .. }, "Obliquing") if v.abs() <= 85.0 => look.oblique = v,
+        (Geometry::Text { look, .. }, "Line space factor") if (0.25..=4.0).contains(&v) => look.line_spacing = v,
+        (Geometry::Text { look, width, .. }, "Columns") if (0.0..=100.0).contains(&v) => {
+            let n = v.round() as usize;
+            look.columns = (n > 1).then(|| oxidraft_model::annotation::Columns {
+                count: n,
+                width: if *width > 0.0 { *width } else { 50.0 },
+                gutter: look.columns.as_ref().map_or(5.0, |c| c.gutter),
+                heights: Vec::new(),
+            });
+        }
+        (Geometry::Text { look, .. }, "Column gutter") if v >= 0.0 => {
+            if let Some(c) = &mut look.columns {
+                c.gutter = v;
+            }
+        }
         (Geometry::Text { position, .. }, "Position X") => position.x = v,
         (Geometry::Text { position, .. }, "Position Y") => position.y = v,
         (

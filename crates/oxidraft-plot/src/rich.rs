@@ -181,21 +181,43 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
     };
     let tallest = |line: &[(String, usize)]| line.iter().map(|(_, r)| runs[*r].format.height).fold(1.0, f64::max);
     let widest = lines.iter().enumerate().map(|(i, l)| layout_line(i, l).1).fold(0.0, f64::max);
-    // Baselines below the top: a tall line pushes those under it down.
-    let step = if style_shx.is_some() { LINE_SPACING } else { style_face.row_height() / 0.7 };
+    // Baselines below the top, the text's line spacing between them: a tall
+    // line pushes those under it down. In columns, each column's lines
+    // start at the top again: as many as its height holds (static
+    // columns), or the lines shared out evenly.
+    let step = if style_shx.is_some() { LINE_SPACING } else { style_face.row_height() / 0.7 } * look.line_spacing;
+    let columns = look.columns.as_ref().filter(|c| c.count > 1);
+    let per_column = columns.map_or(lines.len(), |c| lines.len().div_ceil(c.count).max(1));
     let mut baselines = Vec::with_capacity(lines.len());
-    let mut y = height * lines.first().map_or(1.0, |l| tallest(l));
-    for (i, line) in lines.iter().enumerate() {
-        if i > 0 {
-            y += height * step * tallest(line);
+    let mut column_of = Vec::with_capacity(lines.len());
+    let (mut y, mut column, mut in_column) = (0.0, 0usize, 0usize);
+    for line in &lines {
+        let next = if in_column == 0 { height * tallest(line) } else { y + height * step * tallest(line) };
+        let full = match columns {
+            Some(c) if !c.heights.is_empty() => {
+                let limit = c.heights.get(column).copied().unwrap_or(f64::INFINITY);
+                in_column > 0 && next > limit && column + 1 < c.count
+            }
+            Some(c) => in_column >= per_column && column + 1 < c.count,
+            None => false,
+        };
+        if full {
+            (column, in_column) = (column + 1, 0);
+            y = height * tallest(line);
+        } else {
+            y = next;
         }
+        in_column += 1;
         baselines.push(y);
+        column_of.push(column);
     }
-    let span = baselines.last().copied().unwrap_or(*height);
+    let span = baselines.iter().copied().fold(*height, f64::max);
+    let column_step = columns.map_or(0.0, |c| c.width + c.gutter);
     let (fx, fy) = attach.fractions();
     let mut out = Vec::new();
     for (i, (line, base)) in lines.iter().zip(&baselines).enumerate() {
         let (xs, length) = layout_line(i, line);
+        let column_x = column_step * column_of[i] as f64;
         // Centered or right aligned within the widest line.
         let aligned = match line.first().map_or('l', |(_, r)| runs[*r].format.align) {
             'c' => (widest - length) / 2.0,
@@ -206,7 +228,7 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
             if text == "\t" {
                 continue;
             }
-            let x = -fx * widest + aligned + at;
+            let x = -fx * widest + aligned + at + column_x;
             let f = &runs[*r].format;
             let w = piece_width(text, *r);
             let start = *position + Point::new(x, fy * span - base).rotated_about(Point::ORIGIN, *rotation);
@@ -356,5 +378,27 @@ mod tests {
         let centered = formatted_pieces(&text("\\pqc;WWWWWW\\Pi"), "", "");
         let (wide, short) = (&centered[0], &centered[1]);
         assert!(short.at.x > wide.at.x && short.at.x + short.width < wide.at.x + wide.width, "{centered:?}");
+    }
+
+    #[test]
+    fn columns_and_line_spacing() {
+        let mut g = text("one\\Ptwo\\Pthree\\Pfour");
+        let Geometry::Text { look, width, .. } = &mut g else { unreachable!() };
+        *width = 20.0;
+        look.columns =
+            Some(oxidraft_model::annotation::Columns { count: 2, width: 20.0, gutter: 5.0, heights: Vec::new() });
+        let pieces = formatted_pieces(&g, "", "");
+        let at = |t: &str| pieces.iter().find(|p| p.text == t).unwrap().at;
+        assert_eq!(at("three").x, 25.0, "the second column, a width and a gutter over");
+        assert!((at("three").y - at("one").y).abs() < 1e-9, "at the top again");
+        // Twice the line spacing: the lines twice as far apart.
+        let single = formatted_pieces(&text("\\pqc;a\\Pb"), "", "");
+        let mut double = text("\\pqc;a\\Pb");
+        if let Geometry::Text { look, .. } = &mut double {
+            look.line_spacing = 2.0;
+        }
+        let double = formatted_pieces(&double, "", "");
+        let gap = |p: &[Piece]| p[0].at.y - p[1].at.y;
+        assert!((gap(&double) - 2.0 * gap(&single)).abs() < 1e-9);
     }
 }

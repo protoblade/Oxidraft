@@ -475,7 +475,12 @@ mod tests {
             width: 0.0,
             attach: Attach::BottomLeft,
             content: "A".into(),
-            look: oxidraft_model::TextLook { style: "Narrow".into(), width_factor: 0.5, oblique: 45.0 },
+            look: oxidraft_model::TextLook {
+                style: "Narrow".into(),
+                width_factor: 0.5,
+                oblique: 45.0,
+                ..Default::default()
+            },
         });
         let narrow = crate::render(&styled, oxidraft_model::MODEL, &settings).unwrap();
         let (ops, _) = content(&narrow);
