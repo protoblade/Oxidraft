@@ -1176,6 +1176,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(BParameter::default())),
     },
     CommandInfo {
+        name: "BLOOKUPTABLE",
+        aliases: &[],
+        description: "Give a dynamic block's lookup parameter its rows",
+        make: Some(|| Box::new(crate::dynblock::BLookupTable::default())),
+    },
+    CommandInfo {
         name: "BACTION",
         aliases: &["BACTIONTOOL", "BACTIONSET"],
         description: "In the block editor: what a linear parameter stretches",
@@ -2627,7 +2633,12 @@ impl Engine {
             .flat_map(|e| match e.array {
                 // An array's own: its place, its counts and spacing.
                 Some(_) => doc.array_grips(e.id).into_iter().map(|(p, _)| p).collect(),
-                None => e.geometry.grips(),
+                // A dynamic block's: its place, then its parameters'.
+                None => {
+                    let mut g = e.geometry.grips();
+                    g.extend(doc.dynamic_grips(e.id).into_iter().map(|(p, _)| p));
+                    g
+                }
             })
             .collect()
     }
@@ -3083,6 +3094,33 @@ impl Engine {
             doc.begin(info.name);
             self.last_point = Some(at);
             self.active = Some(Active { info, cmd: Box::new(cmd) });
+            return true;
+        }
+        // A dynamic block's parameter grip: a flip, a lookup or the
+        // visibility states change at a click, the others where it's dropped.
+        let dynamic_grip = self.selection.iter().find_map(|&id| {
+            doc.dynamic_grips(id).into_iter().find(|(g, _)| g.distance(p) <= tolerance).map(|(g, grip)| (id, g, grip))
+        });
+        if let Some((id, at, grip)) = dynamic_grip {
+            use oxidraft_model::dynamic::{DynGrip, Param};
+            let param = match &grip {
+                DynGrip::Param(i) => {
+                    doc.dynamic_values(id).and_then(|v| doc.dynamic_block(&v.block)?.params.get(*i).cloned())
+                }
+                DynGrip::Visibility => None,
+            };
+            let info = find("-DYNPROP").expect("-DYNPROP is a command");
+            if matches!(grip, DynGrip::Visibility) || matches!(param, Some(Param::Flip { .. } | Param::Lookup { .. })) {
+                if let Some(values) = doc.dynamic_grip_values(id, &grip, at, None) {
+                    doc.begin(info.name);
+                    doc.set_dynamic_values(id, values);
+                    doc.commit();
+                }
+                return true;
+            }
+            doc.begin(info.name);
+            self.last_point = Some(at);
+            self.active = Some(Active { info, cmd: Box::new(crate::dynblock::DynGripEdit::new(id, grip, at)) });
             return true;
         }
         let mut hot = None;

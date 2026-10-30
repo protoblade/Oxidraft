@@ -765,16 +765,37 @@ impl OxidraftApp {
         let mut changed = values.clone();
         egui::Grid::new(("dynamic_rows", id)).num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
             for p in &def.params {
-                let name = p.name().to_string();
-                label_cell(ui, &name);
-                let v = values.value(&name).unwrap_or_else(|| p.default_value());
-                let angle = matches!(p, oxidraft_model::dynamic::Param::Rotation { .. });
-                if let Some(new) = self.number_field(ui, &name, Id::unique(("dyn", id, name.as_str())), v, angle, width)
-                {
-                    changed.values.retain(|(n, _)| !n.eq_ignore_ascii_case(&name));
-                    changed.values.push((name, new));
+                // A lookup: its rows, by label.
+                if let oxidraft_model::dynamic::Param::Lookup { name, rows, .. } = p {
+                    label_cell(ui, name);
+                    let now = values.value(name).unwrap_or(0.0) as usize;
+                    let shown = rows.get(now).map_or_else(String::new, |r| r.0.clone());
+                    let r = egui::ComboBox::from_id_salt(("dyn_lookup", id, name.as_str()))
+                        .width(width)
+                        .selected_text(shown)
+                        .show_ui(ui, |ui| {
+                            for (i, (label, _)) in rows.iter().enumerate() {
+                                if ui.selectable_label(i == now, label).clicked() {
+                                    changed.values.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+                                    changed.values.push((name.clone(), i as f64));
+                                }
+                            }
+                        });
+                    r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, name));
+                    ui.end_row();
+                    continue;
                 }
-                ui.end_row();
+                for (name, default) in p.properties() {
+                    label_cell(ui, &name);
+                    let v = values.value(&name).unwrap_or(default);
+                    let angle = p.is_angle(&name);
+                    let field = Id::unique(("dyn", id, name.as_str()));
+                    if let Some(new) = self.number_field(ui, &name, field, v, angle, width) {
+                        changed.values.retain(|(n, _)| !n.eq_ignore_ascii_case(&name));
+                        changed.values.push((name, new));
+                    }
+                    ui.end_row();
+                }
             }
             if !def.states.is_empty() {
                 label_cell(ui, "Visibility");

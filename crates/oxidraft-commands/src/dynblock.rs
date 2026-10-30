@@ -1,6 +1,7 @@
 //! Dynamic block authoring in the block editor: BPARAMETER (Linear, Flip,
-//! Rotation), BACTION (a linear parameter's stretch frame), BVSTATE (New,
-//! Set, Delete), BVHIDE and BVSHOW; and RESETBLOCK on references.
+//! Rotation, Point, Polar, XY, Alignment, Lookup), BACTION (Stretch, Move,
+//! Array), BLOOKUPTABLE, BVSTATE (New, Set, Delete), BVHIDE and BVSHOW;
+//! and RESETBLOCK on references.
 
 use oxidraft_geom::{Aabb, Point};
 use oxidraft_model::dynamic::{DynamicBlock, DynamicValues, Param, VisibilityState};
@@ -56,13 +57,16 @@ impl Command for BParameter {
     fn prompt(&self) -> Prompt {
         match (self.stage, self.kind) {
             (ParamStage::Kind, _) => Prompt::new("Enter parameter type")
-                .with_keywords(&["Linear", "Flip", "Rotation"])
+                .with_keywords(&["Linear", "Flip", "Rotation", "Point", "Polar", "XY", "Alignment", "lOokup"])
                 .with_default("Linear"),
             (ParamStage::First, "Flip") => Prompt::new("Specify base point of reflection line"),
-            (ParamStage::First, "Rotation") => Prompt::new("Specify base point"),
+            (ParamStage::First, "Rotation" | "XY" | "Alignment") => Prompt::new("Specify base point"),
+            (ParamStage::First, "Point" | "Lookup") => Prompt::new("Specify parameter location"),
             (ParamStage::First, _) => Prompt::new("Specify start point"),
             (ParamStage::Second(_), "Flip") => Prompt::new("Specify endpoint of reflection line"),
             (ParamStage::Second(_), "Rotation") => Prompt::new("Specify radius of parameter"),
+            (ParamStage::Second(_), "XY") => Prompt::new("Specify opposite corner"),
+            (ParamStage::Second(_), "Alignment") => Prompt::new("Specify alignment direction"),
             (ParamStage::Second(_), _) => Prompt::new("Specify endpoint"),
             (ParamStage::Name(..), _) => Prompt::new("Enter parameter name"),
         }
@@ -75,11 +79,20 @@ impl Command for BParameter {
                 self.kind = match k {
                     "Flip" => "Flip",
                     "Rotation" => "Rotation",
+                    "Point" => "Point",
+                    "Polar" => "Polar",
+                    "XY" => "XY",
+                    "Alignment" => "Alignment",
+                    "lOokup" => "Lookup",
                     _ => "Linear",
                 };
                 self.stage = ParamStage::First;
             }
             (ParamStage::Kind, Input::Enter) => self.stage = ParamStage::First,
+            // One point is enough for these.
+            (ParamStage::First, Input::Point(p)) if matches!(self.kind, "Point" | "Lookup") => {
+                self.stage = ParamStage::Name(p, p);
+            }
             (ParamStage::First, Input::Point(p)) => self.stage = ParamStage::Second(p),
             (ParamStage::Second(a), Input::Point(b)) => {
                 if a.approx_eq(b) {
@@ -89,8 +102,13 @@ impl Command for BParameter {
             }
             (ParamStage::Name(a, b), input @ (Input::Text(_) | Input::Enter)) => {
                 let mut def = definition(ctx.doc, &block);
-                let fallback =
-                    format!("{}{}", if self.kind == "Linear" { "Distance" } else { self.kind }, def.params.len() + 1);
+                let word = match self.kind {
+                    "Linear" | "Polar" => "Distance",
+                    "Point" => "Position",
+                    "Rotation" => "Angle",
+                    k => k,
+                };
+                let fallback = format!("{word}{}", def.params.len() + 1);
                 let name = match input {
                     Input::Text(t) if !t.trim().is_empty() => t.trim().to_string(),
                     _ => fallback,
@@ -102,11 +120,22 @@ impl Command for BParameter {
                 def.params.push(match self.kind {
                     "Flip" => Param::Flip { name: name.clone(), base: a, end: b },
                     "Rotation" => Param::Rotation { name: name.clone(), base: a, radius: a.distance(b) },
+                    "Point" => Param::Point { name: name.clone(), base: a, objects: Vec::new() },
+                    "Polar" => Param::Polar { name: name.clone(), base: a, end: b, stretch: None },
+                    "XY" => Param::Xy { name: name.clone(), base: a, end: b, stretch: None },
+                    "Alignment" => Param::Alignment { name: name.clone(), base: a, end: b },
+                    "Lookup" => Param::Lookup { name: name.clone(), base: a, rows: Vec::new() },
                     _ => Param::Linear { name: name.clone(), base: a, end: b, stretch: None },
                 });
                 ctx.doc.set_dynamic_block(&block, Some(def));
-                if self.kind == "Linear" {
-                    ctx.messages.push(format!("BACTION gives \"{name}\" a stretch frame."));
+                let hint = match self.kind {
+                    "Linear" | "Polar" | "XY" => format!("BACTION gives \"{name}\" a stretch frame or an array."),
+                    "Point" => format!("BACTION gives \"{name}\" the objects it moves."),
+                    "Lookup" => format!("BLOOKUPTABLE gives \"{name}\" its rows."),
+                    _ => String::new(),
+                };
+                if !hint.is_empty() {
+                    ctx.messages.push(hint);
                 }
                 return Ok(Step::Done);
             }
@@ -131,13 +160,19 @@ impl Command for BParameter {
 #[derive(Clone, PartialEq)]
 enum ActionStage {
     Param,
+    /// Stretch or Array, for a linear, polar or XY parameter.
+    Kind(String),
     First(String),
     Second(String, Point),
+    /// The objects a point's move or an array takes.
+    Objects(String, bool),
+    Spacing(String, Vec<usize>),
 }
 
-/// BACTION: a linear parameter's stretch action — what lies inside a
-/// frame moves with the parameter's end. Flip and rotation parameters act
-/// on the whole block.
+/// BACTION: what a parameter does. A linear, polar or XY parameter's
+/// stretch (what lies inside a frame moves with its end) or array (the
+/// objects repeat along its distance), a point's move (the objects go with
+/// it). Flip, rotation and alignment parameters act on the whole block.
 pub struct BAction {
     stage: ActionStage,
     outside: bool,
@@ -160,10 +195,15 @@ impl Command for BAction {
     }
 
     fn prompt(&self) -> Prompt {
-        match self.stage {
-            ActionStage::Param => Prompt::new("Enter the name of the parameter to stretch"),
+        match &self.stage {
+            ActionStage::Param => Prompt::new("Enter the name of the parameter"),
+            ActionStage::Kind(_) => {
+                Prompt::new("Enter action type").with_keywords(&["Stretch", "Array"]).with_default("Stretch")
+            }
             ActionStage::First(_) => Prompt::new("Specify first corner of stretch frame"),
             ActionStage::Second(..) => Prompt::new("Specify opposite corner"),
+            ActionStage::Objects(..) => Prompt::new("Select objects"),
+            ActionStage::Spacing(..) => Prompt::new("Enter the distance between items"),
         }
     }
 
@@ -173,24 +213,69 @@ impl Command for BAction {
             (ActionStage::Param, Input::Text(t)) => {
                 let def = definition(ctx.doc, &block);
                 match def.params.iter().find(|p| p.name().eq_ignore_ascii_case(t.trim())) {
-                    Some(Param::Linear { name, .. }) => self.stage = ActionStage::First(name.clone()),
+                    Some(Param::Linear { name, .. } | Param::Polar { name, .. } | Param::Xy { name, .. }) => {
+                        self.stage = ActionStage::Kind(name.clone())
+                    }
+                    Some(Param::Point { name, .. }) => self.stage = ActionStage::Objects(name.clone(), false),
+                    Some(Param::Lookup { .. }) => {
+                        ctx.messages.push("A lookup's table is BLOOKUPTABLE's.".into());
+                        return Ok(Step::Done);
+                    }
                     Some(_) => {
-                        ctx.messages.push("Flip and rotation parameters act on the whole block.".into());
+                        ctx.messages.push("Flip, rotation and alignment parameters act on the whole block.".into());
                         return Ok(Step::Done);
                     }
                     None => return Err(format!("No parameter named \"{}\".", t.trim())),
                 }
             }
+            (ActionStage::Kind(name), Input::Keyword("Array")) => self.stage = ActionStage::Objects(name, true),
+            // A point: Stretch, the default, its frame's first corner.
+            (ActionStage::Kind(name), Input::Point(p)) => self.stage = ActionStage::Second(name, p),
+            (ActionStage::Kind(name), Input::Keyword(_) | Input::Enter) => self.stage = ActionStage::First(name),
             (ActionStage::First(name), Input::Point(p)) => self.stage = ActionStage::Second(name, p),
             (ActionStage::Second(name, a), Input::Point(b)) => {
                 let mut def = definition(ctx.doc, &block);
+                let frame = Aabb::from_points(a + base, b + base);
                 for p in &mut def.params {
-                    if let Param::Linear { name: n, stretch, .. } = p
-                        && *n == name
-                    {
-                        *stretch = Some(Aabb::from_points(a + base, b + base));
+                    match p {
+                        Param::Linear { name: n, stretch, .. }
+                        | Param::Polar { name: n, stretch, .. }
+                        | Param::Xy { name: n, stretch, .. }
+                            if *n == name =>
+                        {
+                            *stretch = Some(frame);
+                        }
+                        _ => {}
                     }
                 }
+                ctx.doc.set_dynamic_block(&block, Some(def));
+                return Ok(Step::Done);
+            }
+            (ActionStage::Objects(name, array), Input::Selection(s)) => {
+                let order = ctx.doc.block_editor_order();
+                let places: Vec<usize> = s.ids.iter().filter_map(|id| order.iter().position(|o| o == id)).collect();
+                if places.is_empty() {
+                    return Ok(Step::Done);
+                }
+                if array {
+                    self.stage = ActionStage::Spacing(name, places);
+                    return Ok(Step::Continue);
+                }
+                let mut def = definition(ctx.doc, &block);
+                for p in &mut def.params {
+                    if let Param::Point { name: n, objects, .. } = p
+                        && *n == name
+                    {
+                        *objects = places.clone();
+                    }
+                }
+                ctx.doc.set_dynamic_block(&block, Some(def));
+                return Ok(Step::Done);
+            }
+            (ActionStage::Spacing(name, objects), Input::Value(d)) if d > 0.0 => {
+                let mut def = definition(ctx.doc, &block);
+                let action = format!("Array{}", def.params.len() + 1);
+                def.params.push(Param::Array { name: action, follows: name, objects, spacing: d });
                 ctx.doc.set_dynamic_block(&block, Some(def));
                 return Ok(Step::Done);
             }
@@ -202,6 +287,88 @@ impl Command for BAction {
 
     fn wants_text(&self) -> bool {
         self.stage == ActionStage::Param
+    }
+
+    fn wants_selection(&self) -> bool {
+        matches!(self.stage, ActionStage::Objects(..))
+    }
+}
+
+/// BLOOKUPTABLE: a lookup parameter's rows — each a label and the values
+/// it gives other parameters' properties (`Length=60, Width=30`).
+#[derive(Default)]
+pub struct BLookupTable {
+    lookup: Option<String>,
+    label: Option<String>,
+    outside: bool,
+}
+
+impl Command for BLookupTable {
+    fn prepare(&mut self, doc: &Document) -> Option<String> {
+        self.outside = edited(doc).is_none();
+        self.outside.then(|| NOT_IN_EDITOR.into())
+    }
+
+    fn is_finished(&self) -> bool {
+        self.outside
+    }
+
+    fn prompt(&self) -> Prompt {
+        match (&self.lookup, &self.label) {
+            (None, _) => Prompt::new("Enter the name of the lookup parameter"),
+            (Some(_), None) => Prompt::new("Enter a row's label (Enter when done)"),
+            (Some(_), Some(l)) => Prompt::new(format!("Enter {l}'s values as property=value, ...")),
+        }
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let Some((block, _)) = edited(ctx.doc) else { return Err(NOT_IN_EDITOR.into()) };
+        let text = match input {
+            Input::Text(t) if !t.trim().is_empty() => t.trim().to_string(),
+            _ => return Ok(Step::Done),
+        };
+        let mut def = definition(ctx.doc, &block);
+        match (self.lookup.clone(), self.label.take()) {
+            (None, _) => {
+                let found = def
+                    .params
+                    .iter()
+                    .find(|p| matches!(p, Param::Lookup { .. }) && p.name().eq_ignore_ascii_case(&text));
+                self.lookup = Some(found.ok_or(format!("No lookup parameter named \"{text}\"."))?.name().to_string());
+            }
+            (Some(_), None) => self.label = Some(text),
+            (Some(lookup), Some(label)) => {
+                let mut values = Vec::new();
+                for pair in text.split(',') {
+                    let (k, v) = pair.split_once('=').ok_or("Enter property=value pairs.")?;
+                    let (k, v) =
+                        (k.trim(), v.trim().parse::<f64>().map_err(|_| format!("\"{}\" isn't a number.", v.trim()))?);
+                    let known = def.properties().iter().any(|(p, _)| p.eq_ignore_ascii_case(k));
+                    if !known {
+                        return Err(format!("No property named \"{k}\"."));
+                    }
+                    values.push((k.to_string(), v));
+                }
+                for p in &mut def.params {
+                    if let Param::Lookup { name, rows, .. } = p
+                        && *name == lookup
+                    {
+                        rows.retain(|(l, _)| !l.eq_ignore_ascii_case(&label));
+                        rows.push((label.clone(), values.clone()));
+                    }
+                }
+                ctx.doc.set_dynamic_block(&block, Some(def));
+            }
+        }
+        Ok(Step::Continue)
+    }
+
+    fn wants_text(&self) -> bool {
+        true
+    }
+
+    fn text_with_spaces(&self) -> bool {
+        true
     }
 }
 
@@ -397,8 +564,8 @@ impl Command for DynProp {
                 let id = ctx.pick(at).ok_or("No object found.")?;
                 let v = ctx.doc.dynamic_values(id).ok_or("Not a dynamic block reference.")?;
                 if let Some(def) = ctx.doc.dynamic_block(&v.block) {
-                    let names: Vec<String> = def.params.iter().map(|p| p.name().to_string()).collect();
-                    ctx.messages.push(format!("Parameters: {}", names.join(", ")));
+                    let names: Vec<String> = def.properties().into_iter().map(|(k, _)| k).collect();
+                    ctx.messages.push(format!("Properties: {}", names.join(", ")));
                 }
                 self.id = Some(id);
             }
@@ -409,9 +576,17 @@ impl Command for DynProp {
                     let Input::Text(t) = input else { return Err("Enter a state's name.".into()) };
                     v.visibility = Some(t.trim().to_string());
                 } else {
-                    let value = match input {
-                        Input::Value(x) => x,
-                        Input::Text(t) => t.trim().parse().map_err(|_| "Requires a number.")?,
+                    // A lookup takes its row's label.
+                    let row = match (&input, ctx.doc.dynamic_block(&v.block).and_then(|d| d.param_of(&name))) {
+                        (Input::Text(t), Some(Param::Lookup { rows, .. })) => {
+                            rows.iter().position(|(l, _)| l.eq_ignore_ascii_case(t.trim())).map(|i| i as f64)
+                        }
+                        _ => None,
+                    };
+                    let value = match (row, input) {
+                        (Some(r), _) => r,
+                        (None, Input::Value(x)) => x,
+                        (None, Input::Text(t)) => t.trim().parse().map_err(|_| "Requires a number.")?,
                         _ => unreachable!(),
                     };
                     v.values.retain(|(n, _)| !n.eq_ignore_ascii_case(&name));
@@ -436,6 +611,64 @@ impl Command for DynProp {
 
     fn text_with_spaces(&self) -> bool {
         true
+    }
+}
+
+/// Dragging a dynamic reference's parameter grip: its properties set from
+/// where it's dropped. An alignment grip dropped on an object lines the
+/// block up with it, there.
+pub struct DynGripEdit {
+    id: oxidraft_model::EntityId,
+    grip: oxidraft_model::dynamic::DynGrip,
+    at: Point,
+}
+
+impl DynGripEdit {
+    pub fn new(id: oxidraft_model::EntityId, grip: oxidraft_model::dynamic::DynGrip, at: Point) -> Self {
+        Self { id, grip, at }
+    }
+}
+
+impl Command for DynGripEdit {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("** PARAMETER ** Specify new location").with_keywords(&["eXit"])
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let to = match input {
+            Input::Point(p) => p,
+            Input::Pick { at, .. } => at,
+            _ => return Ok(Step::Done),
+        };
+        // What an alignment grip is dropped on, and its direction there.
+        let along = ctx.pick(to).filter(|o| *o != self.id).and_then(|o| {
+            let segs = ctx.doc.entity(o)?.geometry.segments();
+            let s = segs.iter().min_by(|a, b| a.distance_to(to).total_cmp(&b.distance_to(to)))?;
+            Some(Point::ORIGIN.angle_to(s.tangent_at(s.param_of(to).clamp(0.0, 1.0))))
+        });
+        let values =
+            ctx.doc.dynamic_grip_values(self.id, &self.grip, to, along).ok_or("Not a dynamic block reference.")?;
+        let aligned = along.is_some()
+            && matches!(&self.grip, oxidraft_model::dynamic::DynGrip::Param(i)
+                if ctx.doc.dynamic_block(&values.block).and_then(|d| d.params.get(*i)).is_some_and(|p| matches!(p, Param::Alignment { .. })));
+        ctx.doc.set_dynamic_values(self.id, values);
+        if aligned {
+            let shift = to - self.at;
+            ctx.doc.update(self.id, |e| e.geometry = e.geometry.translated(shift));
+        }
+        Ok(Step::Done)
+    }
+
+    fn preview(&self, cursor: Point) -> Vec<Geometry> {
+        vec![Geometry::Line { start: self.at, end: cursor }]
+    }
+
+    fn base_point(&self) -> Option<Point> {
+        Some(self.at)
+    }
+
+    fn highlighted(&self) -> Vec<oxidraft_model::EntityId> {
+        vec![self.id]
     }
 }
 
@@ -509,6 +742,81 @@ mod tests {
         e.set_selection(vec![id]);
         run(&mut e, &mut d, &["resetblock"]);
         assert_eq!(d.expanded(d.entity(id).unwrap()).len(), 2);
+    }
+
+    #[test]
+    fn points_lookups_arrays_and_grips() {
+        let (mut e, mut d) = (Engine::new(), Document::new());
+        let line = |a: (f64, f64), b: (f64, f64)| {
+            BlockEntity::new(
+                "0",
+                Color::ByBlock,
+                Geometry::Line { start: Point::new(a.0, a.1), end: Point::new(b.0, b.1) },
+            )
+        };
+        d.define_block(Block {
+            name: "BENCH".into(),
+            base: Point::ORIGIN,
+            entities: vec![line((0.0, 0.0), (100.0, 0.0)), line((0.0, 10.0), (5.0, 10.0))],
+        });
+        d.begin_block_edit("BENCH").unwrap();
+        let order = d.block_editor_order();
+        // A point moving the small mark; a linear length with the mark arrayed along it.
+        run(&mut e, &mut d, &["bparameter", "point", "0,10", "Mark"]);
+        run(&mut e, &mut d, &["baction", "Mark"]);
+        e.click(Point::new(2.5, 10.0), Point::new(2.5, 10.0), false, &mut d, 0.5);
+        run(&mut e, &mut d, &[""]);
+        let _ = order;
+        run(&mut e, &mut d, &["bparameter", "l", "0,0", "100,0", "Length"]);
+        run(&mut e, &mut d, &["baction", "Length", "stretch", "90,-5", "110,5"]);
+        run(&mut e, &mut d, &["bparameter", "lookup", "0,-10", "Size"]);
+        run(&mut e, &mut d, &["blookuptable", "Size", "Short", "Length=50", "Long", "Length=150", ""]);
+        d.close_refedit(true);
+        let def = d.dynamic_block("BENCH").unwrap().clone();
+        assert!(
+            matches!(&def.params[0], oxidraft_model::dynamic::Param::Point { objects, .. } if objects == &[1]),
+            "{def:?}"
+        );
+        assert!(matches!(&def.params[2], oxidraft_model::dynamic::Param::Lookup { rows, .. } if rows.len() == 2));
+        let id = d.add(Geometry::Insert {
+            block: "BENCH".into(),
+            placement: Placement::at(Point::new(1000.0, 0.0)),
+            attributes: vec![],
+            clip: None,
+        });
+        let ends = |d: &Document| {
+            let mut x: Vec<i64> = d
+                .expanded(d.entity(id).unwrap())
+                .iter()
+                .filter_map(|g| if let Geometry::Line { end, .. } = g { Some(end.x.round() as i64) } else { None })
+                .collect();
+            x.sort();
+            x
+        };
+        assert_eq!(ends(&d), [1005, 1100]);
+        // The length's grip dragged to 130.
+        e.set_selection(vec![id]);
+        let grips = e.grips(&d);
+        assert!(grips.contains(&Point::new(1100.0, 0.0)), "{grips:?}");
+        e.click(Point::new(1100.0, 0.0), Point::new(1100.0, 0.0), false, &mut d, 0.5);
+        assert_eq!(e.active_name(), Some("-DYNPROP"));
+        e.click(Point::new(1130.0, 7.0), Point::new(1130.0, 7.0), false, &mut d, 0.5);
+        assert_eq!(ends(&d), [1005, 1130]);
+        // The point's grip: the mark moves.
+        e.set_selection(vec![id]);
+        e.click(Point::new(1000.0, 10.0), Point::new(1000.0, 10.0), false, &mut d, 0.5);
+        e.click(Point::new(1020.0, 30.0), Point::new(1020.0, 30.0), false, &mut d, 0.5);
+        assert_eq!(ends(&d), [1025, 1130]);
+        // The lookup's grip: its first row, Short.
+        e.set_selection(vec![id]);
+        e.click(Point::new(1000.0, -10.0), Point::new(1000.0, -10.0), false, &mut d, 0.5);
+        assert_eq!(ends(&d), [1025, 1050]);
+        // -DYNPROP takes a lookup's label.
+        e.set_selection(Vec::new());
+        run(&mut e, &mut d, &["-dynprop"]);
+        e.click(Point::new(1040.0, 0.0), Point::new(1040.0, 0.0), false, &mut d, 0.5);
+        run(&mut e, &mut d, &["Size", "Long"]);
+        assert_eq!(ends(&d), [1025, 1150]);
     }
 }
 
