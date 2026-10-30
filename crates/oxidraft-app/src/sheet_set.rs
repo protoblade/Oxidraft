@@ -1,6 +1,6 @@
 //! SHEETSET: the Sheet Set Manager. A sheet set is a list of sheets —
 //! layouts of drawings, each with its number and title — kept in a sheet
-//! set file (.oxss, JSON) beside them. The palette adds a drawing's
+//! set file beside them: Oxidraft's (.oxss, JSON) or AutoCAD's (.dst). The palette adds a drawing's
 //! layouts, removes and reorders sheets, opens one's drawing in a tab,
 //! publishes the set (or the sheets ticked, a sheet selection saved by
 //! name) to one PDF, places a sheet list table, and ARCHIVE copies the set
@@ -51,6 +51,9 @@ pub struct SheetSet {
     pub selections: Vec<SheetSelection>,
     /// The sheet views' numbers: a view (its drawing and name) and its number.
     pub view_numbers: Vec<((String, String), String)>,
+    /// The AutoCAD sheet set (.dst) it was read from, kept to save on.
+    #[serde(skip)]
+    pub dst: Option<Box<oxidraft_io_dwg::sheet_set::SheetSetDatabase>>,
 }
 
 /// A sheet view: a named view on a sheet's layout.
@@ -141,25 +144,33 @@ fn property_rows(ui: &mut egui::Ui, id: &str, properties: &mut Vec<(String, Stri
 }
 
 impl SheetSet {
+    /// The sheet set at `path`: Oxidraft's (.oxss) or AutoCAD's (.dst).
     pub fn load(path: &Path) -> Result<SheetSet, String> {
+        if crate::dst::is_dst(path) {
+            return crate::dst::read_dst(path);
+        }
         let text = std::fs::read_to_string(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
         serde_json::from_str(&text).map_err(|e| format!("{} isn't a sheet set: {e}", path.display()))
     }
 
-    pub fn save(&self, path: &Path) -> Result<(), String> {
+    pub fn save(&mut self, path: &Path) -> Result<(), String> {
+        if crate::dst::is_dst(path) {
+            self.dst = Some(Box::new(crate::dst::write_dst(self, path)?));
+            return Ok(());
+        }
         let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         std::fs::write(path, text).map_err(|e| format!("Could not write {}: {e}", path.display()))
     }
 }
 
 /// `file` as the set at `set` names it: relative to its folder when it's in it.
-fn relative(set: &Path, file: &Path) -> String {
+pub(crate) fn relative(set: &Path, file: &Path) -> String {
     let dir = set.parent().unwrap_or(Path::new(""));
     file.strip_prefix(dir).unwrap_or(file).to_string_lossy().replace('\\', "/")
 }
 
 /// Where a sheet's drawing is.
-fn drawing_path(set: Option<&Path>, sheet: &SheetRef) -> PathBuf {
+pub(crate) fn drawing_path(set: Option<&Path>, sheet: &SheetRef) -> PathBuf {
     let p = PathBuf::from(&sheet.drawing);
     match set.and_then(Path::parent) {
         Some(dir) if p.is_relative() => dir.join(p),
@@ -183,7 +194,7 @@ impl OxidraftApp {
 
     /// A new sheet set named `name`, kept at `path`.
     pub fn new_sheet_set(&mut self, path: &Path, name: &str) -> Result<(), String> {
-        let set = SheetSet { name: name.into(), ..Default::default() };
+        let mut set = SheetSet { name: name.into(), ..Default::default() };
         set.save(path)?;
         self.sheet_set = Some(SheetSetPalette::new(Some(path.to_path_buf()), set));
         Ok(())
@@ -464,7 +475,7 @@ impl OxidraftApp {
                     load = ui.button("Open...").clicked();
                 });
                 if p.path.is_none() {
-                    ui.colored_label(theme::text_dim(), "Make a sheet set, or open one (.oxss).");
+                    ui.colored_label(theme::text_dim(), "Make a sheet set, or open one (.oxss, or AutoCAD's .dst).");
                     return;
                 }
                 ui.label(RichText::new(&p.set.name).strong());
@@ -668,8 +679,10 @@ impl OxidraftApp {
         let sheet = open_drawing.and_then(|i| p.set.sheets.get(i)).map(|s| drawing_path(p.path.as_deref(), s));
         self.sheet_set = open.then_some(p);
         if new
-            && let Some(path) =
-                rfd::FileDialog::new().add_filter("Sheet set", &["oxss"]).set_file_name("Sheets.oxss").save_file()
+            && let Some(path) = rfd::FileDialog::new()
+                .add_filter("Sheet set", &["oxss", "dst"])
+                .set_file_name("Sheets.oxss")
+                .save_file()
         {
             let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
             if let Err(e) = self.new_sheet_set(&path, &name) {
@@ -677,7 +690,7 @@ impl OxidraftApp {
             }
         }
         if load
-            && let Some(path) = rfd::FileDialog::new().add_filter("Sheet set", &["oxss"]).pick_file()
+            && let Some(path) = rfd::FileDialog::new().add_filter("Sheet set", &["oxss", "dst"]).pick_file()
             && let Err(e) = self.open_sheet_set(&path)
         {
             self.engine.log(e);

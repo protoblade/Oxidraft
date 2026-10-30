@@ -902,7 +902,7 @@ impl OxidraftApp {
             "TRACEBACK" => self.trace_front = false,
             "SHEETSETHIDE" => self.sheet_set = None,
             "OPENSHEETSET" => {
-                if let Some(path) = rfd::FileDialog::new().add_filter("Sheet set", &["oxss"]).pick_file()
+                if let Some(path) = rfd::FileDialog::new().add_filter("Sheet set", &["oxss", "dst"]).pick_file()
                     && let Err(e) = self.open_sheet_set(&path)
                 {
                     self.engine.log(e);
@@ -910,7 +910,7 @@ impl OxidraftApp {
             }
             "NEWSHEETSET" => {
                 if let Some(path) =
-                    rfd::FileDialog::new().add_filter("Sheet set", &["oxss"]).set_file_name("Sheets.oxss").save_file()
+                    rfd::FileDialog::new().add_filter("Sheet set", &["oxss", "dst"]).set_file_name("Sheets.oxss").save_file()
                 {
                     let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
                     if let Err(e) = self.new_sheet_set(&path, &name) {

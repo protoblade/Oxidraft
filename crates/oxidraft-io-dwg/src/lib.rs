@@ -9,6 +9,9 @@ use acadrust::{CadDocument, DwgReadOptions, DwgReader, DwgWriter, DxfReader, Dxf
 use oxidraft_io_dxf::Imported;
 use oxidraft_model::Document;
 
+/// AutoCAD's sheet set files (.dst), as acadrust reads and writes them.
+pub use acadrust::sheet_set;
+
 mod dimassoc;
 mod fields;
 mod groups;
