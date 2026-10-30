@@ -134,8 +134,28 @@ pub enum DclCall {
 /// an AutoCAD color.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImageOp {
-    Fill { x: f64, y: f64, w: f64, h: f64, color: i64 },
-    Vector { x1: f64, y1: f64, x2: f64, y2: f64, color: i64 },
+    Fill {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        color: i64,
+    },
+    Vector {
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        color: i64,
+    },
+    /// A slide file's vectors, fitted into the rectangle.
+    Slide {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        name: String,
+    },
 }
 
 #[derive(Debug)]
@@ -1379,6 +1399,14 @@ impl Lisp {
                 } else {
                     ImageOp::Vector { x1: *a, y1: *b, x2: *c, y2: *d, color }
                 });
+                arg(4)
+            }
+            "SLIDE_IMAGE" => {
+                let n: Vec<f64> = a[..4.min(a.len())].iter().map(Value::num).collect::<Result<_, _>>()?;
+                let (Some(img), [x, y, w, h]) = (&mut self.image, n.as_slice()) else {
+                    return Err("bad argument: a slide's place and name".into());
+                };
+                img.1.push(ImageOp::Slide { x: *x, y: *y, w: *w, h: *h, name: arg(4).text()?.to_string() });
                 arg(4)
             }
             "END_IMAGE" => {

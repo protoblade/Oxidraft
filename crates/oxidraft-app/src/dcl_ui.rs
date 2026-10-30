@@ -117,6 +117,7 @@ impl OpenDialog {
                         ImageOp::Vector { x1, y1, x2, y2, color: c } => {
                             painter.line_segment([at(x1, y1), at(x2, y2)], egui::Stroke::new(1.0, color(c)));
                         }
+                        ImageOp::Slide { .. } => {}
                     }
                 }
                 if r.clicked() {
@@ -374,8 +375,37 @@ impl OxidraftApp {
                 Some(Reply::Unit)
             }
             DclCall::Image(key, ops) => {
+                // A slide's vectors, fitted into its rectangle (slides run up).
+                let mut drawn = Vec::new();
+                for op in ops {
+                    let ImageOp::Slide { x, y, w, h, name } = &op else {
+                        drawn.push(op);
+                        continue;
+                    };
+                    let mut file = std::path::PathBuf::from(name);
+                    if file.extension().is_none() {
+                        file.set_extension("sld");
+                    }
+                    if file.is_relative()
+                        && let Some(dir) = self.path.as_ref().and_then(|p| p.parent())
+                    {
+                        file = dir.join(file);
+                    }
+                    let Ok(slide) = std::fs::read(&file)
+                        .map_err(|e| e.to_string())
+                        .and_then(|b| oxidraft_plot::slide::read_sld(&b))
+                    else {
+                        continue;
+                    };
+                    let k = (w / f64::from(slide.width.max(1))).min(h / f64::from(slide.height.max(1)));
+                    let at = |p: (i16, i16)| (x + f64::from(p.0) * k, y + h - f64::from(p.1) * k);
+                    for (c, a, b) in &slide.vectors {
+                        let ((x1, y1), (x2, y2)) = (at(*a), at(*b));
+                        drawn.push(ImageOp::Vector { x1, y1, x2, y2, color: i64::from(*c) });
+                    }
+                }
                 if let Some(d) = &mut self.lisp.dialog {
-                    d.images.insert(key, ops);
+                    d.images.insert(key, drawn);
                 }
                 Some(Reply::Unit)
             }

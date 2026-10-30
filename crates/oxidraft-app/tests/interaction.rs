@@ -3478,6 +3478,9 @@ fn autolisp_dcl_dialogs() {
         }"#,
     )
     .unwrap();
+    // A slide for the image: one red diagonal.
+    let slide = oxidraft_plot::slide::Slide { width: 100, height: 50, vectors: vec![(1, (0, 0), (100, 50))] };
+    std::fs::write(dir.join("logo.sld"), oxidraft_plot::slide::write_sld(&slide)).unwrap();
     let lsp = dir.join("hello.lsp");
     std::fs::write(
         &lsp,
@@ -3487,14 +3490,15 @@ fn autolisp_dcl_dialogs() {
   (new_dialog "hello" id)
   (start_list "size") (mapcar 'add_list '("Small" "Large")) (end_list)
   (set_tile "size" "1")
-  (start_image "pic") (fill_image 0 0 (setq w (dimx_tile "pic")) (setq ht (dimy_tile "pic")) 1) (vector_image 0 0 w ht 7) (end_image)
+  (start_image "pic") (fill_image 0 0 (setq w (dimx_tile "pic")) (setq ht (dimy_tile "pic")) 1) (vector_image 0 0 w ht 7) (slide_image 0 0 w ht "{}") (end_image)
   (action_tile "greet" "(setq greeted (get_tile \"name\")) (set_tile \"name\" \"Done\")")
   (action_tile "accept" "(setq loud (get_tile \"loud\") size (get_tile \"size\")) (done_dialog 1)")
   (setq r (start_dialog))
   (unload_dialog id)
   (princ (strcat "status " (itoa r) " " greeted " loud " loud " size " size))
   (princ))"#,
-            dcl.display().to_string().replace('\\', "/")
+            dcl.display().to_string().replace('\\', "/"),
+            dir.join("logo.sld").display().to_string().replace('\\', "/")
         ),
     )
     .unwrap();
