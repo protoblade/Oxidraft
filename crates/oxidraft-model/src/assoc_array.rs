@@ -38,6 +38,8 @@ pub enum ArrayLayout {
         items: usize,
         align: bool,
         spacing: Option<f64>,
+        /// Rows beside the path, and how far apart (to its left).
+        rows: (usize, f64),
     },
 }
 
@@ -145,7 +147,8 @@ impl ArrayLayout {
     pub fn count(&self) -> usize {
         match self {
             ArrayLayout::Rect { rows, columns, .. } => rows * columns,
-            ArrayLayout::Polar { items, .. } | ArrayLayout::Path { items, .. } => *items,
+            ArrayLayout::Polar { items, .. } => *items,
+            ArrayLayout::Path { items, rows, .. } => items * rows.0.max(1),
         }
     }
 
@@ -172,15 +175,20 @@ impl ArrayLayout {
                     })
                     .collect()
             }
-            ArrayLayout::Path { path, items, align, spacing } => {
+            ArrayLayout::Path { path, items, align, spacing, rows } => {
                 let segs = path.segments();
                 let length: f64 = segs.iter().map(|s| s.length()).sum();
                 let Some((_, start)) = at_length(&segs, 0.0) else { return Vec::new() };
                 let gaps = if path.is_closed() { *items } else { items.saturating_sub(1) };
                 let step = spacing.unwrap_or(length / gaps.max(1) as f64);
-                (0..*items)
-                    .filter_map(|i| at_length(&segs, step * i as f64))
-                    .map(|(at, angle)| (at, if *align { angle - start } else { 0.0 }))
+                // Each row the path's items moved to its left, `rows.1` a row.
+                (0..rows.0.max(1))
+                    .flat_map(|r| {
+                        (0..*items).filter_map(|i| at_length(&segs, step * i as f64)).map(move |(at, angle)| {
+                            let aside = Point::new(0.0, rows.1 * r as f64).rotated_about(Point::ORIGIN, angle);
+                            (at + aside, if *align { angle - start } else { 0.0 })
+                        })
+                    })
                     .collect()
             }
         }
@@ -483,13 +491,14 @@ impl Document {
                 if *id == *changed || !same_curve(path, before) {
                     continue;
                 }
-                let Some(ArrayLayout::Path { items, align, spacing, .. }) = self.array(*id).map(|a| a.layout.clone())
+                let Some(ArrayLayout::Path { items, align, spacing, rows, .. }) =
+                    self.array(*id).map(|a| a.layout.clone())
                 else {
                     continue;
                 };
                 // Into the array block's own coordinates.
                 let local = now.map_points(&|p| placement.local(*base, p), 1.0 / placement.scale, placement.mirror);
-                self.set_array_layout(*id, ArrayLayout::Path { path: Box::new(local), items, align, spacing });
+                self.set_array_layout(*id, ArrayLayout::Path { path: Box::new(local), items, align, spacing, rows });
             }
         }
     }
@@ -591,9 +600,16 @@ mod tests {
             polar.items(Point::ORIGIN).iter().map(|(p, _)| (p.x.round() as i64, p.y.round() as i64)).collect();
         assert_eq!(at, [(0, 0), (10, 10), (0, 20), (-10, 10)]);
         let line = Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(30.0, 0.0) };
-        let path = ArrayLayout::Path { path: Box::new(line), items: 4, align: false, spacing: None };
+        let path = ArrayLayout::Path { path: Box::new(line), items: 4, align: false, spacing: None, rows: (1, 0.0) };
         let xs: Vec<f64> = path.items(Point::ORIGIN).iter().map(|(p, _)| p.x).collect();
         assert_eq!(xs, [0.0, 10.0, 20.0, 30.0]);
+        // Two rows 5 apart: the second to the path's left.
+        let line = Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(30.0, 0.0) };
+        let rows = ArrayLayout::Path { path: Box::new(line), items: 4, align: false, spacing: None, rows: (2, 5.0) };
+        let at: Vec<(i64, i64)> =
+            rows.items(Point::ORIGIN).iter().map(|(p, _)| (p.x.round() as i64, p.y.round() as i64)).collect();
+        assert_eq!(at, [(0, 0), (10, 0), (20, 0), (30, 0), (0, 5), (10, 5), (20, 5), (30, 5)]);
+        assert_eq!(rows.count(), 8);
     }
 
     #[test]
@@ -602,7 +618,7 @@ mod tests {
         d.begin("path");
         let path = d.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(30.0, 0.0) });
         let line = d.entity(path).unwrap().geometry.clone();
-        let layout = ArrayLayout::Path { path: Box::new(line), items: 4, align: false, spacing: None };
+        let layout = ArrayLayout::Path { path: Box::new(line), items: 4, align: false, spacing: None, rows: (1, 0.0) };
         let a = d.make_array(&[c], layout).unwrap();
         d.commit();
         assert_eq!(centers(&d, a), [(0, 0), (10, 0), (20, 0), (30, 0)]);

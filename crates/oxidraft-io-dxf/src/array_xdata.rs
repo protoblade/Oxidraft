@@ -34,7 +34,7 @@ pub fn xdata(e: &Entity) -> Option<XData> {
             items.push(XDataItem::Integer(i16::from(*rotate)));
             "POLAR"
         }
-        ArrayLayout::Path { path, items: n, align, spacing } => {
+        ArrayLayout::Path { path, items: n, align, spacing, rows } => {
             let Geometry::Polyline { vertices, closed } =
                 Geometry::polyline_from_segs(&path.segments(), path.is_closed())
             else {
@@ -44,8 +44,12 @@ pub fn xdata(e: &Entity) -> Option<XData> {
             for v in vertices {
                 items.extend([XDataItem::Real(v.point.x), XDataItem::Real(v.point.y), XDataItem::Real(v.bulge)]);
             }
-            // Measure's spacing, as a distance.
+            // Measure's spacing, as a distance; rows beside the path, as
+            // scale factors (their count, how far apart).
             items.extend(spacing.map(XDataItem::Distance));
+            if rows.0 > 1 {
+                items.extend([XDataItem::ScaleFactor(rows.0 as f64), XDataItem::ScaleFactor(rows.1)]);
+            }
             "PATH"
         }
     };
@@ -121,7 +125,13 @@ pub fn read(x_data: &[XData], doc: &Document, id: EntityId) -> Option<Box<AssocA
             }
             let vertices = vertices.iter().map(|[x, y, b]| Vertex::new(Point::new(*x, *y), *b)).collect();
             let spacing = head.iter().find_map(|i| if let XDataItem::Distance(d) = i { Some(*d) } else { None });
-            ArrayLayout::Path { path: Box::new(Geometry::Polyline { vertices, closed }), items, align, spacing }
+            let factors: Vec<f64> =
+                head.iter().filter_map(|i| if let XDataItem::ScaleFactor(v) = i { Some(*v) } else { None }).collect();
+            let rows = match factors.as_slice() {
+                [n, d] if *n >= 1.0 && n.is_finite() && d.is_finite() => ((*n as usize).min(MAX_ITEMS), *d),
+                _ => (1, 0.0),
+            };
+            ArrayLayout::Path { path: Box::new(Geometry::Polyline { vertices, closed }), items, align, spacing, rows }
         }
         _ => return None,
     };

@@ -392,13 +392,14 @@ impl Command for ArrayEdit {
                     Some(ArrayLayout::Polar { .. }) => {
                         &["Source", "REPlace", "ITems", "Angle between", "Fill angle", "ROTate items", "RESet", "eXit"]
                     }
-                    _ => &["Source", "REPlace", "Method", "Items", "Align items", "RESet", "eXit"],
+                    _ => &["Source", "REPlace", "Method", "Items", "Rows", "Align items", "RESet", "eXit"],
                 };
                 Prompt::new("Enter an option").with_keywords(keywords).with_default("eXit")
             }
             EditStage::Rows | EditStage::Columns => {
                 let (rows, columns) = match layout {
                     Some(ArrayLayout::Rect { rows, columns, .. }) => (*rows, *columns),
+                    Some(ArrayLayout::Path { rows, .. }) => (rows.0.max(1), 1),
                     _ => (1, 1),
                 };
                 if self.stage == EditStage::Rows {
@@ -410,6 +411,7 @@ impl Command for ArrayEdit {
             EditStage::RowSpacing | EditStage::ColumnSpacing => {
                 let (row, column) = match layout {
                     Some(ArrayLayout::Rect { row_spacing, column_spacing, .. }) => (*row_spacing, *column_spacing),
+                    Some(ArrayLayout::Path { rows, .. }) => (rows.1, 0.0),
                     _ => (0.0, 0.0),
                 };
                 if self.stage == EditStage::RowSpacing {
@@ -523,7 +525,11 @@ impl Command for ArrayEdit {
                 }
             }
             (EditStage::Rows | EditStage::Columns, input @ (Input::Value(_) | Input::Enter)) => {
-                let Some(ArrayLayout::Rect { rows, columns, .. }) = self.layout else { return Ok(Step::Done) };
+                let (rows, columns) = match &self.layout {
+                    Some(ArrayLayout::Rect { rows, columns, .. }) => (*rows, *columns),
+                    Some(ArrayLayout::Path { rows, .. }) => (rows.0.max(1), 1),
+                    _ => return Ok(Step::Done),
+                };
                 let rows_now = self.stage == EditStage::Rows;
                 self.count = match input {
                     Input::Value(v) => count(v, 1.0)?,
@@ -535,12 +541,14 @@ impl Command for ArrayEdit {
             (EditStage::RowSpacing | EditStage::ColumnSpacing, input @ (Input::Value(_) | Input::Enter)) => {
                 let (n, rows_now) = (self.count, self.stage == EditStage::RowSpacing);
                 let typed = if let Input::Value(d) = input { Some(d) } else { None };
-                return self.change(ctx, |l| {
-                    if let ArrayLayout::Rect { rows, columns, row_spacing, column_spacing } = l {
+                return self.change(ctx, |l| match l {
+                    ArrayLayout::Rect { rows, columns, row_spacing, column_spacing } => {
                         let (count, spacing) = if rows_now { (rows, row_spacing) } else { (columns, column_spacing) };
                         *count = n;
                         *spacing = typed.unwrap_or(*spacing);
                     }
+                    ArrayLayout::Path { rows, .. } => *rows = (n, typed.unwrap_or(rows.1)),
+                    ArrayLayout::Polar { .. } => {}
                 });
             }
             (EditStage::Items, Input::Value(v)) => {

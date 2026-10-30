@@ -203,6 +203,7 @@ impl ArrayPath {
                 items: count,
                 align: turn,
                 spacing: self.spacing,
+                rows: (1, 0.0),
             };
             ctx.doc.make_array(&self.ids, layout);
             return Ok(Step::Done);

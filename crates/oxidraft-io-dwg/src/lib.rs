@@ -1095,8 +1095,11 @@ mod tests {
         });
         assert!(doc.replace_array_items(grid, &[square], Point::new(90.0, 90.0), Some(4)));
         let arc = Geometry::Arc { center: Point::new(50.0, 50.0), radius: 10.0, start_angle: 0.0, end_angle: 180.0 };
-        doc.make_array(&[l], ArrayLayout::Path { path: Box::new(arc), items: 5, align: true, spacing: Some(3.0) })
-            .unwrap();
+        doc.make_array(
+            &[l],
+            ArrayLayout::Path { path: Box::new(arc), items: 5, align: true, spacing: Some(3.0), rows: (2, 4.0) },
+        )
+        .unwrap();
         // Two dimensions, whose blocks mustn't clash with the arrays'.
         for x in [0.0, 30.0] {
             doc.add(Geometry::Dimension {
@@ -1131,12 +1134,13 @@ mod tests {
                 "{how}: the square stands in for one item"
             );
             assert!(
-                arrays
-                    .iter()
-                    .any(|a| matches!(a.layout, ArrayLayout::Path { items: 5, align: true, spacing: Some(3.0), .. })),
+                arrays.iter().any(|a| matches!(
+                    a.layout,
+                    ArrayLayout::Path { items: 5, align: true, spacing: Some(3.0), rows: (2, 4.0), .. }
+                )),
                 "{how}"
             );
-            assert_eq!(parts(back), [5, 6], "{how}");
+            assert_eq!(parts(back), [6, 10], "{how}: five along the arc, two rows");
             // Still editable.
             let mut back = back.clone();
             let id = back.entities().find(|e| e.array.as_ref().is_some_and(|a| a.layout == rect)).unwrap().id;
@@ -1146,7 +1150,7 @@ mod tests {
                 ArrayLayout::Rect { rows: 1, columns: 2, row_spacing: 1.0, column_spacing: 4.0 }
             ));
             back.commit();
-            assert_eq!(parts(&back), [2, 5], "{how}");
+            assert_eq!(parts(&back), [2, 10], "{how}");
         };
         let mut ours = Vec::new();
         oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
