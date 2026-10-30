@@ -18,6 +18,7 @@ pub struct Expanded {
     pub consumed: usize,
 }
 
+#[cfg(test)]
 fn adler32(bytes: &[u8]) -> u32 {
     let (mut a, mut b) = (1u32, 0u32);
     for byte in bytes {
