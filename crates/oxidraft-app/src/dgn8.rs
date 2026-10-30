@@ -1,7 +1,8 @@
 //! MicroStation DGN V8 files: a compound file whose first model's
 //! elements (points, lines, line strings, shapes, curves, B-spline curves,
 //! point strings, arcs, ellipses and text;
-//! the components of complex chains, shapes and cells, one by one) come in
+//! the components of complex chains, shapes and cells, one by one; shared
+//! cells as their definitions' elements, placed) come in
 //! as DGNIMPORT and DGNATTACH bring V7's, a layer for each level by its
 //! name. The layout is as ezdgn's V8 format notes set it out (MIT,
 //! clean-room): zlib pages of objects, a model header with the units, a
@@ -13,7 +14,7 @@ use oxidraft_geom::{Point, ellipse::Ellipse};
 use oxidraft_io_dwg::compound_file::{
     BinaryRecord, CompoundEntry, CompoundStorage, CompoundStreamContent, StructuredStoragePayload,
 };
-use oxidraft_model::{Attach, Geometry, Vertex};
+use oxidraft_model::{Attach, Geometry, Placement, Vertex};
 
 fn u16_at(d: &[u8], i: usize) -> Option<u16> {
     Some(u16::from_le_bytes(d.get(i..i + 2)?.try_into().ok()?))
@@ -303,33 +304,85 @@ pub fn read_dgn8(data: &[u8]) -> Result<Vec<(Geometry, String, u8)>, String> {
             }
         }
     }
+    // Shared cells' definitions (type 34, with the named objects): each
+    // its components after it, in its own units.
+    let named: Vec<Raw> =
+        storage(&root, "Dgn^Nm").map(pages).unwrap_or_default().iter().flat_map(|p| objects(p)).collect();
+    let mut cells = std::collections::HashMap::new();
+    for (k, (kind, object, attributes)) in named.iter().enumerate() {
+        if *kind as u16 != 34 {
+            continue;
+        }
+        let Some(name) = level_name(&object[*attributes..]) else { continue };
+        let parts: Vec<Raw> = named[k + 1..].iter().take_while(|(kind, ..)| kind & COMPONENT != 0).cloned().collect();
+        let base = Point::new(f64_at(object, 0xe8).unwrap_or(0.0), f64_at(object, 0xf0).unwrap_or(0.0));
+        cells.insert(name, (base, geometry(&parts, 1.0, &|p| p, &levels)));
+    }
+    let model: Vec<Raw> =
+        storage(model, "Dgn^G").map(pages).unwrap_or_default().iter().flat_map(|p| objects(p)).collect();
+    let mut out = geometry(&model, scale, &to, &levels);
+    // Shared cells placed (type 35, 3D): their definition by name, its
+    // transform (rows of a 3×3, in UORs per its unit) and origin.
+    for (kind, object, attributes) in &model {
+        if *kind as u16 != 35 || u32_at(object, 0x28).is_none_or(|f| f & 0x800 == 0) {
+            continue;
+        }
+        let Some((base, parts)) = level_name(&object[*attributes..]).and_then(|n| cells.get(&n)) else { continue };
+        let at = |o: usize| f64_at(object, o);
+        let (Some(a), Some(b), Some(c), Some(d), Some(x), Some(y)) =
+            (at(0xa0), at(0xa8), at(0xb8), at(0xc0), at(0xe8), at(0xf0))
+        else {
+            continue;
+        };
+        let mirror = a * d - b * c < 0.0;
+        let (sx, sy) = if mirror { (-a, -c) } else { (a, c) };
+        let placement = Placement {
+            position: to(Point::new(x, y)),
+            scale: a.hypot(c) * scale,
+            rotation: sy.atan2(sx).to_degrees(),
+            mirror,
+        };
+        out.extend(parts.iter().map(|(g, layer, color)| (placement.place(*base, g), layer.clone(), *color)));
+    }
+    Ok(out)
+}
+
+/// A type's flag for an element that's another's component (a complex
+/// element's, a cell's, a shared cell definition's).
+const COMPONENT: u32 = 0x4000_0000;
+
+/// Elements as Oxidraft's geometry, with their levels' names and colors;
+/// `scale` and `to` as for [`element`].
+fn geometry(
+    objects: &[Raw],
+    scale: f64,
+    to: &dyn Fn(Point) -> Point,
+    levels: &std::collections::HashMap<u32, String>,
+) -> Vec<(Geometry, String, u8)> {
     let mut out = Vec::new();
     // A B-spline curve's order, from its header (type 27), for its poles
     // (type 21) after it.
     let mut order = None;
-    for page in storage(model, "Dgn^G").map(pages).unwrap_or_default() {
-        for (kind, object, attributes) in objects(&page) {
-            match kind as u16 {
-                27 => order = u32_at(&object, 0x6c).map(|p| (p & 0x0f) as usize + 2),
-                21 => {
-                    if let Some(order) = order.take()
-                        && let Some(g) = bspline(&object, order, &to)
-                    {
-                        out.push((g, layer_of(&levels, &object), color_of(&object)));
-                    }
-                    continue;
+    for (kind, object, attributes) in objects {
+        match *kind as u16 {
+            27 => order = u32_at(object, 0x6c).map(|p| (p & 0x0f) as usize + 2),
+            21 => {
+                if let Some(order) = order.take()
+                    && let Some(g) = bspline(object, order, to)
+                {
+                    out.push((g, layer_of(levels, object), color_of(object)));
                 }
-                _ => {}
-            }
-            let Some(parts) = element(kind as u16, &object[..attributes.max(0x68).min(object.len())], scale, &to)
-            else {
                 continue;
-            };
-            let (layer, color) = (layer_of(&levels, &object), color_of(&object));
-            out.extend(parts.into_iter().map(|g| (g, layer.clone(), color)));
+            }
+            _ => {}
         }
+        let Some(parts) = element(*kind as u16, &object[..(*attributes).max(0x68).min(object.len())], scale, to) else {
+            continue;
+        };
+        let (layer, color) = (layer_of(levels, object), color_of(object));
+        out.extend(parts.into_iter().map(|g| (g, layer.clone(), color)));
     }
-    Ok(out)
+    out
 }
 
 /// The drawing V8 files are written on: GDAL's V8 test drawing (MIT/X,
@@ -973,12 +1026,11 @@ pub(crate) mod tests {
                 && (at.y - (1.0 + 2.0 * 10f64.to_radians().sin())).abs() < 1e-9,
             "{at:?}"
         );
-        assert_eq!(
-            has(
-                &|g| matches!(g, Geometry::Circle { center, radius } if center.approx_eq(p(0.0, 1.0)) && (radius - 1.0).abs() < 1e-9)
-            ),
-            2
-        );
+        let unit_circle = |g: &Geometry| matches!(g, Geometry::Circle { center, radius } if center.approx_eq(p(0.0, 1.0)) && (radius - 1.0).abs() < 1e-9);
+        assert_eq!(has(&unit_circle), 3);
+        // The third the shared cell's: "Named definition" (a circle of 1
+        // about its base point), placed at 0,1 (GDAL gives its origin).
+        assert!(got.last().is_some_and(|(g, layer, _)| unit_circle(g) && layer == "Default"));
         assert_eq!(
             has(
                 &|g| matches!(g, Geometry::Arc { start_angle, end_angle, .. } if (start_angle - 55.0).abs() < 1e-9 && (end_angle - 235.0).abs() < 1e-9)
