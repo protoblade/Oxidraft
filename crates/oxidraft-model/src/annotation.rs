@@ -227,9 +227,16 @@ pub struct RunFormat {
     /// `\p…r…;`: its right indent, in multiples of the text's height: its
     /// lines wrap that far in from the text's width.
     pub right_indent: f64,
+    /// `\p…b…,a…;`: the space before and after the paragraph, in
+    /// multiples of the text's height.
+    pub spacing: (f64, f64),
+    /// `\p…sm…;` or `\p…se…;`: the paragraph's own line spacing, a
+    /// multiple of the usual (`m`) or exactly so many heights (`e`); `None`
+    /// for the text's.
+    pub line_spacing: Option<(char, f64)>,
     /// `\p…t…;`: its tab stops, in multiples of the text's height from the
     /// left, and how what follows one lines up with it: `l` starting at it,
-    /// `c` centered on it, `r` ending at it.
+    /// `c` centered on it, `r` ending at it, `d` its decimal point at it.
     pub tabs: Vec<(f64, char)>,
     /// `\pq…;`: how its lines align: `l`eft, `c`enter or `r`ight.
     pub align: char,
@@ -251,6 +258,8 @@ impl Default for RunFormat {
             tracking: 1.0,
             indent: (0.0, 0.0),
             right_indent: 0.0,
+            spacing: (0.0, 0.0),
+            line_spacing: None,
             tabs: Vec::new(),
             align: 'l',
         }
@@ -409,15 +418,22 @@ pub fn mtext_runs(s: &str, height: f64) -> Vec<Run> {
                 }
             }
             // Paragraphs: `i` the first line's indent, `l` the left one, `r`
-            // the right one, `t` the tab stops (everything after it is stops
-            // too: numbers, centered `c` and right-aligned `r` ones), `q`
-            // how its lines align.
+            // the right one, `b` and `a` the space before and after it, `sm`
+            // and `se` its line spacing (`s*` the text's), `t` the tab stops
+            // (everything after it is stops too: numbers, centered `c`,
+            // right-aligned `r` and decimal `d` ones), `q` how its lines
+            // align.
             Some('p') => {
                 let mut in_tabs = false;
-                // A tab stop: `4`, `c4` or `r4`.
+                // A tab stop: `4`, `c4`, `r4` or `d4`.
                 let stop = |item: &str| {
-                    let kind = item.chars().next().filter(|c| matches!(c, 'c' | 'r')).unwrap_or('l');
-                    item.trim_start_matches(['c', 'r']).parse::<f64>().ok().map(|v| (v, kind))
+                    let kind = item
+                        .chars()
+                        .next()
+                        .map(|c| c.to_ascii_lowercase())
+                        .filter(|c| matches!(c, 'c' | 'r' | 'd'))
+                        .unwrap_or('l');
+                    item.trim_start_matches(['c', 'r', 'd', 'C', 'R', 'D']).parse::<f64>().ok().map(|v| (v, kind))
                 };
                 for item in until_semicolon(&mut chars).trim_start_matches('x').split(',') {
                     let item = item.trim();
@@ -430,6 +446,16 @@ pub fn mtext_runs(s: &str, height: f64) -> Vec<Run> {
                         ("i", Ok(v)) => format.indent.0 = v,
                         ("l", Ok(v)) => format.indent.1 = v,
                         ("r", Ok(v)) => format.right_indent = v,
+                        ("b", Ok(v)) => format.spacing.0 = v,
+                        ("a", Ok(v)) => format.spacing.1 = v,
+                        ("s", _) => {
+                            format.line_spacing = match v.split_at(v.len().min(1)) {
+                                (kind @ ("m" | "e"), n) => {
+                                    n.parse::<f64>().ok().map(|n| (kind.chars().next().unwrap_or('m'), n))
+                                }
+                                _ => None,
+                            }
+                        }
                         ("t", _) => {
                             format.tabs = stop(v).into_iter().collect();
                             in_tabs = true;
@@ -551,6 +577,27 @@ fn text_extent_in(content: &str, height: f64, wrap_width: f64, style: &str) -> (
     (widest, height + (lines - 1) as f64 * height * LINE_SPACING)
 }
 
+/// The space MTEXT's paragraphs put between them (`\pb…;`, `\pa…;`), in
+/// multiples of its height.
+pub fn paragraph_gaps(content: &str) -> f64 {
+    if !content.contains("\\p") {
+        return 0.0;
+    }
+    let runs = mtext_runs(content, 1.0);
+    // Each paragraph's format: its first run's.
+    let mut formats: Vec<&RunFormat> = Vec::new();
+    let mut start = true;
+    for r in &runs {
+        for c in r.text.chars() {
+            if start {
+                formats.push(&r.format);
+            }
+            start = c == '\n';
+        }
+    }
+    formats.windows(2).map(|w| w[0].spacing.1 + w[1].spacing.0).sum()
+}
+
 /// The text box's corners in world coordinates (counterclockwise from its
 /// bottom-left before rotation), measured in its style's font.
 pub fn text_box(
@@ -566,7 +613,7 @@ pub fn text_box(
     let wf = if look.width_factor > 0.0 { look.width_factor } else { 1.0 };
     let (w, h) = text_extent_in(content, height, wrap_width / wf, &look.style);
     let mut w = w * wf;
-    let mut h = height + (h - height) * look.line_spacing;
+    let mut h = height + (h - height) * look.line_spacing + paragraph_gaps(content) * height;
     // In columns: as wide as all of them, as high as the tallest.
     if let Some(c) = look.columns.as_ref().filter(|c| c.count > 1) {
         w = c.width * c.count as f64 + c.gutter * (c.count - 1) as f64;
@@ -1686,6 +1733,16 @@ mod tests {
         let f = &runs[1].format;
         assert_eq!((f.width_factor, f.oblique, f.tracking), (Some(0.5), Some(15.0), 2.0));
         assert_eq!(runs[2].format, RunFormat::default());
+        // Paragraphs: indents, spacing, line spacing and tab stops.
+        let f = &mtext_runs("\\pxi-1,l2,r1,b0.5,a1,sm1.5,qc,t2,c4,r6,D8;x", 1.0)[0].format;
+        assert_eq!(
+            (f.indent, f.right_indent, f.spacing, f.line_spacing),
+            ((-1.0, 2.0), 1.0, (0.5, 1.0), Some(('m', 1.5)))
+        );
+        assert_eq!(f.tabs, [(2.0, 'l'), (4.0, 'c'), (6.0, 'r'), (8.0, 'd')]);
+        assert_eq!(f.align, 'c');
+        assert_eq!(mtext_runs("\\pxse2;x", 1.0)[0].format.line_spacing, Some(('e', 2.0)));
+        assert_eq!(paragraph_gaps("{\\pxa1;a}\\P{\\pxb2;b}\\Pc"), 3.0);
     }
 
     #[test]

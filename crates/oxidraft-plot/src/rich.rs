@@ -204,11 +204,23 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
                 let every = 4.0 * height;
                 let stop = runs[*r].format.tabs.iter().map(|(s, k)| (s * height, *k)).find(|(s, _)| *s > x + 1e-9);
                 let (at, kind) = stop.unwrap_or((((x / every).floor() + 1.0) * every, 'l'));
-                let follows: f64 =
-                    line[j + 1..].iter().take_while(|(t, _)| t != "\t").map(|(t, r)| piece_width(t, *r)).sum();
+                let segment = line[j + 1..].iter().take_while(|(t, _)| t != "\t");
+                let follows: f64 = segment.clone().map(|(t, r)| piece_width(t, *r)).sum();
+                // Up to its decimal point, for a `d` stop.
+                let mut whole = 0.0;
+                for (t, r) in segment {
+                    match t.find('.') {
+                        Some(i) => {
+                            whole += piece_width(&t[..i], *r);
+                            break;
+                        }
+                        None => whole += piece_width(t, *r),
+                    }
+                }
                 x = match kind {
                     'c' => at - follows / 2.0,
                     'r' => at - follows,
+                    'd' => at - whole,
                     _ => at,
                 }
                 .max(x);
@@ -226,14 +238,29 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
     // line pushes those under it down. In columns, each column's lines
     // start at the top again: as many as its height holds (static
     // columns), or the lines shared out evenly.
-    let step = if style_shx.is_some() { LINE_SPACING } else { style_face.row_height() / 0.7 } * look.line_spacing;
+    let unit = if style_shx.is_some() { LINE_SPACING } else { style_face.row_height() / 0.7 };
+    let step = unit * look.line_spacing;
     let columns = look.columns.as_ref().filter(|c| c.count > 1);
     let per_column = columns.map_or(lines.len(), |c| lines.len().div_ceil(c.count).max(1));
     let mut baselines = Vec::with_capacity(lines.len());
     let mut column_of = Vec::with_capacity(lines.len());
     let (mut y, mut column, mut in_column) = (0.0, 0usize, 0usize);
-    for line in &lines {
-        let next = if in_column == 0 { height * tallest(line) } else { y + height * step * tallest(line) };
+    // The space after the paragraph above, to add to the next one's
+    // space before.
+    let mut after = 0.0;
+    for (i, line) in lines.iter().enumerate() {
+        let f = line.first().map(|(_, r)| &runs[*r].format);
+        let new_paragraph = starts.get(i).copied().unwrap_or(false);
+        let gap = if new_paragraph { after + f.map_or(0.0, |f| f.spacing.0) } else { 0.0 };
+        if new_paragraph || f.is_some() {
+            after = f.map_or(0.0, |f| f.spacing.1);
+        }
+        let below = match f.and_then(|f| f.line_spacing) {
+            Some(('e', exact)) => height * exact,
+            Some((_, times)) => height * unit * times * tallest(line),
+            None => height * step * tallest(line),
+        };
+        let next = if in_column == 0 { height * tallest(line) } else { y + below + height * gap };
         let full = match columns {
             Some(c) if !c.heights.is_empty() => {
                 let limit = c.heights.get(column).copied().unwrap_or(f64::INFINITY);
@@ -450,6 +477,35 @@ mod tests {
         let centered = formatted_pieces(&text("\\pqc;WWWWWW\\Pi"), "", "");
         let (wide, short) = (&centered[0], &centered[1]);
         assert!(short.at.x > wide.at.x && short.at.x + short.width < wide.at.x + wide.width, "{centered:?}");
+    }
+
+    #[test]
+    fn paragraph_spacing_and_decimal_tabs() {
+        let y = |content: &str, t: &str| {
+            let pieces = formatted_pieces(&text(content), "", "");
+            pieces.iter().find(|p| p.text == t).unwrap().at.y
+        };
+        let plain = y("a\\Pb", "a") - y("a\\Pb", "b");
+        // A height (2) after the first and two before the second: 6 more.
+        let spaced = y("{\\pxa1;a}\\P{\\pxb2;b}", "a") - y("{\\pxa1;a}\\P{\\pxb2;b}", "b");
+        assert!((spaced - plain - 6.0).abs() < 1e-9, "{spaced} {plain}");
+        // Lines of a paragraph: no space between them.
+        let mut wrapped = text("\\pxb3;WALL WALL");
+        if let Geometry::Text { width, .. } = &mut wrapped {
+            *width = 2.0;
+        }
+        let pieces = formatted_pieces(&wrapped, "", "");
+        assert!((pieces[0].at.y - pieces[1].at.y - plain).abs() < 1e-9, "{pieces:?}");
+        // Its own line spacing: twice, or exactly 3 heights (6).
+        let double = y("\\pxsm2;a\\Pb", "a") - y("\\pxsm2;a\\Pb", "b");
+        assert!((double - 2.0 * plain).abs() < 1e-9);
+        let exact = y("\\pxse3;a\\Pb", "a") - y("\\pxse3;a\\Pb", "b");
+        assert!((exact - 6.0).abs() < 1e-9);
+        // A decimal stop at 10 heights (20): the point there.
+        let pieces = formatted_pieces(&text("\\pxtd10;A^I12.5"), "", "");
+        let n = pieces.iter().find(|p| p.text == "12.5").unwrap();
+        let whole = formatted_pieces(&text("12"), "", "")[0].width;
+        assert!((n.at.x + whole - 20.0).abs() < 1e-9, "{pieces:?}");
     }
 
     #[test]
