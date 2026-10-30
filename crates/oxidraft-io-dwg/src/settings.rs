@@ -63,6 +63,23 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document) {
         }
         add_record(cad, oxidraft_io_dxf::PDF_LAYERS_RECORD, entries);
     }
+    // Files embedded (INSERTOBJ) that objects link to: each one's name (1),
+    // then its contents in chunks (310).
+    let linked = |name: &str| {
+        let url = format!("{}{name}", oxidraft_io_dxf::EMBEDDED_PREFIX);
+        doc.all_entities().any(|e| e.hyperlink.as_ref().is_some_and(|l| l.url == url))
+    };
+    let embedded: Vec<_> = doc.embedded_files().filter(|(n, _)| linked(n)).collect();
+    if !embedded.is_empty() {
+        let mut entries = Vec::new();
+        for (name, bytes) in embedded {
+            entries.push(XRecordEntry::string(1, name.clone()));
+            entries.extend(
+                bytes.chunks(127).map(|c| XRecordEntry::new(310, acadrust::objects::XRecordValue::Chunk(c.to_vec()))),
+            );
+        }
+        add_record(cad, oxidraft_io_dxf::EMBEDDED_RECORD, entries);
+    }
     // Dynamic blocks: each block's name (1), then its definition's lines (3).
     let dynamic: Vec<_> = doc.all_dynamic_blocks().collect();
     if !dynamic.is_empty() {

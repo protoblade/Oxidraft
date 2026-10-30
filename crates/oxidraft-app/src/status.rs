@@ -154,6 +154,16 @@ impl OxidraftApp {
             return self.open_image_dialog(path.to_path_buf());
         }
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        // Embedded, as AutoCAD's INSERTOBJ embeds a file: its contents kept
+        // in the drawing (a link to it if it can't be read).
+        let (url, embedded) = match std::fs::read(path) {
+            Ok(bytes) => {
+                self.engine.cancel(&mut self.doc);
+                let name = self.doc.embed_file(&file, bytes);
+                (format!("{}{name}", oxidraft_io_dxf::EMBEDDED_PREFIX), true)
+            }
+            Err(_) => (path.display().to_string(), false),
+        };
         let at = self.view.center;
         // A frame a twelfth of the view across, the file's name in it.
         let w = f64::from(self.drawing_rect.width()) / self.view.scale / 12.0;
@@ -169,7 +179,7 @@ impl OxidraftApp {
             attach: oxidraft_model::Attach::MiddleCenter,
             content: file.clone(),
         };
-        let link = oxidraft_model::Hyperlink { url: path.display().to_string(), description: file.clone() };
+        let link = oxidraft_model::Hyperlink { url, description: file.clone() };
         self.engine.cancel(&mut self.doc);
         self.doc.begin("INSERTOBJ");
         for g in [oxidraft_model::Geometry::Polyline { vertices: corners.to_vec(), closed: true }, text] {
@@ -178,7 +188,8 @@ impl OxidraftApp {
             self.doc.update(id, |e| e.hyperlink = Some(Box::new(link)));
         }
         self.doc.commit();
-        self.engine.log(format!("{file} inserted, linked: Cmd/Ctrl-click it to open it."));
+        let how = if embedded { "embedded in the drawing" } else { "linked" };
+        self.engine.log(format!("{file} inserted, {how}: Cmd/Ctrl-click it to open it."));
     }
 
     /// EXPORT and DXFOUT: a copy of the drawing in another format (or a

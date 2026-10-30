@@ -1041,6 +1041,30 @@ mod tests {
     }
 
     #[test]
+    fn embedded_files_travel_inside() {
+        let mut doc = Document::new();
+        let bytes: Vec<u8> = (0..400u32).map(|i| (i * 7 % 256) as u8).collect();
+        let name = doc.embed_file("spec.txt", bytes.clone());
+        doc.embed_file("unused.bin", vec![1, 2, 3]);
+        let id = doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(10.0, 0.0) });
+        doc.update(id, |e| {
+            e.hyperlink = Some(Box::new(oxidraft_model::Hyperlink {
+                url: format!("{}{name}", oxidraft_io_dxf::EMBEDDED_PREFIX),
+                description: "spec.txt".into(),
+            }))
+        });
+        let check = |back: &Document, how: &str| {
+            assert_eq!(back.embedded_file("spec.txt"), Some(bytes.as_slice()), "{how}");
+            assert!(back.embedded_file("unused.bin").is_none(), "{how}: only what's linked to");
+        };
+        check(&read_dxf(&write_dxf(&doc).unwrap()).unwrap().document, "DXF");
+        check(&read(&write(&doc, Version::R2018).unwrap()).unwrap().imported.document, "R2018");
+        // The same contents again: the same name.
+        assert_eq!(doc.embed_file("spec.txt", bytes), "spec.txt");
+        assert_eq!(doc.embed_file("spec.txt", vec![9]), "spec (2).txt");
+    }
+
+    #[test]
     fn dimension_extras_survive() {
         use oxidraft_model::annotation::{DimExtra, DimStyle, Inspection, InspectionShape};
         let extra = DimExtra {

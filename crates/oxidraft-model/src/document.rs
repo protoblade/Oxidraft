@@ -366,6 +366,8 @@ pub struct Document {
     hidden_objects: std::collections::HashSet<EntityId>,
     /// ULAYERS: each PDF underlay's layers turned off, by its name.
     pdf_layers_off: BTreeMap<String, Vec<String>>,
+    /// Files embedded in the drawing (INSERTOBJ), by name.
+    embedded: BTreeMap<String, std::sync::Arc<Vec<u8>>>,
     /// CANNOSCALE: drawing units per paper unit; ANNOALLVISIBLE.
     pub(crate) anno_scale: f64,
     pub(crate) anno_all_visible: bool,
@@ -517,6 +519,7 @@ impl Document {
             ucs_previous: Vec::new(),
             named_ucs: Vec::new(),
             pdf_layers_off: BTreeMap::new(),
+            embedded: BTreeMap::new(),
             dim_assoc: BTreeMap::new(),
             hidden_objects: Default::default(),
             dynamic_blocks: BTreeMap::new(),
@@ -1387,6 +1390,32 @@ impl Document {
             self.insbase = p;
             self.revision += 1;
         }
+    }
+
+    /// A file embedded in the drawing (INSERTOBJ), by its name.
+    pub fn embedded_file(&self, name: &str) -> Option<&[u8]> {
+        self.embedded.get(name).map(|b| b.as_slice())
+    }
+
+    /// Every file embedded in the drawing: name and contents.
+    pub fn embedded_files(&self) -> impl Iterator<Item = (&String, &[u8])> {
+        self.embedded.iter().map(|(n, b)| (n, b.as_slice()))
+    }
+
+    /// Embeds file contents in the drawing under `name` (its file name,
+    /// numbered when one has it): the name used.
+    pub fn embed_file(&mut self, name: &str, bytes: Vec<u8>) -> String {
+        let (stem, ext) = match name.rsplit_once('.') {
+            Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+            _ => (name.to_string(), String::new()),
+        };
+        let name = (1..)
+            .map(|i| if i == 1 { format!("{stem}{ext}") } else { format!("{stem} ({i}){ext}") })
+            .find(|n| self.embedded.get(n).is_none_or(|b| **b == bytes))
+            .unwrap_or_default();
+        self.embedded.insert(name.clone(), std::sync::Arc::new(bytes));
+        self.revision += 1;
+        name
     }
 
     /// ULAYERS: the layers of PDF underlay `name` turned off.

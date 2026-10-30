@@ -3769,3 +3769,18 @@ fn traces_markup_over_the_drawing() {
     h.state_mut().delete_trace("Review");
     assert!(h.state().traces().is_empty() && on_trace(&mut h) == 0);
 }
+
+#[test]
+fn insertobj_embeds_the_file() {
+    let mut h = app_with_line();
+    let dir = std::env::temp_dir().join(format!("oxidraft-insertobj-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("notes.txt");
+    std::fs::write(&file, b"Site notes").unwrap();
+    h.state_mut().insert_object_file(&file);
+    std::fs::remove_dir_all(&dir).ok();
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.embedded_file("notes.txt"), Some(&b"Site notes"[..]), "kept even with the file gone");
+    let links: Vec<String> = doc.entities().filter_map(|e| e.hyperlink.as_ref().map(|l| l.url.clone())).collect();
+    assert_eq!(links, ["embedded:notes.txt", "embedded:notes.txt"], "the frame and its name");
+}

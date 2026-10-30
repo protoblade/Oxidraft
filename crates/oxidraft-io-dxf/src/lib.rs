@@ -949,6 +949,45 @@ fn read_dynamic_blocks(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
     }
 }
 
+/// The XRECORD keeping the files embedded in the drawing (INSERTOBJ):
+/// each one's name (1), then its contents (310).
+pub const EMBEDDED_RECORD: &str = "OXIDRAFT_EMBEDDED";
+
+/// The hyperlink address of a file embedded in the drawing.
+pub const EMBEDDED_PREFIX: &str = "embedded:";
+
+fn read_embedded(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
+    let Some(handle) = raw.dictionaries.values().flatten().find(|(n, _)| n == EMBEDDED_RECORD).map(|(_, h)| *h) else {
+        return;
+    };
+    let Some(pairs) = raw.xrecords.get(&handle) else { return };
+    let mut current: Option<(String, Vec<u8>)> = None;
+    for (code, value) in pairs.iter().chain(std::iter::once(&(1, String::new()))) {
+        match code {
+            1 => {
+                if let Some((name, bytes)) = current.take().filter(|c| !c.0.is_empty()) {
+                    doc.embed_file(&name, bytes);
+                }
+                current = Some((value.clone(), Vec::new()));
+            }
+            310 => {
+                if let Some((_, bytes)) = current.as_mut() {
+                    bytes.extend(
+                        value
+                            .trim()
+                            .as_bytes()
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .filter_map(|d| u8::from_str_radix(std::str::from_utf8(d).ok()?, 16).ok()),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// The XRECORD keeping the PDF underlays' layers turned off (ULAYERS).
 pub const PDF_LAYERS_RECORD: &str = "OXIDRAFT_PDF_LAYERS";
 
@@ -1074,6 +1113,7 @@ fn read_settings(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
     read_layer_states(doc, raw);
     read_pdf_layers(doc, raw);
     read_dynamic_blocks(doc, raw);
+    read_embedded(doc, raw);
     read_properties(doc, raw);
     let Some(handle) = raw.dictionaries.values().flatten().find(|(n, _)| n == SETTINGS_RECORD).map(|(_, h)| *h) else {
         return;
