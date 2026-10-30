@@ -3334,3 +3334,48 @@ fn autolisp_programs_ask_the_user_and_change_objects() {
     assert!(history.iter().any(|l| l == "; error: Function cancelled"), "{history:?}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn mtext_with_inline_fonts_and_colors_draws() {
+    let mut h = app_with_line();
+    let doc = h.state_mut().document_mut();
+    doc.add(Geometry::Text {
+        look: Default::default(),
+        position: Point::new(10.0, 30.0),
+        height: 5.0,
+        rotation: 0.0,
+        width: 0.0,
+        attach: oxidraft_model::annotation::Attach::TopLeft,
+        content: "{\\fArial|b1|i0;Bold} {\\fNo Such Font|i1;\\H2x;\\C1;\\Lbig\\l} \\Kgone\\k".into(),
+    });
+    // The inline fonts load over a frame or two; drawing meanwhile is fine.
+    for _ in 0..4 {
+        h.run_steps(1);
+    }
+    h.run();
+}
+
+#[test]
+fn text_boxes_are_measured_in_the_font() {
+    let mut h = app_with_line();
+    h.run_steps(1);
+    let doc = h.state_mut().document_mut();
+    let text = |content: &str| Geometry::Text {
+        look: Default::default(),
+        position: Point::new(0.0, 100.0),
+        height: 10.0,
+        rotation: 0.0,
+        width: 0.0,
+        attach: oxidraft_model::annotation::Attach::BottomLeft,
+        content: content.into(),
+    };
+    let wide = doc.add(text("WWWW"));
+    let narrow = doc.add(text("iiii"));
+    let mut width = |id| {
+        let doc = h.state_mut().document_mut();
+        let b = doc.entity_bounds(doc.entity(id).unwrap());
+        b.max.x - b.min.x
+    };
+    let (w, i) = (width(wide), width(narrow));
+    assert!(w > 2.0 * i, "W is wider than i: {w} and {i}");
+}

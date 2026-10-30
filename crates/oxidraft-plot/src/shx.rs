@@ -24,6 +24,10 @@ pub struct ShxFont {
     unicode: bool,
     shapes: HashMap<u32, Vec<u8>>,
     glyphs: Mutex<HashMap<char, Arc<Glyph>>>,
+    /// A big font's lead-byte ranges, and the code pages its two-byte
+    /// codes may be in, likeliest first.
+    ranges: Vec<(u16, u16)>,
+    encodings: Vec<&'static encoding_rs::Encoding>,
 }
 
 impl std::fmt::Debug for ShxFont {
@@ -153,6 +157,7 @@ impl ShxFont {
         let head = String::from_utf8_lossy(&data[..head_end]).to_ascii_lowercase();
         let at = head_end + 1;
         let mut shapes = HashMap::new();
+        let mut ranges = Vec::new();
         let unicode = head.contains("unifont");
         if unicode {
             let count = u32_le(data, at)? as usize;
@@ -167,8 +172,11 @@ impl ShxFont {
             }
         } else if head.contains("bigfont") {
             let count = u16_le(data, at + 2)? as usize;
-            let ranges = u16_le(data, at + 4)? as usize;
-            let mut p = at + 6 + 4 * ranges;
+            let range_count = u16_le(data, at + 4)? as usize;
+            for r in 0..range_count {
+                ranges.extend(u16_le(data, at + 6 + 4 * r).zip(u16_le(data, at + 8 + 4 * r)));
+            }
+            let mut p = at + 6 + 4 * range_count;
             for _ in 0..count {
                 let (Some(code), Some(len), Some(offset)) = (u16_le(data, p), u16_le(data, p + 2), u32_le(data, p + 4))
                 else {
@@ -196,7 +204,8 @@ impl ShxFont {
         // The font's own shape: its name, then how high capitals stand.
         let info = after_name(shapes.get(&0)?);
         let above = f64::from(*info.first()?);
-        (above > 0.0).then(|| ShxFont { above, unicode, shapes, glyphs: Mutex::default() })
+        let encodings = if ranges.is_empty() { Vec::new() } else { big_encodings(&ranges, "") };
+        (above > 0.0).then(|| ShxFont { above, unicode, shapes, glyphs: Mutex::default(), ranges, encodings })
     }
 
     /// Runs shape `number`'s bytes with `pen`.
@@ -293,6 +302,20 @@ impl ShxFont {
     }
 
     fn shape_for(&self, c: char) -> Option<u32> {
+        // A big font's characters by their code in its code page.
+        if !self.encodings.is_empty() {
+            let mut buf = [0; 4];
+            let text = c.encode_utf8(&mut buf);
+            return self.encodings.iter().find_map(|enc| {
+                let (bytes, _, unmappable) = enc.encode(text);
+                let code = match *bytes {
+                    [lead, trail] if !unmappable => u32::from(u16::from_be_bytes([lead, trail])),
+                    [single] if !unmappable && single >= 0x80 => u32::from(single),
+                    _ => return None,
+                };
+                self.shapes.contains_key(&code).then_some(code)
+            });
+        }
         let code = u32::from(c);
         if self.shapes.contains_key(&code) && code != 0 {
             return Some(code);
@@ -341,16 +364,40 @@ impl ShxFont {
 
     /// A line of text's width, capitals 1 high.
     pub fn width(&self, text: &str) -> f64 {
-        text.chars().map(|c| self.glyph(c).advance).sum()
+        self.width_with(None, text)
+    }
+
+    /// Whether the font has a shape for `c`.
+    pub fn has(&self, c: char) -> bool {
+        self.shape_for(c).is_some()
+    }
+
+    /// Character `c` from this font, or from big font `big` when this one
+    /// lacks it, as AutoCAD combines a style's two fonts.
+    fn glyph_with(&self, big: Option<&ShxFont>, c: char) -> Arc<Glyph> {
+        match big {
+            Some(b) if !self.has(c) && b.has(c) => b.glyph(c),
+            _ => self.glyph(c),
+        }
+    }
+
+    /// [`ShxFont::width`] with a big font.
+    pub fn width_with(&self, big: Option<&ShxFont>, text: &str) -> f64 {
+        text.chars().map(|c| self.glyph_with(big, c).advance).sum()
     }
 
     /// A line of text's strokes from the start of its baseline, capitals 1
     /// high.
     pub fn line(&self, text: &str) -> Vec<Vec<Point>> {
+        self.line_with(None, text)
+    }
+
+    /// [`ShxFont::line`] with a big font.
+    pub fn line_with(&self, big: Option<&ShxFont>, text: &str) -> Vec<Vec<Point>> {
         let mut x = 0.0;
         let mut out = Vec::new();
         for c in text.chars() {
-            let g = self.glyph(c);
+            let g = self.glyph_with(big, c);
             out.extend(g.strokes.iter().map(|s| s.iter().map(|p| *p + Point::new(x, 0.0)).collect()));
             x += g.advance;
         }
@@ -362,14 +409,14 @@ impl ShxFont {
 /// as the text, lines spaced as MTEXT's, the block placed by its
 /// attachment as the drawing area places text, stretched by its width
 /// factor and slanted by its obliquing.
-pub fn text_strokes(font: &ShxFont, g: &oxidraft_model::Geometry) -> Vec<Vec<Point>> {
+pub fn text_strokes(font: &ShxFont, big: Option<&ShxFont>, g: &oxidraft_model::Geometry) -> Vec<Vec<Point>> {
     let oxidraft_model::Geometry::Text { position, height, rotation, width, attach, content, look } = g else {
         return Vec::new();
     };
     let wf = if look.width_factor > 0.0 { look.width_factor } else { 1.0 };
     let wrap = if *width > 0.0 { width / (height * wf) } else { 0.0 };
-    let lines = crate::font::wrap_lines(content, wrap, |s| font.width(s));
-    let widest = lines.iter().map(|l| font.width(l)).fold(0.0, f64::max) * wf;
+    let lines = crate::font::wrap_lines(content, wrap, |s| font.width_with(big, s));
+    let widest = lines.iter().map(|l| font.width_with(big, l)).fold(0.0, f64::max) * wf;
     let row = oxidraft_model::annotation::LINE_SPACING;
     let span = 1.0 + (lines.len() as f64 - 1.0) * row;
     let (fx, fy) = attach.fractions();
@@ -377,7 +424,7 @@ pub fn text_strokes(font: &ShxFont, g: &oxidraft_model::Geometry) -> Vec<Vec<Poi
     let mut out = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         let origin = Point::new(-fx * widest, -1.0 + fy * span - i as f64 * row);
-        for stroke in font.line(line) {
+        for stroke in font.line_with(big, line) {
             let placed = stroke
                 .iter()
                 .map(|p| {
@@ -432,7 +479,11 @@ pub fn shx_font(font: &str) -> Option<&'static ShxFont> {
     }
     let read = |name: &str| {
         let data = std::fs::read(crate::font::find(name)?).ok()?;
-        ShxFont::parse(&data).map(|f| &*Box::leak(Box::new(f)))
+        let mut font = ShxFont::parse(&data)?;
+        if !font.ranges.is_empty() {
+            font.encodings = big_encodings(&font.ranges, name);
+        }
+        Some(&*Box::leak(Box::new(font)))
     };
     let alt = font_alt();
     let loaded = read(&key).or_else(|| if key == alt { None } else { shx_font(&alt) });
@@ -440,6 +491,31 @@ pub fn shx_font(font: &str) -> Option<&'static ShxFont> {
         found.insert(key, loaded);
     }
     loaded
+}
+
+/// The code pages a big font's two-byte codes may be in, likeliest
+/// first: from its file name when it's one of AutoCAD's (extfont and
+/// bigfont Japanese, gbcbig Simplified Chinese, chineset Traditional,
+/// whgtxt Korean), then from its lead bytes (Shift-JIS's stop at 0x9F).
+fn big_encodings(ranges: &[(u16, u16)], name: &str) -> Vec<&'static encoding_rs::Encoding> {
+    use encoding_rs::{BIG5, EUC_KR, GBK, SHIFT_JIS};
+    let n = name.to_ascii_lowercase();
+    let named = if n.contains("gb") || n.starts_with("hz") || n.contains("chs") {
+        Some(GBK)
+    } else if n.starts_with("whg") || n.contains("kor") {
+        Some(EUC_KR)
+    } else if n.contains("chineset") || n.contains("big5") || n.contains("cht") {
+        Some(BIG5)
+    } else if n.contains("extfont") || n.contains("bigfont") || n.contains("jis") || n.contains("jpn") {
+        Some(SHIFT_JIS)
+    } else {
+        None
+    };
+    let shift_jis = ranges.iter().any(|(a, b)| *a <= 0x81 && (0x9F..0xA1).contains(b));
+    let order = if shift_jis { [SHIFT_JIS, GBK, BIG5, EUC_KR] } else { [GBK, BIG5, EUC_KR, SHIFT_JIS] };
+    let mut out: Vec<_> = named.into_iter().collect();
+    out.extend(order.into_iter().filter(|e| Some(*e) != named));
+    out
 }
 
 /// FONTALT: the SHX font a missing one is drawn in.
@@ -481,6 +557,48 @@ mod tests {
 
     /// A shapes file: "A" as two strokes up and down with a bar, "B" a
     /// half circle by an octant arc, and a font shape of 10 above.
+    /// A big font with Shift-JIS lead bytes and one character, あ (0x82A0):
+    /// a stroke 10 to the right.
+    fn big_sample() -> Vec<u8> {
+        let shapes: [(u16, Vec<u8>); 2] =
+            [(0, [b"BIG\0".as_slice(), &[10, 2, 2, 10, 0]].concat()), (0x82A0, vec![0, 0xA0, 0])];
+        let ranges: [(u16, u16); 2] = [(0x81, 0x9F), (0xE0, 0xFC)];
+        let mut out = b"AutoCAD-86 bigfont 1.0\r\n\x1A".to_vec();
+        out.extend_from_slice(&8u16.to_le_bytes());
+        out.extend_from_slice(&(shapes.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(ranges.len() as u16).to_le_bytes());
+        for (a, b) in ranges {
+            out.extend_from_slice(&a.to_le_bytes());
+            out.extend_from_slice(&b.to_le_bytes());
+        }
+        let mut offset = out.len() + 8 * shapes.len();
+        for (n, def) in &shapes {
+            out.extend_from_slice(&n.to_le_bytes());
+            out.extend_from_slice(&(def.len() as u16).to_le_bytes());
+            out.extend_from_slice(&(offset as u32).to_le_bytes());
+            offset += def.len();
+        }
+        for (_, def) in &shapes {
+            out.extend_from_slice(def);
+        }
+        out
+    }
+
+    #[test]
+    fn a_big_font_draws_what_the_main_font_lacks() {
+        let main = ShxFont::parse(&sample()).unwrap();
+        let big = ShxFont::parse(&big_sample()).unwrap();
+        assert_eq!(big.encodings[0], encoding_rs::SHIFT_JIS, "from its lead bytes");
+        assert!(big.has('あ') && !main.has('あ') && !big.has('A'));
+        assert!((main.width_with(Some(&big), "Aあ") - 2.4).abs() < 1e-9);
+        assert!(main.line("Aあ").len() == 2, "alone it has nothing for あ");
+        let strokes = main.line_with(Some(&big), "Aあ");
+        assert_eq!(strokes.len(), 3);
+        assert!(strokes[2][0].approx_eq(Point::new(1.4, 0.0)) && strokes[2][1].approx_eq(Point::new(2.4, 0.0)));
+        assert_eq!(big_encodings(&[(0xA1, 0xFE)], "gbcbig.shx")[0], encoding_rs::GBK);
+        assert_eq!(big_encodings(&[(0xA1, 0xFE)], "whgtxt.shx")[0], encoding_rs::EUC_KR);
+    }
+
     fn sample() -> Vec<u8> {
         let shapes: [(u16, Vec<u8>); 3] = [
             (0, [b"TEST\0".as_slice(), &[10, 2, 2, 0]].concat()),
@@ -567,7 +685,7 @@ mod tests {
             content: "A".into(),
             look: TextLook { style: "Notes".into(), ..Default::default() },
         };
-        let strokes = text_strokes(txt, &text);
+        let strokes = text_strokes(txt, None, &text);
         let top = strokes.iter().flatten().map(|p| p.y).fold(f64::MIN, f64::max);
         assert!((top - 12.5).abs() < 0.1, "{top}");
         doc.add(text);

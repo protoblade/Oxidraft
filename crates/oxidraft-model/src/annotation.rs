@@ -24,6 +24,8 @@ pub struct TextStyle {
     pub width_factor: f64,
     /// Degrees from upright, positive leaning right.
     pub oblique: f64,
+    /// An SHX font's big font (Asian characters), empty for none.
+    pub big_font: String,
 }
 
 impl TextStyle {
@@ -32,7 +34,14 @@ impl TextStyle {
     }
 
     pub fn new(name: &str) -> Self {
-        Self { name: name.into(), font: "arial.ttf".into(), height: 0.0, width_factor: 1.0, oblique: 0.0 }
+        Self {
+            name: name.into(),
+            font: "arial.ttf".into(),
+            height: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            big_font: String::new(),
+        }
     }
 }
 
@@ -145,7 +154,78 @@ const CHAR_WIDTH: f64 = 0.6;
 /// fractions (`\S1/2;`) into their text, and paragraph breaks (`\P`) into
 /// newlines. The drawing keeps the codes; this is only how it's shown.
 pub fn plain_text(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    mtext_runs(s, 1.0).into_iter().map(|r| r.text).collect()
+}
+
+/// A stretch of MTEXT in one format (see [`mtext_runs`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Run {
+    pub text: String,
+    pub format: RunFormat,
+}
+
+/// How a [`Run`] looks, as MTEXT's inline codes set it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunFormat {
+    /// `\f` (a TrueType family) or `\F` (a font file); `None` for the
+    /// style's font.
+    pub font: Option<String>,
+    pub bold: bool,
+    pub italic: bool,
+    /// `\H`: times the object's height.
+    pub height: f64,
+    /// `\C`: an AutoCAD color index; `None` for the object's color.
+    pub color: Option<u8>,
+    /// `\L`, `\O` and `\K`.
+    pub underline: bool,
+    pub overline: bool,
+    pub strike: bool,
+}
+
+impl Default for RunFormat {
+    fn default() -> Self {
+        Self {
+            font: None,
+            bold: false,
+            italic: false,
+            height: 1.0,
+            color: None,
+            underline: false,
+            overline: false,
+            strike: false,
+        }
+    }
+}
+
+impl RunFormat {
+    /// The font to look for: the family's bold or italic face when asked
+    /// for (`Arial Bold`), as font files name them.
+    pub fn font_name(&self) -> Option<String> {
+        let f = self.font.as_ref()?;
+        Some(match (self.bold, self.italic) {
+            (true, true) => format!("{f} Bold Italic"),
+            (true, false) => format!("{f} Bold"),
+            (false, true) => format!("{f} Italic"),
+            _ => f.clone(),
+        })
+    }
+}
+
+/// Whether MTEXT `s` changes font, height, color or lines inline, so it
+/// can't be shown in one format.
+pub fn is_formatted(s: &str) -> bool {
+    ["\\f", "\\F", "\\H", "\\C", "\\L", "\\O", "\\K"].iter().any(|code| s.contains(code))
+}
+
+/// MTEXT's text in runs of one format each: fonts (`\f…;`, `\F…;`),
+/// heights (`\H2.5;` absolute, `\H2x;` relative; `height` is the object's),
+/// colors (`\C1;`), underline, overline and strikethrough (`\L`/`\l`,
+/// `\O`/`\o`, `\K`/`\k`), braces keeping a change inside them;
+/// `\P` is a newline, `\U+XXXX` a character and `\S1/2;` its text.
+pub fn mtext_runs(s: &str, height: f64) -> Vec<Run> {
+    let mut runs: Vec<Run> = Vec::new();
+    let mut format = RunFormat::default();
+    let mut saved: Vec<RunFormat> = Vec::new();
     let mut chars = s.chars().peekable();
     let until_semicolon = |chars: &mut std::iter::Peekable<std::str::Chars>| {
         let mut taken = String::new();
@@ -157,42 +237,96 @@ pub fn plain_text(s: &str) -> String {
         }
         taken
     };
+    let push = |runs: &mut Vec<Run>, format: &RunFormat, text: &str| match runs.last_mut() {
+        Some(last) if last.format == *format => last.text.push_str(text),
+        _ => runs.push(Run { text: text.to_string(), format: format.clone() }),
+    };
     while let Some(c) = chars.next() {
-        if c == '{' || c == '}' {
-            continue;
-        }
-        if c != '\\' {
-            out.push(c);
-            continue;
+        match c {
+            '{' => {
+                saved.push(format.clone());
+                continue;
+            }
+            '}' => {
+                if let Some(f) = saved.pop() {
+                    format = f;
+                }
+                continue;
+            }
+            '\\' => {}
+            c => {
+                push(&mut runs, &format, c.encode_utf8(&mut [0; 4]));
+                continue;
+            }
         }
         match chars.next() {
-            Some('P') => out.push('\n'),
-            Some('~') => out.push('\u{a0}'),
-            Some(c @ ('\\' | '{' | '}')) => out.push(c),
+            Some('P') => push(&mut runs, &format, "\n"),
+            Some('~') => push(&mut runs, &format, "\u{a0}"),
+            Some(c @ ('\\' | '{' | '}')) => push(&mut runs, &format, c.encode_utf8(&mut [0; 4])),
             Some('U' | 'u') if chars.peek() == Some(&'+') => {
                 chars.next();
                 let hex: String = chars.by_ref().take(4).collect();
                 if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                    out.push(ch);
+                    push(&mut runs, &format, ch.encode_utf8(&mut [0; 4]));
                 }
             }
             // A character in another code page: left out.
             Some('M' | 'm') if chars.peek() == Some(&'+') => {
                 chars.by_ref().take(6).for_each(drop);
             }
-            Some('S') => out.push_str(&until_semicolon(&mut chars).replace(['^', '#'], "/")),
-            Some('A' | 'C' | 'c' | 'F' | 'f' | 'H' | 'Q' | 'T' | 'W' | 'p') => {
+            Some('S') => push(&mut runs, &format, &until_semicolon(&mut chars).replace(['^', '#'], "/")),
+            Some(code @ ('f' | 'F')) => {
+                let value = until_semicolon(&mut chars);
+                let mut parts = value.split('|');
+                let name = parts.next().unwrap_or("").trim();
+                format.font = (!name.is_empty()).then(|| name.to_string());
+                format.bold = false;
+                format.italic = false;
+                if code == 'f' {
+                    for flag in parts {
+                        match flag.trim().split_at(flag.trim().len().min(1)) {
+                            ("b", v) => format.bold = v == "1",
+                            ("i", v) => format.italic = v == "1",
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            Some('H') => {
+                let value = until_semicolon(&mut chars);
+                let (number, relative) = match value.strip_suffix(['x', 'X']) {
+                    Some(n) => (n, true),
+                    None => (value.as_str(), false),
+                };
+                if let Ok(v) = number.trim().parse::<f64>()
+                    && v > 0.0
+                {
+                    format.height = if relative { format.height * v } else { v / height.max(1e-9) };
+                }
+            }
+            Some('C') => {
+                format.color = match until_semicolon(&mut chars).trim().parse::<u32>() {
+                    Ok(n @ 1..=255) => Some(n as u8),
+                    _ => None,
+                };
+            }
+            Some('A' | 'c' | 'Q' | 'T' | 'W' | 'p') => {
                 until_semicolon(&mut chars);
             }
-            Some('L' | 'l' | 'O' | 'o' | 'K' | 'k') => {}
+            Some('L') => format.underline = true,
+            Some('l') => format.underline = false,
+            Some('O') => format.overline = true,
+            Some('o') => format.overline = false,
+            Some('K') => format.strike = true,
+            Some('k') => format.strike = false,
             Some(other) => {
-                out.push('\\');
-                out.push(other);
+                push(&mut runs, &format, "\\");
+                push(&mut runs, &format, other.encode_utf8(&mut [0; 4]));
             }
-            None => out.push('\\'),
+            None => push(&mut runs, &format, "\\"),
         }
     }
-    out
+    runs
 }
 
 /// The text's lines, as shown (see [`plain_text`]).
@@ -218,8 +352,78 @@ pub fn text_extent(content: &str, height: f64, wrap_width: f64) -> (f64, f64) {
     (widest, height + (lines - 1) as f64 * height * LINE_SPACING)
 }
 
+/// How wide a line of text is in a font, in multiples of the text's
+/// height; `None` when it can't be measured.
+pub type Measure = fn(font: &str, line: &str) -> Option<f64>;
+
+static MEASURE: std::sync::RwLock<Option<Measure>> = std::sync::RwLock::new(None);
+static STYLE_FONTS: std::sync::RwLock<Vec<(String, String)>> = std::sync::RwLock::new(Vec::new());
+
+/// Measures text boxes in their fonts from now on (the app gives the
+/// fonts' metrics); without it they're estimated.
+pub fn set_measure(measure: Measure) {
+    if let Ok(mut m) = MEASURE.write() {
+        *m = Some(measure);
+    }
+}
+
+/// The text styles' fonts that text boxes are measured in: the drawing
+/// being worked on's.
+pub fn set_style_fonts(styles: &[TextStyle]) {
+    let fonts: Vec<(String, String)> = styles.iter().map(|s| (s.name.to_lowercase(), s.font.clone())).collect();
+    if STYLE_FONTS.read().is_ok_and(|f| *f != fonts)
+        && let Ok(mut f) = STYLE_FONTS.write()
+    {
+        *f = fonts;
+    }
+}
+
+/// A line's width in multiples of the text height, in style `style`'s font.
+fn line_width(style: &str, line: &str) -> f64 {
+    if line.is_empty() {
+        return CHAR_WIDTH;
+    }
+    let measure = MEASURE.read().ok().and_then(|m| *m);
+    let measured = measure.and_then(|m| {
+        let fonts = STYLE_FONTS.read().ok()?;
+        let style = style.to_lowercase();
+        let font = fonts.iter().find(|(s, _)| *s == style).map_or("", |(_, f)| f.as_str());
+        m(font, line)
+    });
+    measured.unwrap_or(line.chars().count() as f64 * CHAR_WIDTH)
+}
+
+/// [`text_extent`] measured in style `style`'s font, lines wrapped
+/// between words as the drawing area wraps them.
+fn text_extent_in(content: &str, height: f64, wrap_width: f64, style: &str) -> (f64, f64) {
+    let width = |s: &str| line_width(style, s) * height;
+    let (mut lines, mut widest) = (0usize, 0.0f64);
+    for paragraph in text_lines(content) {
+        if wrap_width <= EPSILON {
+            lines += 1;
+            widest = widest.max(width(&paragraph));
+            continue;
+        }
+        let mut line = String::new();
+        for word in paragraph.split(' ') {
+            let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if !line.is_empty() && width(&candidate) > wrap_width {
+                lines += 1;
+                widest = widest.max(width(&line));
+                line = word.to_string();
+            } else {
+                line = candidate;
+            }
+        }
+        lines += 1;
+        widest = widest.max(width(&line));
+    }
+    let lines = lines.max(1);
+    (widest, height + (lines - 1) as f64 * height * LINE_SPACING)
+}
+
 /// The text box's corners in world coordinates (counterclockwise from its
-/// bottom-left before rotation).
+/// bottom-left before rotation), measured in its style's font.
 pub fn text_box(
     position: Point,
     height: f64,
@@ -227,11 +431,11 @@ pub fn text_box(
     wrap_width: f64,
     attach: Attach,
     content: &str,
-    width_factor: f64,
+    look: &TextLook,
 ) -> [Point; 4] {
     // Wider characters: fewer to a wrapped line, each line wider.
-    let wf = if width_factor > 0.0 { width_factor } else { 1.0 };
-    let (w, h) = text_extent(content, height, wrap_width / wf);
+    let wf = if look.width_factor > 0.0 { look.width_factor } else { 1.0 };
+    let (w, h) = text_extent_in(content, height, wrap_width / wf, &look.style);
     let w = w * wf;
     let (fx, fy) = attach.fractions();
     let (x0, y0) = (-fx * w, -h * (1.0 - fy));
@@ -442,7 +646,7 @@ pub struct Inspection {
 fn inspection_frame(value: &Geometry, i: &Inspection, gap: f64) -> Vec<Geometry> {
     let Geometry::Text { position, height, rotation, content, .. } = value else { return Vec::new() };
     let width = |s: &str| {
-        let [a, b, ..] = text_box(Point::ORIGIN, *height, 0.0, 0.0, Attach::BottomLeft, s, 1.0);
+        let [a, b, ..] = text_box(Point::ORIGIN, *height, 0.0, 0.0, Attach::BottomLeft, s, &TextLook::default());
         a.distance(b)
     };
     // Clear of the text on each side, a little more than above and below.
@@ -1318,6 +1522,20 @@ pub fn jogged_primitives(
 #[cfg(test)]
 mod tests {
     use super::plain_text;
+
+    #[test]
+    fn mtext_runs_keep_each_format() {
+        let runs = mtext_runs("Plain {\\fArial|b1|i0;\\H2x;\\C1;Big} \\H5;\\Lunder\\l end", 2.5);
+        let texts: Vec<&str> = runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts, ["Plain ", "Big", " ", "under", " end"]);
+        let big = &runs[1].format;
+        assert_eq!((big.font.as_deref(), big.bold, big.height, big.color), (Some("Arial"), true, 2.0, Some(1)));
+        assert_eq!(big.font_name().as_deref(), Some("Arial Bold"));
+        assert_eq!(runs[2].format, RunFormat::default(), "the brace ended the change");
+        assert!((runs[3].format.height - 2.0).abs() < 1e-9, "5 is twice 2.5");
+        assert!(runs[3].format.underline && !runs[4].format.underline);
+        assert!(is_formatted("{\\fArial;x}") && !is_formatted("a\\Pb"));
+    }
 
     #[test]
     fn mtext_formatting_is_shown_as_its_text() {

@@ -716,6 +716,7 @@ fn write_text_styles(drawing: &mut Drawing, doc: &Document) {
             x.width_factor = s.width_factor;
             x.oblique_angle = s.oblique;
             x.primary_font_file_name = font.clone();
+            x.big_font_file_name = s.big_font.clone();
         };
         if let Some(x) = drawing.styles_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
             set(x);
@@ -744,6 +745,7 @@ fn read_text_styles(doc: &mut Document, drawing: &Drawing) {
             height: s.text_height.max(0.0),
             width_factor: if s.width_factor > 0.0 { s.width_factor } else { 1.0 },
             oblique: oblique_from_dxf(s.oblique_angle),
+            big_font: s.big_font_file_name.clone(),
         };
         let _ = doc.set_text_style(style);
     }

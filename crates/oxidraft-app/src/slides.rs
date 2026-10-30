@@ -40,12 +40,13 @@ impl OxidraftApp {
             }
             for s in self.doc.expanded_styled(e) {
                 let mut lines: Vec<(Point, Point)> = Vec::new();
-                let font = match &s.geometry {
-                    Geometry::Text { look, .. } => self.doc.text_style(&look.style).map(|t| t.font.clone()),
+                let style = match &s.geometry {
+                    Geometry::Text { look, .. } => self.doc.text_style(&look.style),
                     _ => None,
                 };
-                if let Some(shx) = font.as_deref().and_then(oxidraft_plot::shx::shx_font) {
-                    for stroke in oxidraft_plot::shx::text_strokes(shx, &s.geometry) {
+                if let Some(shx) = style.and_then(|t| oxidraft_plot::shx::shx_font(&t.font)) {
+                    let big = style.and_then(|t| oxidraft_plot::shx::shx_font(&t.big_font));
+                    for stroke in oxidraft_plot::shx::text_strokes(shx, big, &s.geometry) {
                         lines.extend(stroke.windows(2).map(|p| (p[0], p[1])));
                     }
                 }

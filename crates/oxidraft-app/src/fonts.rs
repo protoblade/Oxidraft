@@ -78,3 +78,45 @@ pub(crate) fn family(ctx: &Context, font: &str) -> FontFamily {
 pub(crate) fn font_id(ctx: &Context, font: &str, size: f32) -> egui::FontId {
     egui::FontId::new(size, family(ctx, font))
 }
+
+/// The fonts MTEXT names inline (`\\fArial|b1;`), in the drawing and its
+/// blocks: each bold or italic face that's there, and its family.
+pub(crate) fn inline_fonts(doc: &oxidraft_model::Document) -> Vec<String> {
+    use oxidraft_model::Geometry;
+    use oxidraft_model::annotation::{is_formatted, mtext_runs};
+    let texts =
+        doc.entities().map(|e| &e.geometry).chain(doc.blocks().flat_map(|b| b.entities.iter().map(|e| &e.geometry)));
+    let mut out: Vec<String> = Vec::new();
+    for g in texts {
+        let Geometry::Text { content, .. } = g else { continue };
+        if !is_formatted(content) {
+            continue;
+        }
+        for run in mtext_runs(content, 1.0) {
+            for name in [run.format.font_name(), run.format.font].into_iter().flatten() {
+                if !out.contains(&name) {
+                    out.push(name);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The font a piece of MTEXT shows in: its bold or italic face if there's
+/// one, else its family, else the style's font. Also whether egui is to
+/// slant it, for italic asked of a face that isn't.
+pub(crate) fn run_font(format: &oxidraft_model::annotation::RunFormat, style_font: &str) -> (String, bool) {
+    let named = format.font_name().filter(|n| !typeface(n).is_default());
+    let found = named.clone().or_else(|| format.font.clone().filter(|n| !typeface(n).is_default()));
+    (found.unwrap_or_else(|| style_font.to_string()), format.italic && named.is_none())
+}
+
+/// A line's width in the font text shows in, in multiples of its height
+/// (capitals are 0.7 of a TrueType font's em; an SHX font's are 1).
+pub(crate) fn measure(font: &str, line: &str) -> Option<f64> {
+    if let Some(shx) = oxidraft_plot::shx::shx_font(font) {
+        return Some(shx.width(line));
+    }
+    Some(typeface(font).width(line) / 0.7)
+}

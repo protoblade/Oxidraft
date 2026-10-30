@@ -1096,14 +1096,14 @@ impl OxidraftApp {
         let anchor = self.view.to_screen(rect, *position);
         // A selected text glows as a box instead.
         if stroke.width >= 4.0 {
-            let corners = text_box(*position, *height, *rotation, *width, *attach, content, look.width_factor);
+            let corners = text_box(*position, *height, *rotation, *width, *attach, content, look);
             let pts: Vec<Pos2> = corners.iter().map(|p| self.view.to_screen(rect, *p)).collect();
             painter.add(Shape::convex_polygon(pts, stroke.color.gamma_multiply(0.5), Stroke::NONE));
             return;
         }
         // QTEXTMODE: each text as its box.
         if self.doc.quick_text() {
-            let corners = text_box(*position, *height, *rotation, *width, *attach, content, look.width_factor);
+            let corners = text_box(*position, *height, *rotation, *width, *attach, content, look);
             let pts: Vec<Pos2> = corners.iter().map(|p| self.view.to_screen(rect, *p)).collect();
             painter.add(Shape::closed_line(pts, Stroke::new(1.0, stroke.color)));
             return;
@@ -1113,9 +1113,11 @@ impl OxidraftApp {
             return;
         }
         // An SHX font's text: its strokes, as AutoCAD draws them.
-        let font = self.doc.text_style(&look.style).map_or("", |s| s.font.as_str());
+        let style = self.doc.text_style(&look.style);
+        let font = style.map_or("", |s| s.font.as_str());
         if let Some(shx) = oxidraft_plot::shx::shx_font(font) {
-            for s in oxidraft_plot::shx::text_strokes(shx, g) {
+            let big = style.and_then(|s| oxidraft_plot::shx::shx_font(&s.big_font));
+            for s in oxidraft_plot::shx::text_strokes(shx, big, g) {
                 let pts: Vec<Pos2> = s.iter().map(|p| self.view.to_screen(rect, *p)).collect();
                 painter.add(Shape::line(pts, stroke));
             }
@@ -1123,9 +1125,13 @@ impl OxidraftApp {
         }
         // Few distinct sizes keep egui's glyph cache small while zooming.
         let size = 2f32.powf((px.min(400.0).log2() * 8.0).round() / 8.0);
-        let text = oxidraft_model::annotation::plain_text(content);
         let wrap = if *width > 0.0 { (*width * self.view.scale) as f32 } else { f32::INFINITY };
-        let galley = painter.layout(text, crate::fonts::font_id(painter.ctx(), font, size), stroke.color, wrap);
+        let galley = if oxidraft_model::annotation::is_formatted(content) {
+            painter.layout_job(formatted_job(painter.ctx(), content, *height, font, size, stroke.color, wrap))
+        } else {
+            let text = oxidraft_model::annotation::plain_text(content);
+            painter.layout(text, crate::fonts::font_id(painter.ctx(), font, size), stroke.color, wrap)
+        };
         // Anchor on the type itself, not egui's line box: "top" is the first
         // line's capital height, "bottom" the last line's baseline.
         let baseline = |row: &egui::epaint::text::PlacedRow| {
@@ -1599,4 +1605,36 @@ pub(crate) fn paint_text(
         v.pos = anchor + rot * local;
     }
     painter.add(Shape::mesh(mesh));
+}
+
+/// MTEXT that changes font, height, color or lines inline, laid out piece
+/// by piece.
+fn formatted_job(
+    ctx: &egui::Context,
+    content: &str,
+    height: f64,
+    style_font: &str,
+    size: f32,
+    color: Color32,
+    wrap: f32,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap;
+    for run in oxidraft_model::annotation::mtext_runs(content, height) {
+        let f = &run.format;
+        let (font, slant) = crate::fonts::run_font(f, style_font);
+        let c = f.color.map_or(color, theme::aci);
+        let px = size * f.height as f32;
+        let mut format = egui::TextFormat::simple(crate::fonts::font_id(ctx, &font, px), c);
+        format.italics = slant;
+        let rule = Stroke::new((px / 14.0).max(1.0), c);
+        if f.underline {
+            format.underline = rule;
+        }
+        if f.strike {
+            format.strikethrough = rule;
+        }
+        job.append(&run.text, 0.0, format);
+    }
+    job
 }

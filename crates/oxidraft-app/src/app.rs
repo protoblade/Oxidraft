@@ -133,6 +133,8 @@ pub struct OxidraftApp {
     pub(crate) plot_stamp: bool,
     /// FONTMAP's font mapping file.
     pub(crate) font_map: String,
+    /// The fonts MTEXT names inline, as of a revision of the drawing.
+    pub(crate) inline_fonts: (Option<u64>, Vec<String>),
     /// AutoLISP: what APPLOAD and the command line defined.
     pub(crate) lisp: crate::lisp_host::LispThread,
     /// VSLIDE's slide, shown until REDRAW.
@@ -290,6 +292,8 @@ impl OxidraftApp {
     /// A new window with an empty drawing.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
+        // Text boxes (picking, extents) measured in the fonts text shows in.
+        oxidraft_model::annotation::set_measure(crate::fonts::measure);
         Self::blank()
     }
 
@@ -365,6 +369,7 @@ impl OxidraftApp {
             log_file: None,
             plot_stamp: false,
             font_map: String::new(),
+            inline_fonts: (None, Vec::new()),
             lisp: Default::default(),
             slide: None,
             pending_data_link: None,
@@ -1329,8 +1334,14 @@ impl eframe::App for OxidraftApp {
         let ctx = ui.ctx().clone();
         // Lengths and angles everywhere show in the drawing's units.
         oxidraft_model::units::set_current(self.doc.units());
-        // The text styles' fonts, for the drawing area and plot previews.
+        // The text styles' fonts, and those MTEXT names inline, for the
+        // drawing area and plot previews.
+        if self.inline_fonts.0 != Some(self.doc.revision()) {
+            self.inline_fonts = (Some(self.doc.revision()), crate::fonts::inline_fonts(&self.doc));
+        }
+        oxidraft_model::annotation::set_style_fonts(self.doc.text_styles());
         let fonts = self.doc.text_styles().iter().map(|s| s.font.as_str());
+        let fonts = fonts.chain(self.inline_fonts.1.iter().map(String::as_str));
         crate::fonts::load(&ctx, self.path.as_deref().and_then(std::path::Path::parent), fonts);
         self.prev_text_fields = std::mem::take(&mut self.text_fields);
         self.handle_shortcuts(&ctx);

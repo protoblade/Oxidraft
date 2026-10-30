@@ -4,6 +4,9 @@
 
 use eframe::egui::{self, Align, ComboBox, Layout, RichText, Sense, Ui, vec2};
 use oxidraft_commands::text_style::FONTS;
+
+/// AutoCAD's big fonts: Japanese, Simplified and Traditional Chinese, Korean.
+const BIG_FONTS: &[&str] = &["bigfont.shx", "extfont.shx", "gbcbig.shx", "chineset.shx", "whgtxt.shx"];
 use oxidraft_model::{Geometry, TextLook, TextStyle};
 
 use crate::{app::OxidraftApp, properties::common, theme};
@@ -135,6 +138,31 @@ impl OxidraftApp {
                             "Not found on this computer: text shows in the default typeface."
                         };
                         ui.colored_label(theme::text_dim(), note);
+                        // An SHX font's big font, for Asian characters.
+                        if d.edit.font.to_ascii_lowercase().ends_with(".shx") {
+                            let mut use_big = !d.edit.big_font.is_empty();
+                            if ui.checkbox(&mut use_big, "Use Big Font").changed() {
+                                d.edit.big_font = if use_big { BIG_FONTS[0].to_string() } else { String::new() };
+                            }
+                            if use_big {
+                                ui.horizontal(|ui| {
+                                    ui.label("Big Font:");
+                                    let r = ComboBox::from_id_salt("style_big_font")
+                                        .width(140.0)
+                                        .selected_text(&d.edit.big_font)
+                                        .show_ui(ui, |ui| {
+                                            for f in BIG_FONTS {
+                                                ui.selectable_value(&mut d.edit.big_font, (*f).to_string(), *f);
+                                            }
+                                        });
+                                    r.response.widget_info(|| {
+                                        egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Big Font")
+                                    });
+                                });
+                            }
+                        } else {
+                            d.edit.big_font.clear();
+                        }
                         ui.add_space(4.0);
                         ui.label(RichText::new("Size").strong());
                         let mut number =

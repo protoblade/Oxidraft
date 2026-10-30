@@ -348,10 +348,12 @@ impl<'a> Plotter<'a> {
         let Geometry::Text { position, height, rotation, width, attach, content, look } = g else { return };
         let size = height / 0.7;
         let wf = if look.width_factor > 0.0 { look.width_factor } else { 1.0 };
-        let font = self.doc.text_style(&look.style).map(|s| s.font.clone()).unwrap_or_default();
+        let style = self.doc.text_style(&look.style);
+        let font = style.map(|s| s.font.clone()).unwrap_or_default();
         // An SHX font's text plots as its strokes, in the object's pen.
         if let Some(shx) = crate::shx::shx_font(&font) {
-            let paths: Vec<Path> = crate::shx::text_strokes(shx, g)
+            let big = style.and_then(|s| crate::shx::shx_font(&s.big_font));
+            let paths: Vec<Path> = crate::shx::text_strokes(shx, big, g)
                 .into_iter()
                 .map(|s| Path { points: s.into_iter().map(|p| self.paper(p)).collect(), closed: false })
                 .collect();
@@ -361,6 +363,9 @@ impl<'a> Plotter<'a> {
             return;
         }
         let face = font::typeface(&font);
+        if oxidraft_model::annotation::is_formatted(content) {
+            return self.formatted_text(g, &font, color, pen);
+        }
         let lines = font::lines_in(face, content, if *width > 0.0 { width / (size * wf) } else { 0.0 });
         let widest = lines.iter().map(|l| face.width(l)).fold(0.0, f64::max) * wf;
         let row = face.row_height();
@@ -383,6 +388,100 @@ impl<'a> Plotter<'a> {
                 font: font.clone(),
             };
             self.items.push(item);
+        }
+    }
+
+    /// MTEXT that changes font, height, color or lines inline: each line
+    /// in pieces, each piece in its own font, size and color, underlined,
+    /// overlined or struck through as it asks.
+    fn formatted_text(&mut self, g: &Geometry, style_font: &str, color: Rgb, pen: f64) {
+        let Geometry::Text { position, height, rotation, width, attach, content, look } = g else { return };
+        let size = height / 0.7;
+        let wf = if look.width_factor > 0.0 { look.width_factor } else { 1.0 };
+        let style_face = font::typeface(style_font);
+        let runs = oxidraft_model::annotation::mtext_runs(content, *height);
+        // Each character with its run, in the order plain_text has them.
+        let chars: Vec<(char, usize)> =
+            runs.iter().enumerate().flat_map(|(i, r)| r.text.chars().map(move |c| (c, i))).collect();
+        let lines = font::lines_in(style_face, content, if *width > 0.0 { width / (size * wf) } else { 0.0 });
+        // A line's pieces: (text, run), matched to the characters in order.
+        let mut k = 0;
+        let pieces: Vec<Vec<(String, usize)>> = lines
+            .iter()
+            .map(|line| {
+                let mut out: Vec<(String, usize)> = Vec::new();
+                for c in line.chars() {
+                    while k < chars.len() && chars[k].0 != c {
+                        k += 1;
+                    }
+                    let run = chars.get(k).map_or(0, |x| x.1);
+                    k += 1;
+                    match out.last_mut() {
+                        Some((text, r)) if *r == run => text.push(c),
+                        _ => out.push((c.to_string(), run)),
+                    }
+                }
+                out
+            })
+            .collect();
+        let face_of = |run: usize| {
+            let f = &runs[run].format;
+            let named = f.font_name().map(|n| font::typeface(&n)).filter(|t| !t.is_default());
+            let family = f.font.as_deref().map(font::typeface).filter(|t| !t.is_default());
+            let name =
+                f.font_name().filter(|_| named.is_some()).or_else(|| f.font.clone().filter(|_| family.is_some()));
+            (named.or(family).unwrap_or(style_face), name.unwrap_or_else(|| style_font.to_string()))
+        };
+        let piece_width = |text: &str, run: usize| face_of(run).0.width(text) * runs[run].format.height * wf;
+        let line_width = |line: &[(String, usize)]| line.iter().map(|(t, r)| piece_width(t, *r)).sum::<f64>();
+        let tallest = |line: &[(String, usize)]| line.iter().map(|(_, r)| runs[*r].format.height).fold(1.0, f64::max);
+        let widest = pieces.iter().map(|l| line_width(l)).fold(0.0, f64::max);
+        let row = style_face.row_height();
+        // Baselines, in ems below the top: a tall line pushes those under it down.
+        let mut baselines = Vec::with_capacity(pieces.len());
+        let mut y = 0.7 * pieces.first().map_or(1.0, |l| tallest(l));
+        for (i, line) in pieces.iter().enumerate() {
+            if i > 0 {
+                y += row * tallest(line);
+            }
+            baselines.push(y);
+        }
+        let span = baselines.last().copied().unwrap_or(0.7);
+        let (fx, fy) = attach.fractions();
+        for (line, base) in pieces.iter().zip(&baselines) {
+            let mut x = -fx * widest;
+            for (text, run) in line {
+                let f = &runs[*run].format;
+                let w = piece_width(text, *run);
+                let local = |dx: f64, dy: f64| {
+                    *position
+                        + (Point::new(x + dx, fy * span - base + dy) * size).rotated_about(Point::ORIGIN, *rotation)
+                };
+                let piece_color = f.color.map_or(color, |c| self.settings.style.rgb(c));
+                if !text.trim().is_empty() {
+                    self.items.push(Item::Text {
+                        at: self.paper(local(0.0, 0.0)),
+                        rotation: rotation + self.twist(),
+                        size: size * f.height * self.unit(),
+                        text: text.clone(),
+                        color: piece_color,
+                        width_factor: wf,
+                        oblique: look.oblique,
+                        font: face_of(*run).1,
+                    });
+                }
+                let rules = [(f.underline, -0.15), (f.overline, 0.85), (f.strike, 0.3)];
+                let paths: Vec<Path> = rules
+                    .iter()
+                    .filter(|(on, _)| *on)
+                    .map(|(_, at)| Path {
+                        points: vec![self.paper(local(0.0, at * f.height)), self.paper(local(w, at * f.height))],
+                        closed: false,
+                    })
+                    .collect();
+                self.push_stroke(paths, pen, piece_color, false);
+                x += w;
+            }
         }
     }
 
@@ -691,5 +790,37 @@ mod tests {
         let Item::Text { at, size, .. } = texts[1] else { panic!() };
         assert!(at.approx_eq(Point::new(15.0, 25.0)) && (size - 5.0).abs() < 1e-9);
         assert!(matches!(sheet.items.last(), Some(Item::Stroke { width: 2.0, wide: true, .. })));
+    }
+
+    #[test]
+    fn mtext_plots_its_inline_fonts_heights_and_colors() {
+        let mut doc = Document::new();
+        doc.add(Geometry::Text {
+            look: Default::default(),
+            position: Point::new(10.0, 20.0),
+            height: 3.5,
+            rotation: 0.0,
+            width: 0.0,
+            attach: Attach::BottomLeft,
+            content: "Plain {\\H2x;\\C1;\\LBig\\l} end".into(),
+        });
+        let sheet = render(&doc, MODEL, &settings(Aabb::from_points(Point::ORIGIN, Point::new(60.0, 60.0)))).unwrap();
+        let texts: Vec<(String, f64, Rgb, Point)> = sheet
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Text { text, size, color, at, .. } => Some((text.clone(), *size, *color, *at)),
+                _ => None,
+            })
+            .collect();
+        let words: Vec<&str> = texts.iter().map(|t| t.0.as_str()).collect();
+        assert_eq!(words, ["Plain ", "Big", " end"]);
+        assert!((texts[1].1 - 2.0 * texts[0].1).abs() < 1e-9, "twice the height");
+        assert_ne!(texts[1].2, texts[0].2, "in red");
+        assert!(texts[0].3.x < texts[1].3.x && texts[1].3.x < texts[2].3.x, "one after the other");
+        assert!((texts[0].3.y - texts[1].3.y).abs() < 1e-9, "on one baseline");
+        // Big is underlined, in its color.
+        assert!(sheet.items.iter().any(|i| matches!(i, Item::Stroke { color, paths, .. }
+            if *color == texts[1].2 && paths.len() == 1 && paths[0].points.len() == 2)));
     }
 }

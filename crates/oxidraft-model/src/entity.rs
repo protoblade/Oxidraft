@@ -517,8 +517,7 @@ impl Geometry {
     fn outline(&self) -> Vec<Seg> {
         match self {
             Geometry::Text { position, height, rotation, width, attach, content, look } => {
-                let b =
-                    annotation::text_box(*position, *height, *rotation, *width, *attach, content, look.width_factor);
+                let b = annotation::text_box(*position, *height, *rotation, *width, *attach, content, look);
                 (0..4).map(|i| Seg::Line(Segment::new(b[i], b[(i + 1) % 4]))).collect()
             }
             Geometry::Hatch { loops, .. } => loops.iter().flat_map(|l| hatch::loop_segments(l)).collect(),
@@ -552,8 +551,7 @@ impl Geometry {
     pub fn contains(&self, p: Point) -> bool {
         match self {
             Geometry::Text { position, height, rotation, width, attach, content, look } => {
-                let b =
-                    annotation::text_box(*position, *height, *rotation, *width, *attach, content, look.width_factor);
+                let b = annotation::text_box(*position, *height, *rotation, *width, *attach, content, look);
                 hatch::contains(&[b.to_vec()], p)
             }
             Geometry::Hatch { loops, .. } => hatch::contains(&hatch::polygons(loops), p),

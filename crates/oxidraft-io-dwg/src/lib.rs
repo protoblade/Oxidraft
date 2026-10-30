@@ -582,6 +582,7 @@ mod tests {
             height: 0.0,
             width_factor: 0.7,
             oblique: 15.0,
+            big_font: "bigfont.shx".into(),
         };
         doc.set_text_style(narrow.clone()).unwrap();
         doc.set_current_text_style("Narrow").unwrap();

@@ -134,9 +134,8 @@ pub struct JustifyText {
 fn justified(g: &Geometry, to: Attach) -> Geometry {
     let mut g = g.clone();
     if let Geometry::Text { position, height, rotation, width, attach, content, look } = &mut g {
-        let wf = look.width_factor;
-        let now = text_box(*position, *height, *rotation, *width, *attach, content, wf);
-        let at_origin = text_box(Point::ORIGIN, *height, *rotation, *width, to, content, wf);
+        let now = text_box(*position, *height, *rotation, *width, *attach, content, look);
+        let at_origin = text_box(Point::ORIGIN, *height, *rotation, *width, to, content, look);
         *position = now[0] - at_origin[0];
         *attach = to;
     }
@@ -224,8 +223,8 @@ mod tests {
         // The text didn't move: its box is where it was.
         let Geometry::Text { position: p0, attach: a0, .. } = before else { panic!() };
         let (old, new) = (
-            text_box(p0, 6.0, 0.0, 0.0, a0, "ROOM", 1.0),
-            text_box(*position, *height, *rotation, *width, *attach, content, 1.0),
+            text_box(p0, 6.0, 0.0, 0.0, a0, "ROOM", &Default::default()),
+            text_box(*position, *height, *rotation, *width, *attach, content, &Default::default()),
         );
         assert!(old.iter().zip(&new).all(|(a, b)| a.distance(*b) < 1e-9));
     }
