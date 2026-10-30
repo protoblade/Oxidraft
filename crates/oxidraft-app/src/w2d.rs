@@ -17,6 +17,33 @@ use crate::cuix::{Element, parse_xml};
 /// What a stream drew: the geometry in millimeters, and its RGB.
 pub type Drawn = Vec<(Geometry, [u8; 3])>;
 
+/// A picture a stream places: its image as a file (PNG or JPEG), its
+/// pixels across and down, and the box it fills in millimeters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DwfPicture {
+    pub file: Vec<u8>,
+    pub extension: &'static str,
+    pub columns: u32,
+    pub rows: u32,
+    pub min: Point,
+    pub max: Point,
+}
+
+/// A sheet's drawing and its pictures.
+#[derive(Debug, Default)]
+pub struct DwfSheet {
+    pub drawn: Drawn,
+    pub pictures: Vec<DwfPicture>,
+}
+
+/// RGBA pixels, rows from the top, as a PNG file.
+fn png(columns: u32, rows: u32, rgba: Vec<u8>) -> Option<Vec<u8>> {
+    let image = image::RgbaImage::from_raw(columns, rows, rgba)?;
+    let mut out = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut out, image::ImageFormat::Png).ok()?;
+    Some(out.into_inner())
+}
+
 /// The color map W2D starts with.
 fn default_color_map() -> Vec<[u8; 3]> {
     const LEVELS: [u8; 6] = [0, 51, 102, 153, 204, 255];
@@ -218,6 +245,7 @@ struct Decoder {
     /// Logical units to millimeters on the sheet.
     to_mm: [f64; 6],
     out: Drawn,
+    pictures: Vec<DwfPicture>,
 }
 
 impl Decoder {
@@ -344,6 +372,85 @@ impl Decoder {
     /// How long a logical length is in millimeters.
     fn length(&self, l: f64) -> f64 {
         l * (self.to_mm[0] * self.to_mm[3] - self.to_mm[1] * self.to_mm[2]).abs().sqrt()
+    }
+
+    /// A picture: its pixels as `format` gives them (PNG or JPEG files,
+    /// RGB, RGBA, or indexes into `map`), over the box from `a` to `b`.
+    #[allow(clippy::too_many_arguments)]
+    fn picture(
+        &mut self,
+        format: &str,
+        columns: u32,
+        rows: u32,
+        a: (i64, i64),
+        b: (i64, i64),
+        map: &[[u8; 4]],
+        data: Vec<u8>,
+    ) {
+        let n = (columns * rows) as usize;
+        let (file, extension) = match format {
+            "png" => (Some(data), "png"),
+            "jpeg" | "jpg" => (Some(data), "jpg"),
+            "rgb" => {
+                let rgba = data.as_chunks::<3>().0.iter().take(n).flat_map(|c| [c[0], c[1], c[2], 255]).collect();
+                (png(columns, rows, rgba), "png")
+            }
+            "rgba" => (png(columns, rows, data.into_iter().take(4 * n).collect()), "png"),
+            "indexed" | "mapped" => {
+                let rgba = data
+                    .iter()
+                    .take(n)
+                    .flat_map(|i| map.get(usize::from(*i)).copied().unwrap_or([0, 0, 0, 255]))
+                    .collect();
+                (png(columns, rows, rgba), "png")
+            }
+            _ => (None, ""),
+        };
+        let Some(file) = file else { return };
+        let (p, q) = (self.mm(a), self.mm(b));
+        if self.visible {
+            self.pictures.push(DwfPicture {
+                file,
+                extension,
+                columns,
+                rows,
+                min: Point::new(p.x.min(q.x), p.y.min(q.y)),
+                max: Point::new(p.x.max(q.x), p.y.max(q.y)),
+            });
+        }
+    }
+
+    /// An extended binary picture (`op` after its length), its points
+    /// relative.
+    fn binary_picture(&mut self, op: u16) -> Option<()> {
+        let (columns, rows) = (u32::from(self.u16()?), u32::from(self.u16()?));
+        let (a, b) = (self.relative(true)?, self.relative(true)?);
+        self.i32()?;
+        let map: Vec<[u8; 4]> = match op {
+            0x0002 | 0x0003 | 0x0005 | 0x000D => {
+                let n = match self.byte()? {
+                    0 => 256,
+                    n => usize::from(n),
+                };
+                (0..n).map(|_| self.bytes::<4>()).collect::<Option<_>>()?
+            }
+            0x0004 => self.map.iter().map(|c| [c[0], c[1], c[2], 255]).collect(),
+            _ => Vec::new(),
+        };
+        let size = self.i32()?.max(0) as usize;
+        let data = self.data.get(self.at..self.at + size)?.to_vec();
+        self.at += size;
+        let format = match op {
+            0x0004 => "indexed",
+            0x0005 => "mapped",
+            0x0006 => "rgb",
+            0x0007 => "rgba",
+            0x0008 => "jpeg",
+            0x000C => "png",
+            _ => "bitonal",
+        };
+        self.picture(format, columns, rows, a, b, &map, data);
+        Some(())
     }
 
     fn push(&mut self, g: Geometry) {
@@ -497,6 +604,28 @@ impl Decoder {
                 let loops: Vec<Vec<Point>> =
                     counts.iter().map(|c| points.by_ref().take(*c).map(|p| self.mm(p)).collect()).collect();
                 self.solid(loops);
+            }
+            "Image" | "Group4PNGImage" => {
+                let format = v.get(1).and_then(Node::text).unwrap_or("").to_ascii_lowercase();
+                let n: Vec<i64> = v.iter().skip(2).take(7).filter_map(Node::number).map(|n| n as i64).collect();
+                let hex: String = v
+                    .iter()
+                    .skip(9)
+                    .filter_map(Node::list)
+                    .find(|l| l.first().and_then(Node::number).is_some())
+                    .map(|l| l.iter().skip(1).filter_map(Node::text).collect())
+                    .unwrap_or_default();
+                let data: Vec<u8> = hex
+                    .as_bytes()
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .filter_map(|d| u8::from_str_radix(std::str::from_utf8(d).ok()?, 16).ok())
+                    .collect();
+                if n.len() == 7 {
+                    let map: Vec<[u8; 4]> = self.map.iter().map(|c| [c[0], c[1], c[2], 255]).collect();
+                    self.picture(&format, n[1] as u32, n[2] as u32, (n[3], n[4]), (n[5], n[6]), &map, data);
+                }
             }
             "Text" => {
                 let n: Vec<i64> = v.iter().skip(1).take(2).filter_map(Node::number).map(|n| n as i64).collect();
@@ -793,6 +922,13 @@ impl Decoder {
                         }
                         continue;
                     }
+                    // Pictures: read (their points move the current point);
+                    // the rest skipped.
+                    let op = self.data.get(start + 5..start + 7).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
+                    if matches!(op, 0x0002..=0x0009 | 0x000C | 0x000D) {
+                        self.at = start + 7;
+                        let _ = self.binary_picture(op);
+                    }
                     self.at = start + 5 + len;
                 }
                 _ => {
@@ -806,9 +942,10 @@ impl Decoder {
     }
 }
 
-/// A W2D (or single-stream DWF) stream's drawing, logical units taken to
-/// millimeters by `to_mm` (x' = a x + c y + e, y' = b x + d y + f).
-pub fn decode(data: &[u8], to_mm: [f64; 6]) -> Result<Drawn, String> {
+/// A W2D (or single-stream DWF) stream's drawing and pictures, logical
+/// units taken to millimeters by `to_mm` (x' = a x + c y + e, y' = b x +
+/// d y + f).
+pub fn decode_sheet(data: &[u8], to_mm: [f64; 6]) -> Result<DwfSheet, String> {
     let skip = data.iter().take_while(|c| c.is_ascii_whitespace()).count();
     let header_end = record_end(data, skip).ok_or("Not a W2D stream.")?;
     let header = String::from_utf8_lossy(&data[skip..header_end]);
@@ -832,9 +969,10 @@ pub fn decode(data: &[u8], to_mm: [f64; 6]) -> Result<Drawn, String> {
         font_rotation: 0.0,
         to_mm,
         out: Vec::new(),
+        pictures: Vec::new(),
     };
     d.run();
-    Ok(d.out)
+    Ok(DwfSheet { drawn: d.out, pictures: d.pictures })
 }
 
 /// The named child's attribute, on an element whose name may carry a
@@ -860,9 +998,14 @@ fn entry_name(href: &str) -> String {
     href.replace('\\', "/").trim_start_matches('/').to_ascii_lowercase()
 }
 
-/// A DWF file's first sheet: a DWF 6 package's first ePlot section, or a
-/// single-stream DWF.
+/// A DWF file's first sheet's drawing.
 pub fn read_dwf(data: &[u8]) -> Result<Drawn, String> {
+    read_dwf_sheet(data).map(|s| s.drawn)
+}
+
+/// A DWF file's first sheet, pictures and all: a DWF 6 package's first
+/// ePlot section, or a single-stream DWF.
+pub fn read_dwf_sheet(data: &[u8]) -> Result<DwfSheet, String> {
     if !data.starts_with(b"(DWF V") || data.len() < 12 {
         return Err("Not a DWF file.".into());
     }
@@ -870,7 +1013,7 @@ pub fn read_dwf(data: &[u8]) -> Result<Drawn, String> {
     if major < 6 {
         // A single stream: its logical units as thousandths of a
         // millimeter (it says no more).
-        return decode(data, [0.001, 0.0, 0.0, 0.001, 0.0, 0.0]);
+        return decode_sheet(data, [0.001, 0.0, 0.0, 0.001, 0.0, 0.0]);
     }
     let files = crate::datalink::unzip(&data[12..]);
     let file = |name: &str| files.iter().find(|(n, _)| entry_name(n) == entry_name(name)).map(|(_, c)| c);
@@ -915,7 +1058,7 @@ pub fn read_dwf(data: &[u8]) -> Result<Drawn, String> {
         }
     }
     let stream = stream.and_then(|h| file(&h)).ok_or("The DWF sheet has no W2D graphics.")?;
-    decode(stream, to_mm)
+    decode_sheet(stream, to_mm)
 }
 
 #[cfg(test)]
@@ -950,7 +1093,7 @@ mod tests {
         data.extend(4u32.to_le_bytes());
         data.extend([0x99, 0x09, 0xAB, b'}']);
         data.extend_from_slice(b"L 0,0 0,7000(EndOfDWF)L 0,0 1,1");
-        let drawn = decode(&data, [0.001, 0.0, 0.0, 0.001, 0.0, 0.0]).unwrap();
+        let drawn = decode_sheet(&data, [0.001, 0.0, 0.0, 0.001, 0.0, 0.0]).unwrap().drawn;
         let kinds: Vec<&str> = drawn.iter().map(|(g, _)| g.name()).collect();
         assert_eq!(kinds, ["Line", "Polyline", "Line", "Circle", "Hatch", "MText", "Line"], "{drawn:?}");
         assert_eq!(drawn[0].1, [255, 0, 0]);
@@ -975,9 +1118,43 @@ mod tests {
         data.extend(z.finish().unwrap());
         data.push(b'}');
         data.extend_from_slice(b"L 0,0 0,2000(EndOfDWF)");
-        let drawn = decode(&data, [0.001, 0.0, 0.0, 0.001, 0.0, 0.0]).unwrap();
+        let drawn = decode_sheet(&data, [0.001, 0.0, 0.0, 0.001, 0.0, 0.0]).unwrap().drawn;
         assert_eq!(drawn.len(), 2, "{drawn:?}");
         assert_eq!(drawn[0].0, Geometry::Line { start: Point::ORIGIN, end: Point::new(1.0, 0.0) });
+    }
+
+    #[test]
+    fn pictures_and_the_point_they_leave() {
+        // An RGB picture 2x1 from 1000,0 to 3000,1000 (relative to O), then
+        // a relative line from where it left the current point.
+        let mut data = b"(W2D V06.00)O".to_vec();
+        data.extend(1000i32.to_le_bytes());
+        data.extend(0i32.to_le_bytes());
+        let mut body = 0x0006u16.to_le_bytes().to_vec();
+        body.extend(2u16.to_le_bytes());
+        body.extend(1u16.to_le_bytes());
+        for v in [0i32, 0, 2000, 1000, 7, 6] {
+            body.extend(v.to_le_bytes());
+        }
+        body.extend([255, 0, 0, 0, 0, 255, b'}']);
+        data.push(b'{');
+        data.extend((body.len() as u32).to_le_bytes());
+        data.extend(body);
+        data.push(b'l');
+        for v in [0i32, 0, 1000, 0] {
+            data.extend(v.to_le_bytes());
+        }
+        data.extend_from_slice(b"(EndOfDWF)");
+        let sheet = decode_sheet(&data, [0.001, 0.0, 0.0, 0.001, 0.0, 0.0]).unwrap();
+        assert_eq!(sheet.pictures.len(), 1);
+        let p = &sheet.pictures[0];
+        assert_eq!(
+            (p.extension, p.columns, p.rows, p.min, p.max),
+            ("png", 2, 1, Point::new(1.0, 0.0), Point::new(3.0, 1.0))
+        );
+        let decoded = image::load_from_memory(&p.file).unwrap().to_rgba8();
+        assert_eq!(decoded.get_pixel(1, 0).0, [0, 0, 255, 255]);
+        assert_eq!(sheet.drawn[0].0, Geometry::Line { start: Point::new(3.0, 1.0), end: Point::new(4.0, 1.0) });
     }
 
     #[test]
@@ -1000,6 +1177,24 @@ mod tests {
         };
         let sheet = oxidraft_plot::render(&doc, oxidraft_model::MODEL, &settings).unwrap();
         let drawn = read_dwf(&oxidraft_plot::dwf::dwf(&[sheet], "Plan")).unwrap();
+        // A picture placed on a sheet comes back as one.
+        let mut doc = oxidraft_model::Document::new();
+        doc.add(Geometry::Image {
+            adjust: Default::default(),
+            image: "ortho".into(),
+            origin: Point::new(0.0, 0.0),
+            u: Point::new(100.0, 0.0),
+            v: Point::new(0.0, 50.0),
+            clip: Vec::new(),
+        });
+        let picture = std::sync::Arc::new(oxidraft_plot::Picture { width: 2, height: 1, rgba: vec![255; 8] });
+        let pictured =
+            oxidraft_plot::render_with_pictures(&doc, oxidraft_model::MODEL, &settings, &|_| Some(picture.clone()))
+                .unwrap();
+        let back = read_dwf_sheet(&oxidraft_plot::dwf::dwf(&[pictured], "Plan")).unwrap();
+        assert_eq!(back.pictures.len(), 1);
+        let p = &back.pictures[0];
+        assert!(p.file.starts_with(b"\x89PNG") && (p.max.x - p.min.x) > 2.0 * (p.max.y - p.min.y) * 0.99);
         assert!(
             drawn.iter().any(|(g, _)| matches!(g, Geometry::Text { content, .. } if content == "PLAN")),
             "{drawn:?}"

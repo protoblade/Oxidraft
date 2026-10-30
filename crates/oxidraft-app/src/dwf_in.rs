@@ -312,20 +312,55 @@ impl OxidraftApp {
 
     pub fn dwf_attach_file(&mut self, file: &Path) -> Result<usize, String> {
         let data = std::fs::read(file).map_err(|e| format!("Could not read {}: {e}", file.display()))?;
-        let objects = read_any_dwf(&data)?;
+        let sheet = if data.starts_with(b"(DWF V") {
+            crate::w2d::read_dwf_sheet(&data)?
+        } else {
+            crate::w2d::DwfSheet { drawn: read_dwfx(&data)?, pictures: Vec::new() }
+        };
         let stem = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let base = oxidraft_model::sanitize_name(&format!("DWF-{stem}"));
         let name = (1..)
             .map(|i| if i == 1 { base.clone() } else { format!("{base}({i})") })
             .find(|n| self.doc.block(n).is_none())
             .unwrap_or(base);
-        let n = objects.len();
-        let entities = objects
-            .into_iter()
-            .map(|(g, c)| BlockEntity::new("0", Color::Index(crate::pdf_import::nearest_aci(c)), g))
-            .collect();
+        let n = sheet.drawn.len() + sheet.pictures.len();
+        // Its pictures, first (under the drawing): each saved as a file
+        // with the pictures Oxidraft keeps, an image of it in the block.
+        let mut entities = Vec::new();
+        let mut defs = Vec::new();
+        for (i, p) in sheet.pictures.iter().enumerate() {
+            let path = self.picture_file(&p.file, p.extension)?;
+            let def_name = format!("{name}-{}", i + 1);
+            defs.push(oxidraft_model::ImageDef {
+                name: def_name.clone(),
+                path: path.to_string_lossy().into_owned(),
+                page: None,
+                width: f64::from(p.columns),
+                height: f64::from(p.rows),
+                status: oxidraft_model::XrefStatus::Loaded,
+            });
+            let image = Geometry::Image {
+                image: def_name,
+                origin: p.min,
+                u: Point::new(p.max.x - p.min.x, 0.0),
+                v: Point::new(0.0, p.max.y - p.min.y),
+                clip: Vec::new(),
+                adjust: Default::default(),
+            };
+            entities.push(BlockEntity::new("0", Color::ByLayer, image));
+        }
+        entities.extend(
+            sheet
+                .drawn
+                .into_iter()
+                .map(|(g, c)| BlockEntity::new("0", Color::Index(crate::pdf_import::nearest_aci(c)), g)),
+        );
         self.engine.cancel(&mut self.doc);
         self.doc.begin("DWFATTACH");
+        let loaded: Vec<String> = defs.iter().map(|d| d.name.clone()).collect();
+        for def in defs {
+            self.doc.set_image_def(def);
+        }
         self.doc.define_block(Block { name: name.clone(), base: Point::ORIGIN, entities });
         self.doc.add(Geometry::Insert {
             block: name,
@@ -334,7 +369,31 @@ impl OxidraftApp {
             clip: None,
         });
         self.doc.commit();
+        for def in loaded {
+            self.load_image(&def);
+        }
         Ok(n)
+    }
+
+    /// Saves a picture taken from a file among those Oxidraft keeps (by
+    /// its contents, once): where it is.
+    pub(crate) fn picture_file(&self, bytes: &[u8], extension: &str) -> Result<std::path::PathBuf, String> {
+        let dir = self
+            .settings_path
+            .as_ref()
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| std::env::temp_dir().join("oxidraft"))
+            .join("pictures");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Could not keep the picture: {e}"))?;
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in bytes {
+            h = (h ^ u64::from(*b)).wrapping_mul(0x100_0000_01b3);
+        }
+        let path = dir.join(format!("{h:016x}.{extension}"));
+        if !path.is_file() {
+            std::fs::write(&path, bytes).map_err(|e| format!("Could not keep the picture: {e}"))?;
+        }
+        Ok(path)
     }
 }
 
