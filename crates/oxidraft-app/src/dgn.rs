@@ -1,8 +1,8 @@
-//! MicroStation DGN files, version 7 (V8's compound files aren't read):
-//! DGNIMPORT brings their lines, line strings, shapes, curves, arcs,
-//! ellipses and text in, on a layer for each level; DGNATTACH places one
-//! as a block reference; DGNEXPORT writes a V7 file of lines, line
-//! strings, shapes, arcs and text.
+//! MicroStation DGN files, version 7 (and V8's, see `dgn8`): DGNIMPORT
+//! brings their lines, line strings, shapes, curves, arcs, ellipses and
+//! text in, on a layer for each level; DGNATTACH places one as a block
+//! reference; DGNEXPORT writes a V7 file of lines, line strings, shapes,
+//! arcs and text.
 
 use std::path::Path;
 
@@ -54,10 +54,12 @@ fn put_vax_double(v: f64) -> [u8; 8] {
     [h[2], h[3], h[0], h[1], l[2], l[3], l[0], l[1]]
 }
 
-/// What a DGN file holds: (geometry in master units, its level, color).
-pub fn read_dgn(data: &[u8]) -> Result<Vec<(Geometry, u8, u8)>, String> {
+/// What a DGN file holds: (geometry in master units, its level's layer,
+/// its color; 0 for the level's). A V8 file (a compound file) its first
+/// model's.
+pub fn read_dgn(data: &[u8]) -> Result<Vec<(Geometry, String, u8)>, String> {
     if data.starts_with(&[0xD0, 0xCF, 0x11, 0xE0]) {
-        return Err("This is a DGN V8 file; only V7 files are read so far.".into());
+        return crate::dgn8::read_dgn8(data);
     }
     if data.len() < 4 || data[1] & 0x7f != 9 {
         return Err("Not a DGN file.".into());
@@ -180,7 +182,7 @@ pub fn read_dgn(data: &[u8]) -> Result<Vec<(Geometry, u8, u8)>, String> {
             }
             _ => None,
         };
-        out.extend(g.map(|g| (g, level, color)));
+        out.extend(g.map(|g| (g, format!("Level {level}"), color)));
     }
     Ok(out)
 }
@@ -299,7 +301,7 @@ pub fn write_dgn(doc: &Document) -> Vec<u8> {
 }
 
 impl OxidraftApp {
-    fn read_dgn_file(file: &Path) -> Result<Vec<(Geometry, u8, u8)>, String> {
+    fn read_dgn_file(file: &Path) -> Result<Vec<(Geometry, String, u8)>, String> {
         let data = std::fs::read(file).map_err(|e| format!("Could not read {}: {e}", file.display()))?;
         read_dgn(&data)
     }
@@ -318,8 +320,7 @@ impl OxidraftApp {
         self.engine.cancel(&mut self.doc);
         self.doc.begin("DGNIMPORT");
         let n = objects.len();
-        for (g, level, color) in objects {
-            let layer = format!("Level {level}");
+        for (g, layer, color) in objects {
             let color = if color == 0 { Color::ByLayer } else { Color::Index(color) };
             self.doc.add_on_layer(g, &layer, color);
         }
@@ -342,9 +343,9 @@ impl OxidraftApp {
             .unwrap_or(base);
         let entities = objects
             .into_iter()
-            .map(|(g, level, color)| {
+            .map(|(g, layer, color)| {
                 let color = if color == 0 { Color::ByBlock } else { Color::Index(color) };
-                BlockEntity::new(format!("Level {level}"), color, g)
+                BlockEntity::new(layer, color, g)
             })
             .collect();
         self.engine.cancel(&mut self.doc);
@@ -418,6 +419,6 @@ mod tests {
         assert!(has(
             &|g| matches!(g, Geometry::Text { content, height, rotation, .. } if content == "ROOM" && (height - 2.5).abs() < 1e-3 && (rotation - 30.0).abs() < 1e-6)
         ));
-        assert!(read_dgn(&[0xD0, 0xCF, 0x11, 0xE0, 0, 0]).unwrap_err().contains("V8"));
+        assert!(read_dgn(&[0xD0, 0xCF, 0x11, 0xE0, 0, 0]).unwrap_err().contains("DGN V8"));
     }
 }

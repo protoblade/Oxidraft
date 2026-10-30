@@ -19,6 +19,7 @@ mod dcl;
 mod dcl_ui;
 mod design_center;
 mod dgn;
+mod dgn8;
 mod diminspect;
 mod drafting;
 mod drawing_units;

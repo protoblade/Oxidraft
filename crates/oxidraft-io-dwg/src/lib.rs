@@ -11,6 +11,7 @@ use oxidraft_io_dxf::Imported;
 use oxidraft_model::Document;
 
 /// AutoCAD's sheet set files (.dst), as acadrust reads and writes them.
+pub use acadrust::compound_file;
 pub use acadrust::sheet_set;
 pub use ole::bmp_from_dib;
 
