@@ -364,8 +364,13 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
         }
     }
     styles::finish(&mut cad, doc, version);
+    // Multileaders: AutoCAD 2007's MULTILEADER; in an older version's file
+    // (with NATIVESAVE), as AutoCAD saves them there: MULTILEADERs with
+    // proxy graphics, which that version draws.
     if version >= DxfVersion::AC1021 {
-        mleaders::finish(&mut cad, doc, &handles);
+        mleaders::finish(&mut cad, doc, &handles, false);
+    } else if native_objects() && version >= DxfVersion::AC1015 {
+        mleaders::finish(&mut cad, doc, &handles, true);
     }
     cad.version = version;
     dimassoc::finish(&mut cad, doc, &handles);
