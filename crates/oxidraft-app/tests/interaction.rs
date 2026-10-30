@@ -3459,3 +3459,65 @@ fn autolisp_asks_within_a_command_and_reads_the_mouse() {
     h.run();
     assert_eq!(history(&mut h).last().map(String::as_str), Some("5"), "{:?}", history(&mut h));
 }
+
+#[test]
+fn autolisp_dcl_dialogs() {
+    let mut h = app_with_line();
+    let dir = std::env::temp_dir().join(format!("oxidraft-dcl-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dcl = dir.join("hello.dcl");
+    std::fs::write(
+        &dcl,
+        r#"hello : dialog { label = "Hello";
+            : edit_box { key = "name"; label = "Name:"; value = "World"; }
+            : toggle { key = "loud"; label = "Loud"; }
+            : popup_list { key = "size"; label = "Size"; }
+            : button { key = "greet"; label = "Greet"; }
+            ok_cancel;
+        }"#,
+    )
+    .unwrap();
+    let lsp = dir.join("hello.lsp");
+    std::fs::write(
+        &lsp,
+        format!(
+            r#"(defun c:HELLO (/ id r)
+  (setq id (load_dialog "{}"))
+  (new_dialog "hello" id)
+  (start_list "size") (mapcar 'add_list '("Small" "Large")) (end_list)
+  (set_tile "size" "1")
+  (action_tile "greet" "(setq greeted (get_tile \"name\")) (set_tile \"name\" \"Done\")")
+  (action_tile "accept" "(setq loud (get_tile \"loud\") size (get_tile \"size\")) (done_dialog 1)")
+  (setq r (start_dialog))
+  (unload_dialog id)
+  (princ (strcat "status " (itoa r) " " greeted " loud " loud " size " size))
+  (princ))"#,
+            dcl.display().to_string().replace('\\', "/")
+        ),
+    )
+    .unwrap();
+    h.state_mut().load_lisp(&lsp);
+    h.state_mut().type_command("hello");
+    h.run();
+    h.get_by_label("Greet").click();
+    h.run();
+    let name = h.get_by_role_and_label(Role::TextInput, "Name:").accesskit_node().value();
+    assert_eq!(name.as_deref(), Some("Done"), "the action set it");
+    h.get_by_label("Loud").click();
+    h.run();
+    h.get_by_label("OK").click();
+    h.run();
+    let history = h.state_mut().engine_mut().history().to_vec();
+    assert!(history.iter().any(|l| l == "status 1 World loud 1 size 1"), "{history:?}");
+    assert!(h.query_by_label("Greet").is_none(), "the dialog closed");
+    // Cancel: status 0.
+    let id_src = format!("(setq id (load_dialog \"{}\"))", dcl.display().to_string().replace('\\', "/"));
+    h.state_mut().type_command(&id_src);
+    h.state_mut().type_command("(progn (new_dialog \"hello\" id) (setq s (start_dialog)))");
+    h.run();
+    h.get_by_label("Cancel").click();
+    h.run();
+    h.state_mut().type_command("!s");
+    assert_eq!(h.state_mut().engine_mut().history().last().map(String::as_str), Some("0"));
+    std::fs::remove_dir_all(&dir).ok();
+}

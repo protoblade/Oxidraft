@@ -36,6 +36,8 @@ enum Waiting {
     /// grread: its prompt's answer, or with tracking the cursor leaving
     /// where it was.
     GrRead(Slot, bool, Option<oxidraft_geom::Point>),
+    /// start_dialog: what's done in the dialog.
+    Dialog,
 }
 
 #[derive(Default)]
@@ -50,9 +52,17 @@ pub(crate) struct LispThread {
     at_prompt: bool,
     /// The file the job loads, to say it loaded.
     loading: Option<String>,
+    /// The .dcl files load_dialog read, by number from 1.
+    pub(crate) dcl_files: Vec<Option<crate::dcl::Dcl>>,
+    /// The dialog new_dialog opened.
+    pub(crate) dialog: Option<crate::dcl_ui::OpenDialog>,
 }
 
 impl LispThread {
+    pub(crate) fn wait_for_dialog(&mut self) {
+        self.waiting = Some(Waiting::Dialog);
+    }
+
     /// True while a program runs and doesn't wait for the user.
     pub(crate) fn running(&self) -> bool {
         self.busy && self.waiting.is_none()
@@ -187,6 +197,13 @@ impl OxidraftApp {
                 }
                 None => return None,
             },
+            Waiting::Dialog => match self.lisp.dialog.as_mut() {
+                Some(d) => match d.events.pop_front() {
+                    Some((key, value, reason)) => Reply::Dcl(crate::lisp::DclAnswer::Event(key, value, reason)),
+                    None => return None,
+                },
+                None => Reply::Dcl(crate::lisp::DclAnswer::Done(0)),
+            },
             Waiting::Pause(fed) if self.engine.inputs_fed() != *fed => Reply::Unit,
             Waiting::Pause(_) if !self.engine.is_active() => Reply::Cancelled,
             Waiting::Pause(_) => return None,
@@ -280,12 +297,15 @@ impl OxidraftApp {
                 })
             }
             Request::SsGet(mode, points, filter) => Reply::Enames(self.ss_get(&mode, &points, &filter)),
+            Request::Dcl(call) => return self.dcl_request(call),
             Request::Done(..) => Reply::Unit,
         })
     }
 
     fn lisp_done(&mut self, r: Result<(String, Option<String>), String>) {
         let loading = self.lisp.loading.take();
+        // A dialog the program left open goes with it.
+        self.lisp.dialog = None;
         match r {
             Ok(_) if loading.is_some() => {
                 self.engine.log(format!("{} successfully loaded.", loading.unwrap_or_default()));

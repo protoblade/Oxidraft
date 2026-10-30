@@ -14,6 +14,8 @@ mod cmdline;
 mod compare;
 mod customize;
 mod datalink;
+mod dcl;
+mod dcl_ui;
 mod design_center;
 mod dgn;
 mod diminspect;

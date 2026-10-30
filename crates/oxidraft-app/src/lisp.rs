@@ -79,6 +79,8 @@ pub enum Request {
     EntLast,
     /// grread: a click, a key, or (tracking) the cursor's next place.
     GrRead(bool),
+    /// A DCL dialog's doings.
+    Dcl(DclCall),
     /// ssget's modes that don't ask: X, L, P, I, W and C.
     SsGet(String, Vec<[f64; 2]>, EntData),
     /// Sent when a job ends: what it gave (the value shown, and what's
@@ -96,8 +98,43 @@ pub enum Reply {
     Data(Option<EntData>),
     Ename(Option<u64>),
     Enames(Vec<u64>),
+    Dcl(DclAnswer),
     /// The program is to stop (Esc during a PAUSE, the app closing).
     Cancelled,
+}
+
+/// What a program asks of DCL dialogs.
+#[derive(Debug)]
+pub enum DclCall {
+    /// load_dialog: a .dcl file, by name.
+    Load(String),
+    Unload(i64),
+    /// new_dialog: a dialog of a file loaded.
+    New(String, i64),
+    /// start_dialog: shows it, waiting for what's done in it.
+    Start,
+    /// After an action: goes on waiting, or ends with done_dialog's status.
+    Resume,
+    Done(i64),
+    Term,
+    SetTile(String, String),
+    GetTile(String),
+    GetAttr(String, String),
+    Mode(String, i64),
+    /// end_list: a list's key, how (1 change, 2 add to, 3 new), the item
+    /// changed, the items.
+    List(String, i64, Option<usize>, Vec<String>),
+}
+
+#[derive(Debug)]
+pub enum DclAnswer {
+    Id(i64),
+    Text(String),
+    /// Something done in the dialog: the tile's key, its value, and why
+    /// (1 picked, 2 edited, 3 dragged, 4 double-clicked).
+    Event(String, String, i64),
+    Done(i64),
+    Failed,
 }
 
 /// What a LISP program can ask of the app.
@@ -515,6 +552,10 @@ pub struct Lisp {
     depth: usize,
     /// INITGET's bits and keywords, for the next get function.
     initget: Option<(i64, Vec<String>)>,
+    /// action_tile's expressions for the dialog shown, by key.
+    actions: HashMap<String, String>,
+    /// A DCL list being built: key, how, which item, the items.
+    list: Option<(String, i64, Option<usize>, Vec<String>)>,
 }
 
 impl Lisp {
@@ -1248,6 +1289,101 @@ impl Lisp {
                 .into(),
             ),
             "VER" => Value::Str(format!("Visual LISP (Oxidraft {})", env!("CARGO_PKG_VERSION"))),
+            "LOAD_DIALOG" => match host.call(Request::Dcl(DclCall::Load(arg(0).text()?.to_string()))) {
+                Reply::Dcl(DclAnswer::Id(n)) => Value::Int(n),
+                _ => Value::Int(-1),
+            },
+            "UNLOAD_DIALOG" => {
+                host.call(Request::Dcl(DclCall::Unload(arg(0).num()? as i64)));
+                Value::Nil
+            }
+            "NEW_DIALOG" => {
+                self.actions.clear();
+                match host.call(Request::Dcl(DclCall::New(arg(0).text()?.to_string(), arg(1).num()? as i64))) {
+                    Reply::Dcl(DclAnswer::Text(_)) => Value::T,
+                    _ => Value::Nil,
+                }
+            }
+            "ACTION_TILE" => {
+                self.actions.insert(arg(0).text()?.to_string(), arg(1).text()?.to_string());
+                Value::T
+            }
+            "SET_TILE" => {
+                host.call(Request::Dcl(DclCall::SetTile(arg(0).text()?.to_string(), arg(1).text()?.to_string())));
+                arg(1)
+            }
+            "GET_TILE" => match host.call(Request::Dcl(DclCall::GetTile(arg(0).text()?.to_string()))) {
+                Reply::Dcl(DclAnswer::Text(t)) => Value::Str(t),
+                _ => Value::Nil,
+            },
+            "GET_ATTR" => {
+                let (key, attr) = (arg(0).text()?.to_string(), arg(1).text()?.to_string());
+                match host.call(Request::Dcl(DclCall::GetAttr(key, attr))) {
+                    Reply::Dcl(DclAnswer::Text(t)) => Value::Str(t),
+                    _ => Value::Nil,
+                }
+            }
+            "MODE_TILE" => {
+                host.call(Request::Dcl(DclCall::Mode(arg(0).text()?.to_string(), arg(1).num()? as i64)));
+                Value::Nil
+            }
+            "START_LIST" => {
+                let op = a.get(1).map_or(Ok(3.0), Value::num)? as i64;
+                let index = a.get(2).map(Value::num).transpose()?.map(|i| i as usize);
+                self.list = Some((arg(0).text()?.to_string(), op, index, Vec::new()));
+                arg(0)
+            }
+            "ADD_LIST" => {
+                if let Some(l) = &mut self.list {
+                    l.3.push(arg(0).text()?.to_string());
+                }
+                arg(0)
+            }
+            "END_LIST" => {
+                if let Some((key, op, index, items)) = self.list.take() {
+                    host.call(Request::Dcl(DclCall::List(key, op, index, items)));
+                }
+                Value::Nil
+            }
+            "DONE_DIALOG" => {
+                let status = a.first().map_or(Ok(1.0), Value::num)? as i64;
+                host.call(Request::Dcl(DclCall::Done(status)));
+                Value::List(vec![Value::Int(0), Value::Int(0)])
+            }
+            "TERM_DIALOG" => {
+                host.call(Request::Dcl(DclCall::Term));
+                Value::Nil
+            }
+            // Shows the dialog: each thing done in it runs its action_tile
+            // expression, $key, $value and $reason set, until done_dialog.
+            "START_DIALOG" => {
+                let mut reply = host.call(Request::Dcl(DclCall::Start));
+                loop {
+                    match reply {
+                        Reply::Dcl(DclAnswer::Event(key, value, reason)) => {
+                            match self.actions.get(&key).cloned() {
+                                Some(src) => {
+                                    self.globals.insert("$KEY".into(), Value::Str(key));
+                                    self.globals.insert("$VALUE".into(), Value::Str(value));
+                                    self.globals.insert("$REASON".into(), Value::Int(reason));
+                                    self.eval_str(host, &src)?;
+                                }
+                                // OK and Cancel close it by themselves.
+                                None if key == "accept" => {
+                                    host.call(Request::Dcl(DclCall::Done(1)));
+                                }
+                                None if key == "cancel" => {
+                                    host.call(Request::Dcl(DclCall::Done(0)));
+                                }
+                                None => {}
+                            }
+                            reply = host.call(Request::Dcl(DclCall::Resume));
+                        }
+                        Reply::Dcl(DclAnswer::Done(status)) => break Value::Int(status),
+                        _ => return Err(CANCELLED.into()),
+                    }
+                }
+            }
             other => return Err(format!("no function definition: {other}")),
         })
     }

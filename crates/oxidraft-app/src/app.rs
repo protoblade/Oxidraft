@@ -1444,7 +1444,9 @@ impl eframe::App for OxidraftApp {
         if self.handle_ui_requests(&ctx) {
             ctx.request_repaint();
         }
-        // A LISP program goes on once the user has answered it.
+        // A LISP program's dialog; the program goes on once the user has
+        // answered it.
+        self.dcl_dialog(&ctx);
         self.lisp_pump();
         if self.lisp.running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(30));
