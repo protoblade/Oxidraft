@@ -1176,6 +1176,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: Some(|| Box::new(BParameter::default())),
     },
     CommandInfo {
+        name: "BTABLE",
+        aliases: &[],
+        description: "A block properties table: rows of a dynamic block's property values",
+        make: Some(|| Box::new(crate::dynblock::BTable::default())),
+    },
+    CommandInfo {
         name: "BLOOKUPTABLE",
         aliases: &[],
         description: "Give a dynamic block's lookup parameter its rows",

@@ -40,6 +40,12 @@ pub enum Param {
     /// An array action on a linear or XY parameter (`follows`): the objects
     /// repeat every `spacing` along its distance.
     Array { name: String, follows: String, objects: Vec<usize>, spacing: f64 },
+    /// A scale action on a linear, polar or XY parameter (`follows`): the
+    /// objects scale about `base` as its distance does.
+    Scale { name: String, follows: String, base: Point, objects: Vec<usize> },
+    /// Where a reference's insertion point is in the block: its grip moves
+    /// the insertion point, the block staying where it is.
+    BasePoint { name: String, base: Point },
 }
 
 impl Param {
@@ -53,7 +59,9 @@ impl Param {
             | Param::Xy { name, .. }
             | Param::Alignment { name, .. }
             | Param::Lookup { name, .. }
-            | Param::Array { name, .. } => name,
+            | Param::Array { name, .. }
+            | Param::Scale { name, .. }
+            | Param::BasePoint { name, .. } => name,
         }
     }
 
@@ -68,6 +76,8 @@ impl Param {
             Param::Alignment { .. } => "Alignment",
             Param::Lookup { .. } => "Lookup",
             Param::Array { .. } => "Array",
+            Param::Scale { .. } => "Scale",
+            Param::BasePoint { .. } => "Base Point",
         }
     }
 
@@ -83,10 +93,10 @@ impl Param {
             Param::Flip { .. } | Param::Rotation { .. } | Param::Alignment { .. } | Param::Lookup { .. } => {
                 vec![(self.name().to_string(), 0.0)]
             }
-            Param::Point { base, .. } => two("X", "Y", base.x, base.y),
+            Param::Point { base, .. } | Param::BasePoint { base, .. } => two("X", "Y", base.x, base.y),
             Param::Polar { base, end, .. } => two("Distance", "Angle", base.distance(*end), base.angle_to(*end)),
             Param::Xy { base, end, .. } => two("Horizontal", "Vertical", end.x - base.x, end.y - base.y),
-            Param::Array { .. } => Vec::new(),
+            Param::Array { .. } | Param::Scale { .. } => Vec::new(),
         }
     }
 
@@ -199,6 +209,10 @@ impl DynamicBlock {
                 Param::Array { name, follows, objects, spacing } => {
                     format!("Y|{}|{}|{}|{}", clean(name), clean(follows), spacing, list(objects))
                 }
+                Param::Scale { name, follows, base, objects } => {
+                    format!("S|{}|{}|{}|{}|{}", clean(name), clean(follows), base.x, base.y, list(objects))
+                }
+                Param::BasePoint { name, base } => format!("B|{}|{}|{}", clean(name), base.x, base.y),
             });
         }
         for s in &self.states {
@@ -286,6 +300,15 @@ impl DynamicBlock {
                     spacing: n(3)?,
                     objects: places(f.get(4)),
                 }),
+                Some("S") => d.params.push(Param::Scale {
+                    name: f.get(1)?.to_string(),
+                    follows: f.get(2)?.to_string(),
+                    base: Point::new(n(3)?, n(4)?),
+                    objects: places(f.get(5)),
+                }),
+                Some("B") => {
+                    d.params.push(Param::BasePoint { name: f.get(1)?.to_string(), base: Point::new(n(2)?, n(3)?) })
+                }
                 Some("V") => d.states.push(VisibilityState {
                     name: f.get(1)?.to_string(),
                     hidden: f.get(2).map_or_else(Vec::new, |h| h.split(',').filter_map(|v| v.parse().ok()).collect()),
@@ -350,7 +373,37 @@ impl DynamicBlock {
             }
         }
         out.extend(copies);
+        // A point's move action follows a stretch that moves its point
+        // (chained), as far as the stretch went.
+        let mut chained: Vec<Point> = vec![Point::ORIGIN; self.params.len()];
+        let mut chain = |frame: &Aabb, shift: Point| {
+            for (k, q) in self.params.iter().enumerate() {
+                if let Param::Point { base, .. } = q
+                    && frame.contains(*base)
+                {
+                    chained[k] = chained[k] + shift;
+                }
+            }
+        };
         for p in &self.params {
+            match p {
+                Param::Linear { base, end, stretch: Some(frame), .. } => {
+                    let len = base.distance(*end);
+                    if len > 0.0 {
+                        chain(frame, (*end - *base) * ((get(p, 0) - len) / len));
+                    }
+                }
+                Param::Polar { base, end, stretch: Some(frame), .. } => {
+                    chain(frame, base.polar(get(p, 0), get(p, 1)) - *end)
+                }
+                Param::Xy { base, end, stretch: Some(frame), .. } => {
+                    chain(frame, *base + Point::new(get(p, 0), get(p, 1)) - *end)
+                }
+                _ => {}
+            }
+        }
+        let shown: Vec<usize> = (0..entities.len()).filter(|i| !hidden.contains(i)).collect();
+        for (k, p) in self.params.iter().enumerate() {
             let v = get(p, 0);
             match p {
                 Param::Linear { base, end, stretch: Some(frame), .. } => {
@@ -379,13 +432,34 @@ impl DynamicBlock {
                 Param::Rotation { .. } => {}
                 // The move action: its objects (by place) move from the base.
                 Param::Point { base, objects, .. } => {
-                    let shift = Point::new(get(p, 0), get(p, 1)) - *base;
+                    let shift = Point::new(get(p, 0), get(p, 1)) - *base + chained[k];
                     if shift.length() > 0.0 {
-                        let shown: Vec<usize> = (0..entities.len()).filter(|i| !hidden.contains(i)).collect();
                         for (slot, i) in shown.iter().enumerate() {
                             if objects.contains(i) {
                                 out[slot].geometry = out[slot].geometry.translated(shift);
                             }
+                        }
+                    }
+                }
+                // The objects scaled as the parameter's distance is to its own.
+                Param::Scale { follows, base, objects, .. } => {
+                    let Some(f) = self.params.iter().find(|q| q.name().eq_ignore_ascii_case(follows)) else { continue };
+                    let default = f.default_value();
+                    let factor = if default.abs() > 0.0 { get(f, 0) / default } else { 1.0 };
+                    if (factor - 1.0).abs() > 1e-12 && factor > 0.0 {
+                        for (slot, i) in shown.iter().enumerate() {
+                            if objects.contains(i) {
+                                out[slot].geometry = out[slot].geometry.scaled(*base, factor);
+                            }
+                        }
+                    }
+                }
+                // The insertion point moved there: the block goes the other way.
+                Param::BasePoint { base, .. } => {
+                    let shift = *base - Point::new(get(p, 0), get(p, 1));
+                    if shift.length() > 0.0 {
+                        for e in &mut out {
+                            e.geometry = e.geometry.translated(shift);
                         }
                     }
                 }
@@ -536,11 +610,11 @@ impl Document {
                 }
                 Param::Flip { base, end, .. } => Some(base.midpoint(*end)),
                 Param::Rotation { base, radius, .. } => Some(base.polar(*radius, get(p, 0))),
-                Param::Point { .. } => Some(Point::new(get(p, 0), get(p, 1))),
+                Param::Point { .. } | Param::BasePoint { .. } => Some(Point::new(get(p, 0), get(p, 1))),
                 Param::Polar { base, .. } => Some(base.polar(get(p, 0), get(p, 1))),
                 Param::Xy { base, .. } => Some(*base + Point::new(get(p, 0), get(p, 1))),
                 Param::Alignment { base, .. } | Param::Lookup { base, .. } => Some(*base),
-                Param::Array { .. } => None,
+                Param::Array { .. } | Param::Scale { .. } => None,
             };
             out.extend(at.map(|a| (world(a), DynGrip::Param(i))));
         }
@@ -592,7 +666,7 @@ impl Document {
                         set(props[0].clone(), if now == 0.0 { 1.0 } else { 0.0 });
                     }
                     Param::Rotation { base, .. } => set(props[0].clone(), base.angle_to(local)),
-                    Param::Point { .. } => {
+                    Param::Point { .. } | Param::BasePoint { .. } => {
                         set(props[0].clone(), local.x);
                         set(props[1].clone(), local.y);
                     }
@@ -614,7 +688,7 @@ impl Document {
                         let next = current(&props[0]).map_or(0, |n| (n as usize + 1) % rows.len().max(1));
                         set(props[0].clone(), next as f64);
                     }
-                    Param::Array { .. } => return None,
+                    Param::Array { .. } | Param::Scale { .. } => return None,
                 }
             }
         }
@@ -816,5 +890,73 @@ mod tests {
         let align = grips.iter().find(|(_, g)| *g == DynGrip::Param(6)).unwrap();
         let along = d.dynamic_grip_values(id, &align.1, align.0, Some(90.0)).unwrap();
         assert_eq!(along.value("Align"), Some(90.0));
+    }
+
+    #[test]
+    fn scale_actions_chains_and_a_base_point() {
+        let mut d = Document::new();
+        let line = |a: (f64, f64), b: (f64, f64)| {
+            BlockEntity::new(
+                "0",
+                Color::ByBlock,
+                Geometry::Line { start: Point::new(a.0, a.1), end: Point::new(b.0, b.1) },
+            )
+        };
+        // A bar (0), a mark at its end (1), a square's side to scale (2).
+        d.define_block(Block {
+            name: "BAR".into(),
+            base: Point::ORIGIN,
+            entities: vec![
+                line((0.0, 0.0), (100.0, 0.0)),
+                line((100.0, 5.0), (100.0, 10.0)),
+                line((0.0, 20.0), (10.0, 20.0)),
+            ],
+        });
+        let frame = Aabb::from_points(Point::new(95.0, -1.0), Point::new(105.0, 1.0));
+        let def = DynamicBlock {
+            params: vec![
+                Param::Linear {
+                    name: "Length".into(),
+                    base: Point::ORIGIN,
+                    end: Point::new(100.0, 0.0),
+                    stretch: Some(frame),
+                },
+                // At the bar's end, inside the frame: it follows the stretch.
+                Param::Point { name: "Mark".into(), base: Point::new(100.0, 0.0), objects: vec![1] },
+                Param::Scale { name: "Scale1".into(), follows: "Length".into(), base: Point::ORIGIN, objects: vec![2] },
+                Param::BasePoint { name: "Base".into(), base: Point::ORIGIN },
+            ],
+            states: vec![],
+            current_state: 0,
+        };
+        assert_eq!(DynamicBlock::from_text(&def.to_text()), Some(def.clone()));
+        d.set_dynamic_block("BAR", Some(def));
+        let id = d.add(Geometry::Insert {
+            block: "BAR".into(),
+            placement: Placement::at(Point::ORIGIN),
+            attributes: vec![],
+            clip: None,
+        });
+        let v = |values: Vec<(&str, f64)>| DynamicValues {
+            block: "BAR".into(),
+            values: values.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+            visibility: None,
+        };
+        d.set_dynamic_values(id, v(vec![("Length", 200.0)]));
+        let l = lines(&d, id);
+        assert!(
+            l.iter().any(|(a, b)| a.approx_eq(Point::new(200.0, 5.0)) && b.approx_eq(Point::new(200.0, 10.0))),
+            "the mark went with it: {l:?}"
+        );
+        assert!(
+            l.iter().any(|(a, b)| a.approx_eq(Point::new(0.0, 40.0)) && b.approx_eq(Point::new(20.0, 40.0))),
+            "scaled twice: {l:?}"
+        );
+        // The base point's grip: the insertion point moves, the block stays.
+        let grip = d.dynamic_grips(id).into_iter().find(|(_, g)| *g == DynGrip::Param(3)).unwrap();
+        let moved = d.dynamic_grip_values(id, &grip.1, Point::new(50.0, 0.0), None).unwrap();
+        assert_eq!((moved.value("Base X"), moved.value("Base Y")), (Some(50.0), Some(0.0)));
+        d.set_dynamic_values(id, moved);
+        assert!(lines(&d, id).iter().any(|(a, _)| a.approx_eq(Point::new(-50.0, 0.0))), "shown from the new base");
     }
 }
