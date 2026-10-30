@@ -114,7 +114,8 @@ impl W2d {
         }
         let counts: Vec<String> = polygons.iter().map(|p| p.len().to_string()).collect();
         let points: Vec<String> = polygons.iter().flat_map(|p| p.iter().map(|q| xy(*q))).collect();
-        self.text(&format!("(Contour {} {} {})\n", polygons.len(), counts.join(" "), points.join(" ")));
+        // Fill mode on for it, as readers fill what's drawn in it.
+        self.text(&format!("F(Contour {} {} {})f\n", polygons.len(), counts.join(" "), points.join(" ")));
     }
 
     /// Sets the current point (binary `O`).
@@ -321,7 +322,7 @@ mod tests {
         let text = String::from_utf8(w2d(&sheet())).unwrap();
         assert!(text.starts_with("(W2D V06.00)") && text.ends_with("(EndOfDWF)"));
         assert!(text.contains("(Color 255,0,0,255)(LineWeight 350)P 2 10000,10000 100000,50000\n"), "{text}");
-        assert!(text.contains("(Contour 1 3 0,0 5000,0 5000,5000)"));
+        assert!(text.contains("F(Contour 1 3 0,0 5000,0 5000,5000)f"));
         assert!(text.contains("(Rotation 16384)") && text.contains("(Text 20000,30000 'It\\'s')"));
     }
 
