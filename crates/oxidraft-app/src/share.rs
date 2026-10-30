@@ -343,7 +343,21 @@ impl OxidraftApp {
         ));
         // What's handwritten on it in a colored pen, as text where it's
         // written (read in the background).
-        self.read_handwriting(file, origin, u, v);
+        // What the drawing plots there, to tell the markup's writing from.
+        let mut plotted = Vec::new();
+        fn texts(items: &[oxidraft_plot::Item], out: &mut Vec<String>) {
+            for i in items {
+                match i {
+                    oxidraft_plot::Item::Text { text, .. } => out.push(text.clone()),
+                    oxidraft_plot::Item::Clipped { items, .. } => texts(items, out),
+                    _ => {}
+                }
+            }
+        }
+        if let Some(sheet) = oxidraft_plot::render(&self.doc, space, &settings) {
+            texts(&sheet.items, &mut plotted);
+        }
+        self.read_handwriting(file, plotted, origin, u, v);
         Ok(())
     }
 }

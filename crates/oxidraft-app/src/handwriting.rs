@@ -45,23 +45,68 @@ pub fn ink(p: &Pixels) -> Option<image::GrayImage> {
     any.then_some(mask)
 }
 
-/// The text written in the colored ink of picture `p`.
-pub fn read_markups(p: &Pixels) -> Result<Vec<Read>, String> {
-    let Some(mask) = ink(p) else { return Ok(Vec::new()) };
-    let mut png = Vec::new();
-    mask.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| e.to_string())?;
-    recognize(&png)
+/// A line's words, lower case, letters and digits only.
+fn words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
+}
+
+/// Whether two boxes overlap.
+fn overlap(a: &Read, b: &Read) -> bool {
+    a.min.0 < b.max.0 && b.min.0 < a.max.0 && a.min.1 < b.max.1 && b.min.1 < a.max.1
+}
+
+/// The text written on picture `p`: in colored ink, and in any ink where
+/// what's read isn't mostly words the plot itself has (`plotted`, the
+/// text the drawing plots there), as a black pen's writing isn't.
+pub fn read_markups(p: &Pixels, plotted: &[String]) -> Result<Vec<Read>, String> {
+    let png = |img: &image::GrayImage| {
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .map(|_| png)
+            .map_err(|e| e.to_string())
+    };
+    let mut out = match ink(p) {
+        Some(mask) => recognize(&png(&mask)?)?,
+        None => Vec::new(),
+    };
+    // Everything written, in grays, less the plot's own.
+    let gray = image::GrayImage::from_fn(p.width, p.height, |x, y| {
+        let i = (y as usize * p.width as usize + x as usize) * 4;
+        let [r, g, b, a] = [p.rgba[i], p.rgba[i + 1], p.rgba[i + 2], p.rgba[i + 3]];
+        let lum = (u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000;
+        image::Luma([if a < 128 { 255 } else { lum as u8 }])
+    });
+    let known: std::collections::HashSet<String> = plotted.iter().flat_map(|t| words(t)).collect();
+    for r in recognize(&png(&gray)?)? {
+        if std::env::var("HW_DEBUG").is_ok() {
+            eprintln!("gray read: {r:?}");
+        }
+        let w = words(&r.text);
+        let new = w.iter().filter(|w| !known.contains(*w)).count();
+        if new * 2 > w.len() && !out.iter().any(|o| overlap(o, &r)) {
+            out.push(r);
+        }
+    }
+    Ok(out)
 }
 
 impl OxidraftApp {
     /// Reads the handwriting on the picture `file` (an image, or a PDF's
-    /// first page) in the background, its text to go where it's written
-    /// over the picture placed at `origin` with sides `u` and `v`.
-    pub(crate) fn read_handwriting(&mut self, file: &std::path::Path, origin: Point, u: Point, v: Point) {
+    /// first page; `plotted` the text the drawing plots on it) in the
+    /// background, its text to go where it's written over the picture
+    /// placed at `origin` with sides `u` and `v`.
+    pub(crate) fn read_handwriting(
+        &mut self,
+        file: &std::path::Path,
+        plotted: Vec<String>,
+        origin: Point,
+        u: Point,
+        v: Point,
+    ) {
         let (send, done) = std::sync::mpsc::channel();
         let file = file.to_path_buf();
         std::thread::spawn(move || {
-            let _ = send.send(oxidraft_raster::decode(&file, 0, 3000).and_then(|p| read_markups(&p)));
+            let _ = send.send(oxidraft_raster::decode(&file, 0, 3000).and_then(|p| read_markups(&p, &plotted)));
         });
         self.handwriting = Some(Pending { done, origin, u, v, space: self.doc.space() });
     }
@@ -158,10 +203,12 @@ fn recognize(_: &[u8]) -> Result<Vec<Read>, String> {
 mod tests {
     use super::*;
 
-    /// A one-page PDF with red text over black.
+    /// A one-page PDF with red text, the plot's black text and something
+    /// written in black.
     fn plot() -> Vec<u8> {
-        let content =
-            "BT /F1 40 Tf 1 0 0 rg 60 300 Td (Move door here) Tj ET BT /F1 40 Tf 0 0 0 rg 60 120 Td (PLAN VIEW) Tj ET";
+        let content = "BT /F1 40 Tf 1 0 0 rg 60 300 Td (Move door here) Tj ET \
+                       BT /F1 40 Tf 0 0 0 rg 60 120 Td (PLAN VIEW) Tj ET \
+                       BT /F1 32 Tf 0 0 0 rg 330 40 Td (Check this) Tj ET";
         let objects = [
             "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
@@ -199,9 +246,11 @@ mod tests {
     #[test]
     fn the_red_text_read_where_it_is() {
         let p = oxidraft_raster::render_pdf_data(plot(), 0, 150.0).unwrap();
-        let read = read_markups(&p).unwrap();
-        assert_eq!(read.len(), 1, "{read:?}");
-        assert_eq!(read[0].text, "Move door here");
+        // The plot has PLAN VIEW: what else is written is markup, in red
+        // or in black.
+        let read = read_markups(&p, &["PLAN VIEW".to_string()]).unwrap();
+        let texts: Vec<&str> = read.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts, ["Move door here", "Check this"], "{read:?}");
         // Its box: from x 60 of 600, its baseline at 300 of 400.
         assert!((read[0].min.0 - 0.1).abs() < 0.03, "{read:?}");
         assert!((read[0].min.1 - 0.75).abs() < 0.05, "{read:?}");

@@ -224,8 +224,9 @@ pub struct CuiWorkspace {
 pub(crate) fn palette_of(name: &str) -> Option<&'static str> {
     let n = name.to_ascii_lowercase().replace([' ', '_', '-'], "");
     [
-        ("propert", "properties"),
+        // "Layer Properties Manager" is the layers', not Properties.
         ("layer", "layers"),
+        ("propert", "properties"),
         ("toolpalette", "tool_palettes"),
         ("designcenter", "design_center"),
         ("adcenter", "design_center"),
@@ -952,6 +953,8 @@ mod tests {
         assert_eq!(palette_of("External References"), Some("xrefs"));
         assert_eq!(palette_of("TOOL_PALETTES"), Some("tool_palettes"));
         assert_eq!(palette_of("Sheet Set Manager"), None);
+        assert_eq!(palette_of("Layer Properties Manager"), Some("layers"));
+        assert_eq!(palette_of("Properties"), Some("properties"));
     }
 
     #[test]

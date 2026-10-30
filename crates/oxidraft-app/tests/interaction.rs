@@ -3362,6 +3362,24 @@ fn sheet_sets_share_and_markup() {
         let picture = oxidraft_plot::Picture { width: px.width, height: px.height, rgba: px.rgba };
         let scan = dir.join("scan.png");
         std::fs::write(&scan, oxidraft_plot::png::png(&picture, false)).unwrap();
+        // The drawing plots PLAN itself (by its first line).
+        let doc = h.state_mut().document_mut();
+        let at = doc
+            .entities()
+            .find_map(|e| match e.geometry {
+                Geometry::Line { start, .. } => Some(start),
+                _ => None,
+            })
+            .unwrap();
+        doc.add(Geometry::Text {
+            position: at,
+            height: 5.0,
+            rotation: 0.0,
+            width: 0.0,
+            attach: oxidraft_model::Attach::BottomLeft,
+            content: "PLAN".into(),
+            look: Default::default(),
+        });
         h.state_mut().markup_import_file(&scan).unwrap();
         // Read in the background, then added.
         let start = std::time::Instant::now();
