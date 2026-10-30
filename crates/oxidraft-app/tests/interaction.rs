@@ -3945,3 +3945,122 @@ fn insertobj_embeds_the_file() {
     }
     assert_eq!(h.state_mut().document_mut().embedded_file("notes.txt"), Some(&b"Site notes, revised"[..]));
 }
+
+/// A one-page PDF, 200 by 100 points, a black rectangle at `x` on it.
+fn one_page_pdf(x: u32) -> Vec<u8> {
+    let content = format!("0 0 0 rg {x} 20 60 60 re f");
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend(b"xref\n0 5\n0000000000 65535 f \n");
+    for o in offsets {
+        pdf.extend(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    pdf
+}
+
+/// A spreadsheet of one column of `values`.
+#[cfg(target_os = "macos")]
+fn spreadsheet(values: &[&str]) -> Vec<u8> {
+    let rows: String = values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| format!(r#"<row r="{n}"><c r="A{n}" t="inlineStr"><is><t>{v}</t></is></c></row>"#, n = i + 1))
+        .collect();
+    let file = |name: &str, text: String| (name.to_string(), text.into_bytes());
+    oxidraft_plot::zip::zip(&[
+        file(
+            "[Content_Types].xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#.into(),
+        ),
+        file(
+            "_rels/.rels",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#.into(),
+        ),
+        file(
+            "xl/workbook.xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#.into(),
+        ),
+        file(
+            "xl/_rels/workbook.xml.rels",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#.into(),
+        ),
+        file(
+            "xl/worksheets/sheet1.xml",
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{rows}</sheetData></worksheet>"#
+            ),
+        ),
+    ])
+}
+
+/// An Office object AutoCAD drew as a metafile comes in as its frame,
+/// linked to its document: opened, it shows the document's picture, and
+/// when the document is saved in its program, the picture follows.
+#[test]
+fn ole_documents_show_their_pictures() {
+    let mut documents = vec![("OLE1.pdf", one_page_pdf(20), one_page_pdf(120))];
+    #[cfg(target_os = "macos")]
+    documents.push(("OLE2.xlsx", spreadsheet(&["Pump", "Valve"]), spreadsheet(&["Pump", "Valve", "Tank", "Filter"])));
+    let dir = std::env::temp_dir().join(format!("oxidraft-ole-pictures-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, first, saved) in documents {
+        let mut doc = Document::new();
+        let corners = [(0.0, 0.0), (40.0, 0.0), (40.0, 20.0), (0.0, 20.0)];
+        let frame = doc.add(Geometry::Polyline {
+            vertices: corners.map(|(x, y)| oxidraft_model::Vertex::at(Point::new(x, y))).to_vec(),
+            closed: true,
+        });
+        let stored = doc.embed_file(name, first);
+        let link = oxidraft_model::Hyperlink { url: format!("embedded:{stored}"), description: "Document".into() };
+        doc.update(frame, |e| e.hyperlink = Some(Box::new(link)));
+        let path = dir.join(format!("{name}.dxf"));
+        oxidraft_io_dwg::save_dxf(&doc, &path).unwrap();
+
+        let mut h = app_with_line();
+        h.state_mut().open_path(path);
+        h.run_steps(2);
+        let picture = |h: &mut Harness<'_, OxidraftApp>| {
+            let doc = h.state_mut().document_mut();
+            let (image, origin, u, v) = doc
+                .entities()
+                .find_map(|e| match &e.geometry {
+                    Geometry::Image { image, origin, u, v, .. } => Some((image.clone(), *origin, *u, *v)),
+                    _ => None,
+                })
+                .expect("the document's picture in the frame");
+            assert_eq!((origin, u, v), (Point::ORIGIN, Point::new(40.0, 0.0), Point::new(0.0, 20.0)), "{name}");
+            let file = doc.image_def(&image).unwrap().path.strip_prefix("embedded:").unwrap().to_string();
+            doc.embedded_file(&file).unwrap().to_vec()
+        };
+        let before = picture(&mut h);
+        let shown = image::load_from_memory(&before).expect("a picture");
+        let aspect = f64::from(shown.width()) / f64::from(shown.height());
+        assert!((aspect - 2.0).abs() < 0.01, "{name}: as wide for its height as the frame ({aspect})");
+        assert!(!h.state_mut().document_mut().can_undo(), "{name}: opening isn't an edit");
+        // Saved in its own program.
+        let copy = h.state_mut().open_embedded(name).expect("a copy to open");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&copy, &saved).unwrap();
+        let start = std::time::Instant::now();
+        while picture(&mut h) == before && start.elapsed().as_secs() < 15 {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        let after = picture(&mut h);
+        assert_ne!(after, before, "{name}: drawn again from the saved document");
+        assert!(image::load_from_memory(&after).is_ok(), "{name}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -239,6 +239,8 @@ impl OxidraftApp {
                 for image in images {
                     self.load_image(&image);
                 }
+                // A document's picture, drawn again.
+                self.redraw_document_pictures(&name);
                 self.engine.log(format!("{name} was changed: what's in the drawing now is what was saved."));
             }
         }

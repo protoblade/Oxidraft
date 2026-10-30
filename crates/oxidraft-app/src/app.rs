@@ -667,6 +667,7 @@ impl OxidraftApp {
                 self.dwg_version = version;
                 self.xref_selected = None;
                 self.load_xrefs();
+                self.picture_document_frames();
                 self.load_pictures();
                 // Reading what's attached isn't an edit, and can't be undone.
                 self.doc.forget_history();

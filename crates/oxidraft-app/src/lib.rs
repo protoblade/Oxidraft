@@ -21,6 +21,7 @@ mod design_center;
 mod dgn;
 mod dgn8;
 mod diminspect;
+mod docpicture;
 mod drafting;
 mod drawing_units;
 pub mod drawings;
