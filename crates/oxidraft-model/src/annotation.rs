@@ -222,9 +222,10 @@ pub struct RunFormat {
     /// `\T`: the space between characters, as a multiple of the usual.
     pub tracking: f64,
     /// `\p`: the paragraph's first line's indent (from the left indent)
-    /// and its left indent, in drawing units.
+    /// and its left indent, in multiples of the text's height.
     pub indent: (f64, f64),
-    /// `\p…t…;`: its tab stops, in drawing units from the left.
+    /// `\p…t…;`: its tab stops, in multiples of the text's height from the
+    /// left.
     pub tabs: Vec<f64>,
     /// `\pq…;`: how its lines align: `l`eft, `c`enter or `r`ight.
     pub align: char,
@@ -409,7 +410,9 @@ pub fn mtext_runs(s: &str, height: f64) -> Vec<Run> {
                 let mut in_tabs = false;
                 for item in until_semicolon(&mut chars).trim_start_matches('x').split(',') {
                     let item = item.trim();
-                    if in_tabs && let Ok(v) = item.parse::<f64>() {
+                    // Tab stops after the first: numbers, centered (`c`) or
+                    // right-aligned (`r`) ones taken as plain stops.
+                    if in_tabs && let Ok(v) = item.trim_start_matches(['c', 'r']).parse::<f64>() {
                         format.tabs.push(v);
                         continue;
                     }
@@ -418,8 +421,9 @@ pub fn mtext_runs(s: &str, height: f64) -> Vec<Run> {
                     match (code, v.parse::<f64>()) {
                         ("i", Ok(v)) => format.indent.0 = v,
                         ("l", Ok(v)) => format.indent.1 = v,
-                        ("t", Ok(v)) => {
-                            format.tabs = vec![v];
+                        ("t", first) => {
+                            let first = first.ok().or_else(|| v.trim_start_matches(['c', 'r']).parse().ok());
+                            format.tabs = first.into_iter().collect();
                             in_tabs = true;
                         }
                         ("q", _) => format.align = v.chars().next().unwrap_or('l'),

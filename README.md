@@ -57,7 +57,7 @@ What AutoCAD LT has that Oxidraft doesn't, yet:
 
 - **Associative arrays:** AutoCAD sees an array as a block reference.
 - **Multileaders** gathered onto one block (`MLEADERCOLLECT`) show only the first block to AutoCAD, and multileaders saved as AutoCAD 2004 or older are LEADERs with their text or blocks.
-- **Text:** MTEXT's paragraph spacing (space before and after a paragraph) isn't laid out.
+- **Text:** MTEXT paragraphs' right indents, spacing before and after, and centered or right-aligned tab stops (taken as left-aligned ones).
 - **Export:** DWF6 files (`EXPORTDWF` writes DWFx). `INSERTOBJ` links other files rather than embedding them as OLE objects.
 - **Sheet sets** are Oxidraft's own files (.oxss), not AutoCAD's .dst.
 - **Interface:** `CUI`'s panels hold buttons a command each (no flyouts, images or split buttons), and AutoCAD's .cuix files aren't read.

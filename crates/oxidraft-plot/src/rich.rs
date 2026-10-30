@@ -158,9 +158,10 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
         text_width(&fonts[r], big, text) * height * f.height * run_wf(r) + n * gap(f.tracking, height * f.height)
     };
     // A line's indent: its paragraph's left one, and the first line's too.
+    // (In multiples of the height, as are tab stops.)
     let indent = |i: usize, line: &[(String, usize)]| {
         let (first, left) = line.first().map_or((0.0, 0.0), |(_, r)| runs[*r].format.indent);
-        left + if starts.get(i).copied().unwrap_or(false) { first } else { 0.0 }
+        height * (left + if starts.get(i).copied().unwrap_or(false) { first } else { 0.0 })
     };
     // Where a line's pieces start (a tab going to the next stop: its own,
     // else every 4 heights), and how long it is.
@@ -171,7 +172,7 @@ pub fn formatted_pieces(g: &Geometry, style_font: &str, big_font: &str) -> Vec<P
             starts.push(x);
             if t == "\t" {
                 let every = 4.0 * height;
-                let stop = runs[*r].format.tabs.iter().copied().find(|s| *s > x + 1e-9);
+                let stop = runs[*r].format.tabs.iter().map(|s| s * height).find(|s| *s > x + 1e-9);
                 x = stop.unwrap_or(((x / every).floor() + 1.0) * every);
             } else {
                 x += piece_width(t, *r);
@@ -358,17 +359,18 @@ mod tests {
         assert!(pieces[4].at.x > one.at.x, "B after it");
         let diagonal = formatted_pieces(&text("\\S3#4;"), "", "");
         assert_eq!(diagonal.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["3", "/", "4"]);
-        // Indents: the first line 4 in, the next ones 2.
+        // Indents, in heights (2): the first line 4 heights in.
         let indented = formatted_pieces(&text("\\pi2,l2;First\\PSecond"), "", "");
-        assert!((indented[0].at.x - 4.0).abs() < 1e-9, "{indented:?}");
+        assert!((indented[0].at.x - 8.0).abs() < 1e-9, "{indented:?}");
         let second = indented.iter().find(|p| p.text == "Second").unwrap();
-        assert!((second.at.x - 4.0).abs() < 1e-9, "a new paragraph's first line, indented too");
+        assert!((second.at.x - 8.0).abs() < 1e-9, "a new paragraph's first line, indented too");
     }
 
     #[test]
     fn tab_stops_and_centered_paragraphs() {
-        // A stop at 30: the second column starts there; with none, every 4 heights (8).
-        let pieces = formatted_pieces(&text("\\pt30;A^IB\\PC^ID"), "", "");
+        // A stop at 15 heights (30): the second column starts there; with
+        // none, every 4 heights (8).
+        let pieces = formatted_pieces(&text("\\pxt15,r20;A^IB\\PC^ID"), "", "");
         let at = |t: &str| pieces.iter().find(|p| p.text == t).unwrap().at.x;
         assert!((at("B") - 30.0).abs() < 1e-9, "{pieces:?}");
         assert!((at("D") - 30.0).abs() < 1e-9, "the stop holds for the paragraph after");
