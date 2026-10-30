@@ -60,6 +60,14 @@ fn overlap(a: &Read, b: &Read) -> bool {
 /// what's read isn't mostly words the plot itself has (`plotted`, the
 /// text the drawing plots there), as a black pen's writing isn't.
 pub fn read_markups(p: &Pixels, plotted: &[String]) -> Result<Vec<Read>, String> {
+    read_markups_by(p, plotted, &recognize)
+}
+
+/// What reads a picture (a PNG): its lines of text.
+type Recognizer<'a> = dyn Fn(&[u8]) -> Result<Vec<Read>, String> + 'a;
+
+/// [`read_markups`], each picture read by `recognize`.
+fn read_markups_by(p: &Pixels, plotted: &[String], recognize: &Recognizer<'_>) -> Result<Vec<Read>, String> {
     let png = |img: &image::GrayImage| {
         let mut png = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -79,9 +87,6 @@ pub fn read_markups(p: &Pixels, plotted: &[String]) -> Result<Vec<Read>, String>
     });
     let known: std::collections::HashSet<String> = plotted.iter().flat_map(|t| words(t)).collect();
     for r in recognize(&png(&gray)?)? {
-        if std::env::var("HW_DEBUG").is_ok() {
-            eprintln!("gray read: {r:?}");
-        }
         let w = words(&r.text);
         let new = w.iter().filter(|w| !known.contains(*w)).count();
         if new * 2 > w.len() && !out.iter().any(|o| overlap(o, &r)) {
@@ -354,5 +359,40 @@ mod tests {
         // Its box: from x 60 of 600, its baseline at 300 of 400.
         assert!((read[0].min.0 - 0.1).abs() < 0.03, "{read:?}");
         assert!((read[0].min.1 - 0.75).abs() < 0.05, "{read:?}");
+    }
+
+    /// The flow every system's recognition goes through, with Tesseract's
+    /// rows (as its TSV gives them, made here for this plot's words): the
+    /// red ink's line, then the grays' less the plot's own and what the ink
+    /// already gave.
+    #[test]
+    fn markups_from_tesseracts_rows() {
+        let p = oxidraft_raster::render_pdf_data(plot(), 0, 150.0).unwrap();
+        let size = (p.width, p.height);
+        const HEAD: &str =
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n";
+        let ink = "5\t1\t1\t1\t1\t1\t125\t148\t190\t60\t93\tMove\n\
+                   5\t1\t1\t1\t1\t2\t330\t148\t150\t60\t92\tdoor\n\
+                   5\t1\t1\t1\t1\t3\t495\t148\t210\t60\t94\there\n";
+        let gray = "5\t1\t1\t1\t1\t1\t125\t148\t190\t60\t90\tMove\n\
+                    5\t1\t1\t1\t1\t2\t330\t148\t150\t60\t91\tdoor\n\
+                    5\t1\t1\t1\t1\t3\t495\t148\t210\t60\t92\there\n\
+                    5\t1\t2\t1\t1\t1\t125\t523\t150\t60\t96\tPLAN\n\
+                    5\t1\t2\t1\t1\t2\t290\t523\t140\t60\t95\tVIEW\n\
+                    5\t1\t3\t1\t1\t1\t687\t702\t160\t50\t89\tCheck\n\
+                    5\t1\t3\t1\t1\t2\t860\t702\t90\t50\t90\tthis\n";
+        let calls = std::cell::Cell::new(0);
+        let read = read_markups_by(&p, &["PLAN VIEW".to_string()], &|png| {
+            let picture = image::load_from_memory(png).map_err(|e| e.to_string())?;
+            assert_eq!((picture.width(), picture.height()), size);
+            calls.set(calls.get() + 1);
+            let rows = if calls.get() == 1 { ink } else { gray };
+            Ok(tesseract_lines(&format!("{HEAD}{rows}"), size))
+        })
+        .unwrap();
+        assert_eq!(calls.get(), 2, "the red ink, then all of it");
+        let texts: Vec<&str> = read.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts, ["Move door here", "Check this"], "{read:?}");
+        assert!((read[0].min.0 - 0.1).abs() < 0.03 && (read[0].min.1 - 0.75).abs() < 0.05, "{read:?}");
     }
 }
