@@ -106,6 +106,8 @@ impl OxidraftApp {
                         }
                         ui.label(RichText::new("Landing").strong());
                         ui.checkbox(&mut s.landing_on, "Automatically include landing");
+                        ui.checkbox(&mut s.annotative, "Annotative")
+                            .on_hover_text("New multileaders are sized for the annotation scale");
                         ui.add_enabled_ui(s.landing_on, |ui| {
                             number(ui, "Set landing distance:", &mut s.landing, &mut fields)
                         });

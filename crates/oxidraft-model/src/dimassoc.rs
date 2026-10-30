@@ -86,7 +86,7 @@ impl Geometry {
         g
     }
 
-    fn is_dimension(&self) -> bool {
+    pub(crate) fn is_dimension(&self) -> bool {
         !self.dim_def_points().is_empty()
     }
 

@@ -151,8 +151,8 @@ impl Command for AnnoUpdate {
     }
 }
 
-/// ANNORESET: an annotative object's scales share one position here, so
-/// there's nothing to put back; it says so.
+/// ANNORESET: every scale's representation of the annotative objects
+/// back where the current scale's is (grip editing moves one on its own).
 #[derive(Default)]
 pub struct AnnoReset;
 
@@ -163,8 +163,8 @@ impl Command for AnnoReset {
 
     fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
         let Input::Selection(s) = input else { return Ok(Step::Done) };
-        let n = s.ids.iter().filter(|id| ctx.doc.entity(**id).is_some_and(|e| e.annotative.is_some())).count();
-        ctx.messages.push(format!("{n} annotative object(s): every scale shares one position, so they're as reset."));
+        let n = s.ids.iter().filter(|id| ctx.doc.anno_reset(**id)).count();
+        ctx.messages.push(format!("{n} object(s) reset."));
         Ok(Step::Done)
     }
 

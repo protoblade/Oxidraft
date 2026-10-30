@@ -111,6 +111,8 @@ impl OxidraftApp {
                     ui.end_row();
                     fields.push(precision);
                 });
+                ui.checkbox(&mut style.annotative, "Annotative")
+                    .on_hover_text("New dimensions are sized for the annotation scale");
                 ui.colored_label(theme::text_dim(), "Existing dimensions take the new style; new ones the scale too.");
                 let row = vec2(ui.available_width(), 24.0);
                 ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {

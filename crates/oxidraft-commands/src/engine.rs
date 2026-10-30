@@ -701,7 +701,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo {
         name: "ANNORESET",
         aliases: &[],
-        description: "Reset annotative objects' scale positions (here they share one)",
+        description: "Put annotative objects' scale representations back where the current one is",
         make: Some(|| Box::new(crate::anno_cmd::AnnoReset)),
     },
     CommandInfo {

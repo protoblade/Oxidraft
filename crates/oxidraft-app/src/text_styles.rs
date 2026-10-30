@@ -165,6 +165,8 @@ impl OxidraftApp {
                         }
                         ui.add_space(4.0);
                         ui.label(RichText::new("Size").strong());
+                        ui.checkbox(&mut d.edit.annotative, "Annotative")
+                            .on_hover_text("Its height is on paper: new text is sized for the annotation scale");
                         let mut number =
                             |ui: &mut Ui, label: &str, v: &mut f64, range: std::ops::RangeInclusive<f64>| {
                                 ui.horizontal(|ui| {

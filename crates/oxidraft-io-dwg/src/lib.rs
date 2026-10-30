@@ -136,7 +136,18 @@ fn imported_from(cad: &mut CadDocument) -> Result<Imported, Error> {
     let mut imported = oxidraft_io_dxf::read(&mut dxf.as_slice()).map_err(|e| e.to_string())?;
     fields::restore(cad, &mut imported);
     dimassoc::restore(cad, &mut imported);
+    annotative_styles(cad, &mut imported.document);
     Ok(imported)
+}
+
+/// Text styles AutoCAD marks annotative are so here.
+fn annotative_styles(cad: &CadDocument, doc: &mut Document) {
+    for t in cad.text_styles.iter().filter(|t| t.annotative) {
+        if let Some(mut s) = doc.text_styles().iter().find(|s| s.name.eq_ignore_ascii_case(&t.name)).cloned() {
+            s.annotative = true;
+            let _ = doc.set_text_style(s);
+        }
+    }
 }
 
 /// A DXF file, its texts' AutoCAD fields brought back as field codes. One
@@ -176,6 +187,12 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
     layouts::finish(&mut cad, doc);
     groups::finish(&mut cad, doc, &handles);
     settings::finish(&mut cad, doc);
+    // Annotative text styles as AutoCAD marks them.
+    for s in doc.text_styles().iter().filter(|s| s.annotative) {
+        if let Some(t) = cad.text_styles.iter_mut().find(|t| t.name.eq_ignore_ascii_case(&s.name)) {
+            t.annotative = true;
+        }
+    }
     if version >= DxfVersion::AC1021 {
         mleaders::finish(&mut cad, doc, &handles);
     }
@@ -609,6 +626,7 @@ mod tests {
             width_factor: 0.7,
             oblique: 15.0,
             big_font: "bigfont.shx".into(),
+            annotative: true,
         };
         doc.set_text_style(narrow.clone()).unwrap();
         doc.set_current_text_style("Narrow").unwrap();
@@ -624,7 +642,13 @@ mod tests {
         doc.add(text("ROOM", Attach::BottomLeft));
         doc.add(text("Two\\Plines", Attach::MiddleCenter));
         let check = |back: &Document, how: &str| {
-            assert_eq!(back.text_style("narrow"), Some(&narrow), "{how}");
+            // The bare DXF writer keeps no settings: whether it's annotative isn't there.
+            let want = if how == "Oxidraft's DXF" {
+                TextStyle { annotative: false, ..narrow.clone() }
+            } else {
+                narrow.clone()
+            };
+            assert_eq!(back.text_style("narrow"), Some(&want), "{how}");
             assert!(back.text_style("Standard").is_some(), "{how}");
             assert_eq!(back.current_text_style().name, "Narrow", "{how}");
             for e in back.entities() {
@@ -723,6 +747,7 @@ mod tests {
             landing_on: false,
             landing: 6.0,
             block: Some(oxidraft_model::annotation::TagShape::Hexagon),
+            annotative: true,
         };
         let table = oxidraft_model::table::TableStyle { text_height: 3.0, margin: 1.0 };
         doc.set_annotation_styles(leader, table);

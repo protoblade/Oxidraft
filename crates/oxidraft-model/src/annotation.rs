@@ -26,6 +26,8 @@ pub struct TextStyle {
     pub oblique: f64,
     /// An SHX font's big font (Asian characters), empty for none.
     pub big_font: String,
+    /// Text made in it is annotative: its height is the paper height.
+    pub annotative: bool,
 }
 
 impl TextStyle {
@@ -41,6 +43,7 @@ impl TextStyle {
             width_factor: 1.0,
             oblique: 0.0,
             big_font: String::new(),
+            annotative: false,
         }
     }
 }
@@ -485,10 +488,19 @@ pub struct DimStyle {
     pub gap: f64,
     /// DIMDEC.
     pub decimals: usize,
+    /// Dimensions made in it are annotative.
+    pub annotative: bool,
 }
 
-pub const DEFAULT_DIM_STYLE: DimStyle =
-    DimStyle { text_height: 2.5, arrow_size: 2.5, ext_offset: 0.625, ext_beyond: 1.25, gap: 0.625, decimals: 2 };
+pub const DEFAULT_DIM_STYLE: DimStyle = DimStyle {
+    text_height: 2.5,
+    arrow_size: 2.5,
+    ext_offset: 0.625,
+    ext_beyond: 1.25,
+    gap: 0.625,
+    decimals: 2,
+    annotative: false,
+};
 
 impl Default for DimStyle {
     fn default() -> Self {
@@ -1349,6 +1361,8 @@ pub struct LeaderStyle {
     pub landing: f64,
     /// Content: a tag block, or (none) multiline text.
     pub block: Option<TagShape>,
+    /// Multileaders made in it are annotative.
+    pub annotative: bool,
 }
 
 pub const DEFAULT_LEADER_STYLE: LeaderStyle = LeaderStyle {
@@ -1358,6 +1372,7 @@ pub const DEFAULT_LEADER_STYLE: LeaderStyle = LeaderStyle {
     landing_on: true,
     landing: 2.5,
     block: None,
+    annotative: false,
 };
 
 impl Default for LeaderStyle {

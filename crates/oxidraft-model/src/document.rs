@@ -2329,6 +2329,13 @@ impl Document {
 
     /// Ends the open transaction. Empty transactions leave no undo step.
     pub fn commit(&mut self) {
+        // Text and dimensions drawn in an annotative style are annotative.
+        let added = self.added_in_transaction();
+        if !added.is_empty()
+            && let Some(name) = self.open.as_ref().map(|t| t.name.clone())
+        {
+            self.annotate_new(&name, &added);
+        }
         // Center marks follow their circles, in the same step.
         let changed = self.changed_before();
         if !changed.is_empty() {

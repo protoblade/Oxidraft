@@ -6,6 +6,8 @@
 
 use std::borrow::Cow;
 
+use oxidraft_geom::Point;
+
 use crate::{Document, Entity, EntityId, Geometry};
 
 /// The scales AutoCAD lists, as (name, drawing units per paper unit).
@@ -104,7 +106,66 @@ impl Geometry {
     }
 }
 
+/// The commands whose new text, dimensions and multileaders take an
+/// annotative style's way: made annotative at the current scale.
+const MAKING: [&str; 9] =
+    ["TEXT", "MTEXT", "DTEXT", "MLEADER", "QLEADER", "LEADER", "QDIM", "DIMCONTINUE", "DIMBASELINE"];
+
 impl Document {
+    /// What `command` drew in an annotative style is made annotative at
+    /// the current scale: text's height (and a dimension's or
+    /// multileader's sizes) are on paper, so they're scaled up to it.
+    pub(crate) fn annotate_new(&mut self, command: &str, added: &[EntityId]) {
+        let making = MAKING.contains(&command) || command.starts_with("DIM") && !command.starts_with("DIMEDIT");
+        if !making {
+            return;
+        }
+        let scale = self.anno_scale;
+        let (dims, leaders) = (self.dim_style().annotative, self.leader_style().annotative);
+        for &id in added {
+            let Some(e) = self.entity(id) else { continue };
+            if e.annotative.is_some() {
+                continue;
+            }
+            let annotative = match &e.geometry {
+                Geometry::Text { look, .. } => self.text_style(&look.style).is_some_and(|s| s.annotative),
+                Geometry::Leader { .. } => leaders,
+                g => dims && g.is_dimension(),
+            };
+            if annotative {
+                self.update(id, |e| {
+                    e.geometry = e.geometry.annotation_scaled(scale);
+                    e.annotative = Some(Box::new(crate::entity::Annotative::at(scale)));
+                });
+            }
+        }
+    }
+
+    /// ANNORESET: every scale's representation of `id` back where the
+    /// current one is. Whether it had any moved on their own.
+    pub fn anno_reset(&mut self, id: EntityId) -> bool {
+        let moved = self.entity(id).and_then(|e| e.annotative.as_ref()).is_some_and(|a| !a.offsets.is_empty());
+        if moved {
+            self.update(id, |e| {
+                if let Some(a) = e.annotative.as_mut() {
+                    a.offsets.clear();
+                }
+            });
+        }
+        moved
+    }
+
+    /// Grip editing moved annotative `id`'s representation at the current
+    /// scale by `d` on its own.
+    pub fn move_scale_representation(&mut self, id: EntityId, d: Point) {
+        self.update(id, |e| {
+            if let Some(a) = e.annotative.as_mut() {
+                let s = a.shown;
+                a.move_offset(s, d);
+            }
+        });
+    }
+
     /// CANNOSCALE: drawing units per paper unit.
     pub fn anno_scale(&self) -> f64 {
         self.anno_scale
@@ -130,7 +191,7 @@ impl Document {
                 }
                 // Sized for the scale it was shown at, now for this one.
                 if supports(&a.scales, scale) && (a.shown - scale).abs() > 1e-12 {
-                    e.geometry = e.geometry.annotation_scaled(scale / a.shown);
+                    e.geometry = a.for_scale(&e.geometry, scale);
                     a.shown = scale;
                     changed += 1;
                 }
@@ -172,7 +233,7 @@ impl Document {
         if (s - a.shown).abs() < 1e-12 {
             return Some(Cow::Borrowed(e));
         }
-        Some(Cow::Owned(Entity { geometry: e.geometry.annotation_scaled(s / a.shown), ..e.clone() }))
+        Some(Cow::Owned(Entity { geometry: a.for_scale(&e.geometry, s), ..e.clone() }))
     }
 
     /// Makes an object annotative at the current scale (its present size
@@ -184,7 +245,7 @@ impl Document {
             if !e.geometry.can_be_annotative() {
                 return;
             }
-            e.annotative = on.then(|| Box::new(crate::entity::Annotative { scales: vec![scale], shown: scale }));
+            e.annotative = on.then(|| Box::new(crate::entity::Annotative::at(scale)));
             done = true;
         });
         done
@@ -247,5 +308,87 @@ mod tests {
         );
         doc.set_anno_scale(1.0, false);
         assert!((height(&doc, text) - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn annotative_styles_make_annotative_objects() {
+        let mut doc = Document::new();
+        let mut style = crate::TextStyle::new("Notes");
+        style.annotative = true;
+        doc.set_text_style(style).unwrap();
+        doc.set_dim_style(crate::annotation::DimStyle { annotative: true, ..Default::default() });
+        doc.set_anno_scale(50.0, false);
+        let text = |style: &str| Geometry::Text {
+            look: crate::annotation::TextLook { style: style.into(), ..Default::default() },
+            position: Point::new(10.0, 10.0),
+            height: 2.5,
+            rotation: 0.0,
+            width: 0.0,
+            attach: Attach::BottomLeft,
+            content: "ROOM".into(),
+        };
+        doc.begin("TEXT");
+        let note = doc.add(text("Notes"));
+        let plain = doc.add(text("Standard"));
+        doc.commit();
+        let e = doc.entity(note).unwrap();
+        assert!(
+            matches!(e.geometry, Geometry::Text { height, .. } if (height - 125.0).abs() < 1e-9),
+            "paper height at 1:50"
+        );
+        assert_eq!(e.annotative.as_ref().map(|a| a.scales.clone()), Some(vec![50.0]));
+        assert!(doc.entity(plain).unwrap().annotative.is_none());
+        doc.begin("DIMLINEAR");
+        let dim = doc.add(Geometry::Dimension {
+            p1: Point::ORIGIN,
+            p2: Point::new(100.0, 0.0),
+            line: Point::new(0.0, 20.0),
+            rotation: 0.0,
+            aligned: false,
+            text: None,
+            scale: 1.0,
+            extra: Default::default(),
+        });
+        doc.commit();
+        assert!(matches!(doc.entity(dim).unwrap().geometry, Geometry::Dimension { scale, .. } if scale == 50.0));
+        // Copied, it stays as it is.
+        doc.begin("COPY");
+        let copy = doc.add(text("Notes"));
+        doc.commit();
+        assert!(doc.entity(copy).unwrap().annotative.is_none());
+    }
+
+    #[test]
+    fn a_scales_representation_moves_on_its_own() {
+        let mut doc = Document::new();
+        let id = doc.add(Geometry::Text {
+            look: Default::default(),
+            position: Point::new(10.0, 10.0),
+            height: 2.5,
+            rotation: 0.0,
+            width: 0.0,
+            attach: Attach::BottomLeft,
+            content: "ROOM".into(),
+        });
+        doc.set_annotative(id, true);
+        doc.set_anno_scale(50.0, true);
+        let at = |d: &Document| match d.entity(id).unwrap().geometry {
+            Geometry::Text { position, .. } => position,
+            _ => Point::ORIGIN,
+        };
+        // Moved by its grip at 1:50: there only.
+        let d = Point::new(5.0, 0.0);
+        doc.update(id, |e| e.geometry = e.geometry.translated(d));
+        doc.move_scale_representation(id, d);
+        assert_eq!(at(&doc), Point::new(15.0, 10.0));
+        doc.set_anno_scale(1.0, false);
+        assert_eq!(at(&doc), Point::new(10.0, 10.0), "1:1's didn't move");
+        doc.set_anno_scale(50.0, false);
+        assert_eq!(at(&doc), Point::new(15.0, 10.0));
+        // ANNORESET: 1:1's comes here too.
+        assert!(doc.anno_reset(id));
+        doc.set_anno_scale(1.0, false);
+        assert_eq!(at(&doc), Point::new(15.0, 10.0));
+        assert!(!doc.anno_reset(id), "nothing moved on its own now");
     }
 }

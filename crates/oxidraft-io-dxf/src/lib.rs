@@ -746,6 +746,8 @@ fn read_text_styles(doc: &mut Document, drawing: &Drawing) {
             width_factor: if s.width_factor > 0.0 { s.width_factor } else { 1.0 },
             oblique: oblique_from_dxf(s.oblique_angle),
             big_font: s.big_font_file_name.clone(),
+            // Oxidraft's settings say which are annotative.
+            annotative: false,
         };
         let _ = doc.set_text_style(style);
     }
@@ -817,24 +819,43 @@ fn hyperlink_xdata(e: &oxidraft_model::Entity) -> Option<dxf::XData> {
 /// The XDATA application keeping an annotative object's scales.
 const ANNO_APP: &str = "OXIDRAFT_ANNO";
 
+/// Marks where an annotative object's moved representations follow its
+/// scales in its XDATA: scale, then how far, for each.
+const ANNO_OFFSETS: &str = "OFFSETS";
+
 /// An annotative object's scales as XDATA: the one it's sized for, then
-/// all it supports.
+/// all it supports, then the representations moved on their own.
 fn anno_xdata(e: &oxidraft_model::Entity) -> Option<dxf::XData> {
     let a = e.annotative.as_ref()?;
-    let items = std::iter::once(a.shown).chain(a.scales.iter().copied()).map(dxf::XDataItem::Real).collect();
+    let mut items: Vec<dxf::XDataItem> =
+        std::iter::once(a.shown).chain(a.scales.iter().copied()).map(dxf::XDataItem::Real).collect();
+    if !a.offsets.is_empty() {
+        items.push(dxf::XDataItem::Str(ANNO_OFFSETS.into()));
+        for (s, d) in &a.offsets {
+            items.extend([dxf::XDataItem::Real(*s), dxf::XDataItem::Real(d.x), dxf::XDataItem::Real(d.y)]);
+        }
+    }
     Some(dxf::XData { application_name: ANNO_APP.into(), items })
 }
 
 fn anno_from(x_data: &[dxf::XData]) -> Option<Box<oxidraft_model::Annotative>> {
     let x = x_data.iter().find(|x| x.application_name == ANNO_APP)?;
-    let values: Vec<f64> = x
-        .items
-        .iter()
-        .filter_map(|i| if let dxf::XDataItem::Real(v) = i { Some(*v) } else { None })
-        .filter(|v| v.is_finite() && *v > 0.0)
-        .collect();
+    let marker = x.items.iter().position(|i| matches!(i, dxf::XDataItem::Str(s) if s == ANNO_OFFSETS));
+    let (head, tail) = x.items.split_at(marker.unwrap_or(x.items.len()));
+    let reals = |items: &[dxf::XDataItem]| -> Vec<f64> {
+        items.iter().filter_map(|i| if let dxf::XDataItem::Real(v) = i { Some(*v) } else { None }).collect()
+    };
+    let values: Vec<f64> = reals(head).into_iter().filter(|v| v.is_finite() && *v > 0.0).collect();
     let (shown, scales) = values.split_first()?;
-    (!scales.is_empty()).then(|| Box::new(oxidraft_model::Annotative { scales: scales.to_vec(), shown: *shown }))
+    let offsets = reals(tail)
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .filter(|c| c.iter().all(|v| v.is_finite()))
+        .map(|[s, x, y]| (*s, Point::new(*x, *y)))
+        .collect();
+    (!scales.is_empty())
+        .then(|| Box::new(oxidraft_model::Annotative { scales: scales.to_vec(), shown: *shown, offsets }))
 }
 
 fn hyperlink_from(x_data: &[dxf::XData]) -> Option<Box<oxidraft_model::Hyperlink>> {
@@ -943,9 +964,18 @@ fn read_pdf_layers(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
 
 /// The settings worth keeping that DXF has no place for: the multileader
 /// and table styles, as key and value pairs.
-pub fn settings_of(doc: &Document) -> Vec<(&'static str, f64)> {
+pub fn settings_of(doc: &Document) -> Vec<(String, f64)> {
     let (l, t) = (doc.leader_style(), doc.table_style());
-    vec![
+    let flag = |on: bool| if on { 1.0 } else { 0.0 };
+    // Annotative text styles, by name.
+    let styles =
+        doc.text_styles().iter().filter(|s| s.annotative).map(|s| (format!("ANNOTATIVE_STYLE:{}", s.name), 1.0));
+    let mut settings: Vec<(String, f64)> = vec![
+        ("DIM_ANNOTATIVE".into(), flag(doc.dim_style().annotative)),
+        ("LEADER_ANNOTATIVE".into(), flag(l.annotative)),
+    ];
+    settings.extend(styles);
+    let named: Vec<(&'static str, f64)> = vec![
         ("LEADER_ARROWHEAD", l.arrowhead.code()),
         ("LEADER_ARROW_SIZE", l.arrow_size),
         ("LEADER_TEXT_HEIGHT", l.text_height),
@@ -965,7 +995,9 @@ pub fn settings_of(doc: &Document) -> Vec<(&'static str, f64)> {
         ("LIMCHECK", if doc.limits_check() { 1.0 } else { 0.0 }),
         ("CANNOSCALE", doc.anno_scale()),
         ("ANNOALLVISIBLE", if doc.anno_all_visible() { 1.0 } else { 0.0 }),
-    ]
+    ];
+    settings.extend(named.into_iter().map(|(k, v)| (k.to_string(), v)));
+    settings
 }
 
 fn read_layer_states(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
@@ -1031,7 +1063,7 @@ fn read_settings(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
         return;
     };
     let Some(pairs) = raw.xrecords.get(&handle) else { return };
-    let (mut l, mut t) = (doc.leader_style(), doc.table_style());
+    let (mut l, mut t, mut d) = (doc.leader_style(), doc.table_style(), doc.dim_style());
     let mut key = "";
     for (code, value) in pairs {
         match code {
@@ -1057,13 +1089,23 @@ fn read_settings(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
                     // The objects were saved sized for it already.
                     "CANNOSCALE" if v > 0.0 => doc.load_anno_scale(v),
                     "ANNOALLVISIBLE" => doc.set_anno_all_visible(v != 0.0),
-                    _ => {}
+                    "DIM_ANNOTATIVE" => d.annotative = v != 0.0,
+                    "LEADER_ANNOTATIVE" => l.annotative = v != 0.0,
+                    _ => {
+                        if let Some(name) = key.strip_prefix("ANNOTATIVE_STYLE:")
+                            && let Some(mut s) = doc.text_style(name).cloned()
+                        {
+                            s.annotative = v != 0.0;
+                            let _ = doc.set_text_style(s);
+                        }
+                    }
                 }
             }
             _ => {}
         }
     }
     doc.set_annotation_styles(l, t);
+    doc.set_dim_style(d);
 }
 
 /// MTEXT has no width factor or slant of its own: its style's.
@@ -1781,6 +1823,8 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         ext_beyond: h.dimension_extension_line_extension.max(0.0),
         gap: h.dimension_line_gap.abs(),
         decimals: h.dimension_unit_tolerance_decimal_places.clamp(0, 8) as usize,
+        // Oxidraft's settings say whether it's annotative.
+        annotative: false,
     });
     doc.set_point_style(drawing.header.point_display_mode, drawing.header.point_display_size);
     doc.set_attdisp(match drawing.header.attribute_visibility {

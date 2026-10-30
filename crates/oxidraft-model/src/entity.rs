@@ -1516,6 +1516,35 @@ pub struct Entity {
 pub struct Annotative {
     pub scales: Vec<f64>,
     pub shown: f64,
+    /// Where a scale's representation was moved to on its own (grip
+    /// editing), from where the others are; ANNORESET clears it.
+    pub offsets: Vec<(f64, Point)>,
+}
+
+impl Annotative {
+    pub fn at(scale: f64) -> Self {
+        Self { scales: vec![scale], shown: scale, offsets: Vec::new() }
+    }
+
+    /// How far scale `s`'s representation is moved on its own.
+    pub fn offset(&self, s: f64) -> Point {
+        self.offsets.iter().find(|(k, _)| (k - s).abs() < 1e-9 * s.max(1.0)).map_or(Point::ORIGIN, |(_, d)| *d)
+    }
+
+    /// Moves scale `s`'s representation on by `d`.
+    pub fn move_offset(&mut self, s: f64, d: Point) {
+        let now = self.offset(s) + d;
+        self.offsets.retain(|(k, _)| (k - s).abs() >= 1e-9 * s.max(1.0));
+        if now.length() > 1e-12 {
+            self.offsets.push((s, now));
+        }
+    }
+
+    /// The geometry `g`, sized and placed for scale `s` from the one it's
+    /// shown at.
+    pub fn for_scale(&self, g: &Geometry, s: f64) -> Geometry {
+        g.annotation_scaled(s / self.shown).translated(self.offset(s) - self.offset(self.shown))
+    }
 }
 
 /// A hyperlink on an object: where it goes, and what it's called.

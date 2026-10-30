@@ -867,6 +867,7 @@ fn main() {
             width_factor: 0.6,
             oblique: 20.0,
             big_font: String::new(),
+            annotative: false,
         };
         doc.set_text_style(narrow.clone()).unwrap();
         doc.set_current_text_style("Narrow").unwrap();
