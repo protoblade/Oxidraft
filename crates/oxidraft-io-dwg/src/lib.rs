@@ -1070,7 +1070,8 @@ mod tests {
         });
         assert!(doc.replace_array_items(grid, &[square], Point::new(90.0, 90.0), Some(4)));
         let arc = Geometry::Arc { center: Point::new(50.0, 50.0), radius: 10.0, start_angle: 0.0, end_angle: 180.0 };
-        doc.make_array(&[l], ArrayLayout::Path { path: Box::new(arc), items: 5, align: true }).unwrap();
+        doc.make_array(&[l], ArrayLayout::Path { path: Box::new(arc), items: 5, align: true, spacing: Some(3.0) })
+            .unwrap();
         // Two dimensions, whose blocks mustn't clash with the arrays'.
         for x in [0.0, 30.0] {
             doc.add(Geometry::Dimension {
@@ -1105,7 +1106,9 @@ mod tests {
                 "{how}: the square stands in for one item"
             );
             assert!(
-                arrays.iter().any(|a| matches!(a.layout, ArrayLayout::Path { items: 5, align: true, .. })),
+                arrays
+                    .iter()
+                    .any(|a| matches!(a.layout, ArrayLayout::Path { items: 5, align: true, spacing: Some(3.0), .. })),
                 "{how}"
             );
             assert_eq!(parts(back), [5, 6], "{how}");

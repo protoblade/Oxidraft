@@ -156,6 +156,9 @@ enum PathStage {
     Path,
     Count(EntityId),
     Associative(EntityId),
+    /// Divide or Measure, and Measure's distance.
+    Method(EntityId),
+    Spacing(EntityId),
     Turn(EntityId, usize),
 }
 
@@ -166,15 +169,27 @@ pub struct ArrayPath {
     stage: PathStage,
     ids: Vec<EntityId>,
     associative: Option<bool>,
+    /// Measure: items this far apart; Divide (`None`) spreads them over it.
+    spacing: Option<f64>,
+    /// The path's length.
+    length: f64,
 }
 
 impl Default for ArrayPath {
     fn default() -> Self {
-        Self { stage: PathStage::Select, ids: Vec::new(), associative: None }
+        Self { stage: PathStage::Select, ids: Vec::new(), associative: None, spacing: None, length: 0.0 }
     }
 }
 
 impl ArrayPath {
+    /// Measure's count when it fills the path.
+    fn fill_count(&self) -> usize {
+        match self.spacing {
+            Some(d) if d > EPSILON => ((self.length / d + 1e-9).floor() as usize + 1).max(1),
+            _ => 6,
+        }
+    }
+
     fn array(&self, ctx: &mut Ctx, path: EntityId, count: usize, turn: bool) -> Result<Step, String> {
         let curve = ctx.doc.entity(path).map(|e| e.geometry.clone()).ok_or("The path is gone.")?;
         let segs = curve.segments();
@@ -183,13 +198,17 @@ impl ArrayPath {
             return Err("The path has no length.".into());
         }
         if self.associative.unwrap_or(ctx.vars.array_assoc) {
-            let layout =
-                oxidraft_model::assoc_array::ArrayLayout::Path { path: Box::new(curve), items: count, align: turn };
+            let layout = oxidraft_model::assoc_array::ArrayLayout::Path {
+                path: Box::new(curve),
+                items: count,
+                align: turn,
+                spacing: self.spacing,
+            };
             ctx.doc.make_array(&self.ids, layout);
             return Ok(Step::Done);
         }
         let gaps = if curve.is_closed() { count } else { count - 1 };
-        let step = length / gaps.max(1) as f64;
+        let step = self.spacing.unwrap_or(length / gaps.max(1) as f64);
         let (_, start_angle) = at_length(&segs, 0.0).ok_or("The path has no length.")?;
         let objects: Vec<oxidraft_model::Entity> =
             self.ids.iter().filter_map(|id| ctx.doc.entity(*id).cloned()).collect();
@@ -219,9 +238,17 @@ impl Command for ArrayPath {
         match self.stage {
             PathStage::Select => Prompt::new("Select objects"),
             PathStage::Path => Prompt::new("Select path curve"),
-            PathStage::Count(_) => {
-                Prompt::new("Enter number of items along path").with_keywords(&["ASsociative"]).with_default("6")
-            }
+            PathStage::Count(_) if self.spacing.is_some() => Prompt::new("Enter number of items along path")
+                .with_keywords(&["Fill entire path", "ASsociative", "Method"])
+                .with_default(self.fill_count().to_string()),
+            PathStage::Count(_) => Prompt::new("Enter number of items along path")
+                .with_keywords(&["ASsociative", "Method"])
+                .with_default("6"),
+            PathStage::Method(_) => Prompt::new("Enter path method")
+                .with_keywords(&["Divide", "Measure"])
+                .with_default(if self.spacing.is_some() { "Measure" } else { "Divide" }),
+            PathStage::Spacing(_) => Prompt::new("Specify the distance between items along path")
+                .with_default(format!("{:.4}", self.length / 5.0)),
             PathStage::Associative(_) => Prompt::new("Create associative array")
                 .with_keywords(&["Yes", "No"])
                 .with_default(if self.associative == Some(false) { "No" } else { "Yes" }),
@@ -245,12 +272,37 @@ impl Command for ArrayPath {
                 if !fits || self.ids.contains(&id) {
                     return Err("Choose a line, arc, circle, polyline, ellipse or spline to follow.".into());
                 }
+                self.length =
+                    ctx.doc.entity(id).map_or(0.0, |e| e.geometry.segments().iter().map(|s| s.length()).sum());
                 self.stage = PathStage::Count(id);
             }
+            (PathStage::Count(path), Input::Keyword("Method")) => self.stage = PathStage::Method(path),
+            (PathStage::Count(path), Input::Keyword("Fill entire path")) => {
+                self.stage = PathStage::Turn(path, self.fill_count());
+            }
+            (PathStage::Method(path), Input::Keyword("Measure")) => self.stage = PathStage::Spacing(path),
+            // Enter keeps the method there is.
+            (PathStage::Method(path), Input::Enter) if self.spacing.is_some() => self.stage = PathStage::Spacing(path),
+            (PathStage::Method(path), Input::Keyword(_) | Input::Enter) => {
+                self.spacing = None;
+                self.stage = PathStage::Count(path);
+            }
+            (PathStage::Spacing(path), Input::Value(d)) if d > EPSILON => {
+                self.spacing = Some(d);
+                self.stage = PathStage::Count(path);
+            }
+            (PathStage::Spacing(path), Input::Enter) => {
+                self.spacing = Some(self.length / 5.0);
+                self.stage = PathStage::Count(path);
+            }
+            (PathStage::Spacing(_), _) => return Err("Requires a distance greater than 0.".into()),
             (PathStage::Count(path), Input::Value(v)) if v >= 1.0 && v.fract() == 0.0 => {
                 self.stage = PathStage::Turn(path, v as usize);
             }
-            (PathStage::Count(path), Input::Enter) => self.stage = PathStage::Turn(path, 6),
+            (PathStage::Count(path), Input::Enter) => {
+                let n = if self.spacing.is_some() { self.fill_count() } else { 6 };
+                self.stage = PathStage::Turn(path, n);
+            }
             (PathStage::Count(path), Input::Keyword("ASsociative")) => self.stage = PathStage::Associative(path),
             (PathStage::Associative(path), input @ (Input::Keyword(_) | Input::Enter)) => {
                 self.associative = Some(input != Input::Keyword("No"));
@@ -391,5 +443,47 @@ mod tests {
             .collect();
         centers.sort_by(f64::total_cmp);
         assert_eq!(centers, [0.0, 10.0, 20.0, 30.0]);
+    }
+
+    #[test]
+    fn arraypath_measures_and_its_count_grip() {
+        let (mut e, mut d) = (Engine::new(), Document::new());
+        run(&mut e, &mut d, &["c", "0,0", "1"]);
+        let path = d.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(35.0, 0.0) });
+        let circle = d.entities().find(|x| x.id != path).unwrap().id;
+        e.set_selection(vec![circle]);
+        run(&mut e, &mut d, &["arraypath"]);
+        let on_path = Point::new(15.0, 0.0);
+        e.click(on_path, on_path, false, &mut d, 0.5);
+        // Measure: 10 apart, as many as fit (0, 10, 20, 30).
+        run(&mut e, &mut d, &["m", "measure", "10", "", "n"]);
+        let array = d.entities().find(|x| x.array.is_some()).unwrap().id;
+        let centers = |d: &Document| {
+            let mut x: Vec<i64> = d
+                .expanded(d.entity(array).unwrap())
+                .iter()
+                .filter_map(
+                    |g| if let Geometry::Circle { center, .. } = g { Some(center.x.round() as i64) } else { None },
+                )
+                .collect();
+            x.sort();
+            x
+        };
+        assert_eq!(centers(&d), [0, 10, 20, 30], "{:?}", e.history());
+        // The count grip on the last item: dragged back to 10, two items.
+        e.set_selection(vec![array]);
+        let last = *e.grips(&d).last().unwrap();
+        assert!(last.approx_eq(Point::new(30.0, 0.0)), "{last:?}");
+        e.click(last, last, false, &mut d, 0.5);
+        let to = Point::new(11.0, 3.0);
+        e.click(to, to, false, &mut d, 0.5);
+        assert_eq!(centers(&d), [0, 10]);
+        // ARRAYEDIT back to Divide: two items over the whole path.
+        e.set_selection(Vec::new());
+        run(&mut e, &mut d, &["arrayedit"]);
+        let at = Point::new(0.0, 1.0);
+        e.click(at, at, false, &mut d, 0.5);
+        run(&mut e, &mut d, &["method", "divide", "x"]);
+        assert_eq!(centers(&d), [0, 35]);
     }
 }

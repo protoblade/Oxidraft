@@ -31,12 +31,13 @@ pub enum ArrayLayout {
         fill: f64,
         rotate: bool,
     },
-    /// Spaced evenly along a curve, the first at its start, turned with it
-    /// or not.
+    /// Along a curve from its start, turned with it or not: spaced evenly
+    /// over it (Divide), or `spacing` apart (Measure) as far as it goes.
     Path {
         path: Box<Geometry>,
         items: usize,
         align: bool,
+        spacing: Option<f64>,
     },
 }
 
@@ -68,6 +69,22 @@ pub enum ArrayGrip {
     Rows,
     RowSpacing,
     Fill,
+    /// A path array's last item: the count.
+    Items,
+}
+
+/// How far along `path` the point on it nearest `p` lies.
+pub fn length_at(path: &Geometry, p: Point) -> f64 {
+    let mut before = 0.0;
+    let mut best = (f64::INFINITY, 0.0);
+    for s in path.segments() {
+        let d = s.distance_to(p);
+        if d < best.0 {
+            best = (d, before + s.param_of(p).clamp(0.0, 1.0) * s.length());
+        }
+        before += s.length();
+    }
+    best.1
 }
 
 /// The spacing a count grip goes by: the rows' or columns' own, or for a
@@ -155,12 +172,12 @@ impl ArrayLayout {
                     })
                     .collect()
             }
-            ArrayLayout::Path { path, items, align } => {
+            ArrayLayout::Path { path, items, align, spacing } => {
                 let segs = path.segments();
                 let length: f64 = segs.iter().map(|s| s.length()).sum();
                 let Some((_, start)) = at_length(&segs, 0.0) else { return Vec::new() };
                 let gaps = if path.is_closed() { *items } else { items.saturating_sub(1) };
-                let step = length / gaps.max(1) as f64;
+                let step = spacing.unwrap_or(length / gaps.max(1) as f64);
                 (0..*items)
                     .filter_map(|i| at_length(&segs, step * i as f64))
                     .map(|(at, angle)| (at, if *align { angle - start } else { 0.0 }))
@@ -295,7 +312,8 @@ impl Document {
 
     /// Array `id`'s grips, the base grip first: for a rectangular one the
     /// second item of the first row and column (their spacing) and the last
-    /// (their count), for a polar one the last item (its fill angle).
+    /// (their count), for a polar one the last item (its fill angle), for a
+    /// path one the last item (the count).
     pub fn array_grips(&self, id: EntityId) -> Vec<(Point, ArrayGrip)> {
         let Some(e) = self.entity(id) else { return Vec::new() };
         let (Some(array), Geometry::Insert { block, placement, .. }) = (e.array.as_deref(), &e.geometry) else {
@@ -321,6 +339,11 @@ impl Document {
             ArrayLayout::Polar { items, .. } if *items > 1 => {
                 if let Some((last, _)) = array.layout.items(item.base).last() {
                     grips.push((world(*last), ArrayGrip::Fill));
+                }
+            }
+            ArrayLayout::Path { items, .. } if *items > 1 => {
+                if let Some((last, _)) = array.layout.items(item.base).last() {
+                    grips.push((world(*last), ArrayGrip::Items));
                 }
             }
             _ => {}
@@ -460,12 +483,13 @@ impl Document {
                 if *id == *changed || !same_curve(path, before) {
                     continue;
                 }
-                let Some(ArrayLayout::Path { items, align, .. }) = self.array(*id).map(|a| a.layout.clone()) else {
+                let Some(ArrayLayout::Path { items, align, spacing, .. }) = self.array(*id).map(|a| a.layout.clone())
+                else {
                     continue;
                 };
                 // Into the array block's own coordinates.
                 let local = now.map_points(&|p| placement.local(*base, p), 1.0 / placement.scale, placement.mirror);
-                self.set_array_layout(*id, ArrayLayout::Path { path: Box::new(local), items, align });
+                self.set_array_layout(*id, ArrayLayout::Path { path: Box::new(local), items, align, spacing });
             }
         }
     }
@@ -567,7 +591,7 @@ mod tests {
             polar.items(Point::ORIGIN).iter().map(|(p, _)| (p.x.round() as i64, p.y.round() as i64)).collect();
         assert_eq!(at, [(0, 0), (10, 10), (0, 20), (-10, 10)]);
         let line = Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(30.0, 0.0) };
-        let path = ArrayLayout::Path { path: Box::new(line), items: 4, align: false };
+        let path = ArrayLayout::Path { path: Box::new(line), items: 4, align: false, spacing: None };
         let xs: Vec<f64> = path.items(Point::ORIGIN).iter().map(|(p, _)| p.x).collect();
         assert_eq!(xs, [0.0, 10.0, 20.0, 30.0]);
     }
@@ -578,7 +602,7 @@ mod tests {
         d.begin("path");
         let path = d.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(30.0, 0.0) });
         let line = d.entity(path).unwrap().geometry.clone();
-        let layout = ArrayLayout::Path { path: Box::new(line), items: 4, align: false };
+        let layout = ArrayLayout::Path { path: Box::new(line), items: 4, align: false, spacing: None };
         let a = d.make_array(&[c], layout).unwrap();
         d.commit();
         assert_eq!(centers(&d, a), [(0, 0), (10, 0), (20, 0), (30, 0)]);

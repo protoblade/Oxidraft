@@ -34,7 +34,7 @@ pub fn xdata(e: &Entity) -> Option<XData> {
             items.push(XDataItem::Integer(i16::from(*rotate)));
             "POLAR"
         }
-        ArrayLayout::Path { path, items: n, align } => {
+        ArrayLayout::Path { path, items: n, align, spacing } => {
             let Geometry::Polyline { vertices, closed } =
                 Geometry::polyline_from_segs(&path.segments(), path.is_closed())
             else {
@@ -44,6 +44,8 @@ pub fn xdata(e: &Entity) -> Option<XData> {
             for v in vertices {
                 items.extend([XDataItem::Real(v.point.x), XDataItem::Real(v.point.y), XDataItem::Real(v.bulge)]);
             }
+            // Measure's spacing, as a distance.
+            items.extend(spacing.map(XDataItem::Distance));
             "PATH"
         }
     };
@@ -118,7 +120,8 @@ pub fn read(x_data: &[XData], doc: &Document, id: EntityId) -> Option<Box<AssocA
                 return None;
             }
             let vertices = vertices.iter().map(|[x, y, b]| Vertex::new(Point::new(*x, *y), *b)).collect();
-            ArrayLayout::Path { path: Box::new(Geometry::Polyline { vertices, closed }), items, align }
+            let spacing = head.iter().find_map(|i| if let XDataItem::Distance(d) = i { Some(*d) } else { None });
+            ArrayLayout::Path { path: Box::new(Geometry::Polyline { vertices, closed }), items, align, spacing }
         }
         _ => return None,
     };

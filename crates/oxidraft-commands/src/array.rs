@@ -288,6 +288,9 @@ enum EditStage {
     ReplaceObjects,
     ReplaceBase,
     ReplaceItems,
+    /// A path array's Divide or Measure, and Measure's distance.
+    Method,
+    PathSpacing,
     Rows,
     RowSpacing,
     Columns,
@@ -360,6 +363,24 @@ impl Command for ArrayEdit {
         match self.stage {
             EditStage::Select => Prompt::new("Select array"),
             EditStage::SourceItem => Prompt::new("Select item in array"),
+            EditStage::Method => {
+                let measure = matches!(layout, Some(ArrayLayout::Path { spacing: Some(_), .. }));
+                Prompt::new("Enter path method").with_keywords(&["Divide", "Measure"]).with_default(if measure {
+                    "Measure"
+                } else {
+                    "Divide"
+                })
+            }
+            EditStage::PathSpacing => {
+                let now = match layout {
+                    Some(ArrayLayout::Path { path, items, spacing, .. }) => spacing.unwrap_or_else(|| {
+                        let length: f64 = path.segments().iter().map(|s| s.length()).sum();
+                        length / items.saturating_sub(1).max(1) as f64
+                    }),
+                    _ => 1.0,
+                };
+                Prompt::new("Specify the distance between items along path").with_default(shown(now))
+            }
             EditStage::ReplaceObjects => Prompt::new("Select replacement objects"),
             EditStage::ReplaceBase => Prompt::new("Select base point of replacement objects").with_default("centroid"),
             EditStage::ReplaceItems => {
@@ -371,7 +392,7 @@ impl Command for ArrayEdit {
                     Some(ArrayLayout::Polar { .. }) => {
                         &["Source", "REPlace", "ITems", "Angle between", "Fill angle", "ROTate items", "RESet", "eXit"]
                     }
-                    _ => &["Source", "REPlace", "Items", "Align items", "RESet", "eXit"],
+                    _ => &["Source", "REPlace", "Method", "Items", "Align items", "RESet", "eXit"],
                 };
                 Prompt::new("Enter an option").with_keywords(keywords).with_default("eXit")
             }
@@ -472,9 +493,25 @@ impl Command for ArrayEdit {
                 self.stage = EditStage::Option;
             }
             (EditStage::ReplaceItems, Input::Enter) => self.stage = EditStage::Option,
+            (EditStage::Method, Input::Keyword("Measure")) => self.stage = EditStage::PathSpacing,
+            (EditStage::Method, Input::Keyword(_)) => {
+                return self.change(ctx, |l| {
+                    if let ArrayLayout::Path { spacing, .. } = l {
+                        *spacing = None;
+                    }
+                });
+            }
+            (EditStage::PathSpacing, Input::Value(d)) if d > 0.0 => {
+                return self.change(ctx, |l| {
+                    if let ArrayLayout::Path { spacing, .. } = l {
+                        *spacing = Some(d);
+                    }
+                });
+            }
             (EditStage::Option, Input::Keyword(k)) => {
                 self.stage = match k {
                     "Source" => EditStage::SourceItem,
+                    "Method" => EditStage::Method,
                     "REPlace" => EditStage::ReplaceObjects,
                     "Rows" => EditStage::Rows,
                     "COLumns" => EditStage::Columns,
@@ -577,6 +614,10 @@ pub struct ArrayGripEdit {
     origin: Point,
     /// A polar array's center, in the world.
     center: Point,
+    /// The reference's placement and its block's base: the world into the
+    /// layout's coordinates.
+    placement: oxidraft_model::Placement,
+    outer_base: Point,
     x: Point,
     y: Point,
     scale: f64,
@@ -613,6 +654,8 @@ impl ArrayGripEdit {
             layout: array.layout.clone(),
             origin: placement.position,
             center,
+            placement: *placement,
+            outer_base: outer,
             x,
             y: turn(Point::new(0.0, 1.0)),
             scale: placement.scale,
@@ -640,6 +683,16 @@ impl ArrayGripEdit {
                 *rows = count(along_y, row_spacing, *column_spacing)
             }
             (ArrayLayout::Rect { row_spacing, .. }, ArrayGrip::RowSpacing) => *row_spacing = along_y,
+            // As many items as fit up to where the grip is, the spacing kept.
+            (ArrayLayout::Path { path, items, spacing, .. }, ArrayGrip::Items) => {
+                let segs = path.segments();
+                let length: f64 = segs.iter().map(|s| s.length()).sum();
+                let gaps = if path.is_closed() { *items } else { items.saturating_sub(1) };
+                let step = spacing.unwrap_or(length / gaps.max(1) as f64);
+                let along = oxidraft_model::assoc_array::length_at(path, self.placement.local(self.outer_base, p));
+                let fit = if step > 1e-12 { (along / step).round() as usize + 1 } else { 1 };
+                *items = fit.clamp(1, MAX_ITEMS as usize);
+            }
             // The last item lands where the grip does.
             (ArrayLayout::Polar { fill, .. }, ArrayGrip::Fill) => {
                 let a = (self.center.angle_to(p) - self.center.angle_to(self.origin)).rem_euclid(360.0);
@@ -661,6 +714,7 @@ impl ArrayGripEdit {
             (ArrayLayout::Rect { rows, .. }, ArrayGrip::Rows) => *rows = n,
             (ArrayLayout::Rect { row_spacing, .. }, ArrayGrip::RowSpacing) => *row_spacing = v,
             (ArrayLayout::Polar { fill, .. }, ArrayGrip::Fill) if v != 0.0 && v.abs() <= 360.0 => *fill = v,
+            (ArrayLayout::Path { items, .. }, ArrayGrip::Items) => *items = n,
             _ => return None,
         }
         (layout.count() <= MAX_ITEMS as usize).then_some(layout)
@@ -676,6 +730,7 @@ impl Command for ArrayGripEdit {
             ArrayGrip::Rows => "** ROW COUNT ** Specify number of rows",
             ArrayGrip::RowSpacing => "** ROW SPACING ** Specify the distance between rows",
             ArrayGrip::Fill => "** FILL ANGLE ** Specify the angle to fill",
+            ArrayGrip::Items => "** ITEM COUNT ** Specify number of items along path",
             ArrayGrip::Base => "** MOVE ** Specify base point",
         };
         Prompt::new(what).with_keywords(&["eXit"])
