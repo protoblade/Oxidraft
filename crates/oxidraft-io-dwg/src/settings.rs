@@ -64,10 +64,15 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document) {
         add_record(cad, oxidraft_io_dxf::PDF_LAYERS_RECORD, entries);
     }
     // Files embedded (INSERTOBJ) that objects link to: each one's name (1),
-    // then its contents in chunks (310).
+    // then its contents in chunks (310). With NATIVESAVE, an OLE package
+    // keeps what only INSERTOBJ's objects link to.
+    let packaged: std::collections::HashSet<_> = match crate::native_objects() {
+        true => crate::ole::packaged(doc).into_iter().flat_map(|p| p.labels.into_iter().chain([p.frame])).collect(),
+        false => Default::default(),
+    };
     let linked = |name: &str| {
         let url = format!("{}{name}", oxidraft_io_dxf::EMBEDDED_PREFIX);
-        doc.all_entities().any(|e| e.hyperlink.as_ref().is_some_and(|l| l.url == url))
+        doc.all_entities().any(|e| !packaged.contains(&e.id) && e.hyperlink.as_ref().is_some_and(|l| l.url == url))
             || doc.image_defs().any(|d| d.path == url)
     };
     let embedded: Vec<_> = doc.embedded_files().filter(|(n, _)| linked(n)).collect();

@@ -54,8 +54,9 @@ pub struct Settings {
     pub toolbars: Vec<String>,
     /// Where toolbars are that aren't docked at the top, by name.
     pub toolbar_places: Vec<(String, crate::menubar::ToolbarPlace)>,
-    /// Annotative scales and dimension breaks saved in AutoCAD's own form
-    /// too (NATIVESAVE), untested in AutoCAD itself: off unless chosen.
+    /// Annotative scales, dimension breaks and INSERTOBJ's files (as OLE
+    /// packages) saved in AutoCAD's own form too (NATIVESAVE), untested in
+    /// AutoCAD itself: off unless chosen.
     pub native_save: bool,
     /// Menus and toolbars customization files brought (CUILOAD).
     pub menus: Vec<crate::menubar::CustomMenu>,
@@ -209,7 +210,7 @@ impl OxidraftApp {
                 ui.label(egui::RichText::new("Open and Save").strong());
                 ui.checkbox(
                     &mut d.settings.native_save,
-                    "Save annotative scales and dimension breaks in AutoCAD's own form too",
+                    "Save annotative scales, dimension breaks and inserted objects (OLE) in AutoCAD's own form too",
                 )
                 .on_hover_text(
                     "Written as AutoCAD keeps them, besides Oxidraft's own data. Not yet tried in AutoCAD itself, so off unless you choose it.",

@@ -304,6 +304,9 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
     }
     groups::finish(&mut cad, doc, &handles);
     settings::finish(&mut cad, doc);
+    if native_objects() {
+        ole::write(&mut cad, doc, &handles);
+    }
     // MTEXT columns, as acadrust keeps them.
     for e in doc.all_entities() {
         let oxidraft_model::Geometry::Text { look, .. } = &e.geometry else { continue };
