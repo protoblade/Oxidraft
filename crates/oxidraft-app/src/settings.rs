@@ -41,6 +41,20 @@ pub struct Settings {
     pub shortcuts: Vec<(String, String)>,
     /// Commands added to the Quick Access Toolbar (CUI).
     pub quick_access: Vec<String>,
+    /// Ribbon panels of your own (CUI), on a tab of the ribbon's or one of
+    /// their own.
+    pub ribbon_panels: Vec<RibbonPanel>,
+    /// Commands added to the shortcut menu (CUI).
+    pub shortcut_menu: Vec<String>,
+}
+
+/// A ribbon panel made in CUI: the tab it's on, its title, its commands.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RibbonPanel {
+    pub tab: String,
+    pub name: String,
+    pub commands: Vec<String>,
 }
 
 /// Where a palette sits: docked at the left or right of the drawing
@@ -206,6 +220,12 @@ mod tests {
             workspace: "Layout".into(),
             shortcuts: vec![("Ctrl+Shift+L".into(), "LAYER".into())],
             quick_access: vec!["MATCHPROP".into()],
+            ribbon_panels: vec![RibbonPanel {
+                tab: "Tools".into(),
+                name: "Mine".into(),
+                commands: vec!["LINE".into()],
+            }],
+            shortcut_menu: vec!["ZOOM".into()],
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);

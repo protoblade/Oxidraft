@@ -91,6 +91,11 @@ pub(crate) struct CuiDialog {
     keys: String,
     command: String,
     toolbar_command: String,
+    panels: Vec<crate::settings::RibbonPanel>,
+    /// A panel being added: its tab, its title, its commands.
+    panel: (String, String, String),
+    shortcut_menu: Vec<String>,
+    menu_command: String,
 }
 
 impl OxidraftApp {
@@ -268,12 +273,17 @@ impl OxidraftApp {
             keys: String::new(),
             command: String::new(),
             toolbar_command: String::new(),
+            panels: self.settings.ribbon_panels.clone(),
+            panel: (String::new(), String::new(), String::new()),
+            shortcut_menu: self.settings.shortcut_menu.clone(),
+            menu_command: String::new(),
         });
     }
 
     /// CUI: the Customize User Interface dialog — keyboard shortcuts of
-    /// your own beside the built-in ones, and the Quick Access Toolbar's
-    /// commands.
+    /// your own beside the built-in ones, the Quick Access Toolbar's
+    /// commands, ribbon panels of your own (on AutoCAD's tabs or tabs of
+    /// their own) and commands added to the shortcut menu.
     pub(crate) fn cui_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut d) = self.cui.take() else { return };
         let (mut open, mut ok, mut cancel) = (true, false, false);
@@ -356,6 +366,79 @@ impl OxidraftApp {
                         d.toolbar_command.clear();
                     }
                 });
+                ui.add_space(8.0);
+                ui.label(RichText::new("Ribbon Panels").strong());
+                let mut remove = None;
+                for (i, p) in d.panels.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} › {}: {}", p.tab, p.name, p.commands.join(", ")));
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                }
+                if let Some(i) = remove {
+                    d.panels.remove(i);
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Tab:");
+                    let r = ui.add(egui::TextEdit::singleline(&mut d.panel.0).desired_width(80.0).hint_text("Home"));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Panel tab"));
+                    fields.push(r.id);
+                    ui.label("Panel:");
+                    let r = ui.add(egui::TextEdit::singleline(&mut d.panel.1).desired_width(80.0));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Panel name"));
+                    fields.push(r.id);
+                    ui.label("Commands:");
+                    let r = ui
+                        .add(egui::TextEdit::singleline(&mut d.panel.2).desired_width(140.0).hint_text("LINE, CIRCLE"));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Panel commands"));
+                    fields.push(r.id);
+                    let commands: Vec<String> = d
+                        .panel
+                        .2
+                        .split([',', ' '])
+                        .map(|c| c.trim().to_ascii_uppercase())
+                        .filter(|c| !c.is_empty())
+                        .collect();
+                    let valid = !d.panel.0.trim().is_empty() && !d.panel.1.trim().is_empty() && !commands.is_empty();
+                    if ui.add_enabled(valid, egui::Button::new("Add Panel")).clicked() {
+                        d.panels.push(crate::settings::RibbonPanel {
+                            tab: d.panel.0.trim().to_string(),
+                            name: d.panel.1.trim().to_string(),
+                            commands,
+                        });
+                        d.panel.1.clear();
+                        d.panel.2.clear();
+                    }
+                });
+                ui.colored_label(theme::text_dim(), "A tab that isn't the ribbon's is made for its panels.");
+                ui.add_space(8.0);
+                ui.label(RichText::new("Shortcut Menu").strong());
+                let mut remove = None;
+                ui.horizontal_wrapped(|ui| {
+                    for (i, c) in d.shortcut_menu.iter().enumerate() {
+                        if ui.button(format!("{c}  x")).on_hover_text("Remove").clicked() {
+                            remove = Some(i);
+                        }
+                    }
+                });
+                if let Some(i) = remove {
+                    d.shortcut_menu.remove(i);
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Command:");
+                    let r = ui.add(egui::TextEdit::singleline(&mut d.menu_command).desired_width(140.0));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Menu command"));
+                    fields.push(r.id);
+                    let command = d.menu_command.trim().to_ascii_uppercase();
+                    if ui.add_enabled(!command.is_empty(), egui::Button::new("Add to Menu")).clicked() {
+                        if !d.shortcut_menu.contains(&command) {
+                            d.shortcut_menu.push(command);
+                        }
+                        d.menu_command.clear();
+                    }
+                });
                 let row = vec2(ui.available_width().max(440.0), 24.0);
                 ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
                     cancel = ui.button("Cancel").clicked();
@@ -364,7 +447,13 @@ impl OxidraftApp {
             });
         self.text_fields.extend(fields);
         if ok {
-            let settings = Settings { shortcuts: d.shortcuts, quick_access: d.quick_access, ..self.settings.clone() };
+            let settings = Settings {
+                shortcuts: d.shortcuts,
+                quick_access: d.quick_access,
+                ribbon_panels: d.panels,
+                shortcut_menu: d.shortcut_menu,
+                ..self.settings.clone()
+            };
             self.keep_settings(settings);
             return;
         }

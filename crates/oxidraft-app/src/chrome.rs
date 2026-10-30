@@ -18,6 +18,8 @@ use crate::{
 const RIBBON_TABS: &[&str] = &["Home", "Insert", "Annotate", "View", "Manage", "Output", "Collaborate"];
 /// On a layout's tab the ribbon has a Layout tab too, after the others.
 const LAYOUT_TAB: usize = RIBBON_TABS.len();
+/// Tabs of your own (CUI) are numbered from here.
+const CUSTOM_TAB: usize = 100;
 
 const LAYOUT_TOOLS: &[Tool] = &[
     tool(Icon::NewLayout, "New", Some("LAYOUT N"), "Creates a layout (LAYOUT New)"),
@@ -329,6 +331,15 @@ impl OxidraftApp {
                         self.ribbon_tab = i;
                     }
                 }
+                // Tabs of your own, after AutoCAD's.
+                for (i, name) in self.custom_tabs().iter().enumerate() {
+                    if ribbon_tab(ui, name, self.ribbon_tab == CUSTOM_TAB + i).clicked() {
+                        self.ribbon_tab = CUSTOM_TAB + i;
+                    }
+                }
+                if self.ribbon_tab >= CUSTOM_TAB && self.ribbon_tab - CUSTOM_TAB >= self.custom_tabs().len() {
+                    self.ribbon_tab = 0;
+                }
             });
         });
 
@@ -342,6 +353,11 @@ impl OxidraftApp {
                     self.block_editor_panel(ui);
                 } else if self.doc.refedit().is_some() {
                     self.edit_reference_panel(ui);
+                }
+                if self.ribbon_tab >= CUSTOM_TAB {
+                    let tab = self.custom_tabs().get(self.ribbon_tab - CUSTOM_TAB).cloned().unwrap_or_default();
+                    self.custom_panels(ui, &tab);
+                    return;
                 }
                 if self.ribbon_tab == 0 {
                     self.home_tab(ui);
@@ -369,8 +385,45 @@ impl OxidraftApp {
                         );
                     });
                 }
+                // Panels of your own on this tab, after its own.
+                let tab = if self.ribbon_tab == LAYOUT_TAB { "Layout" } else { RIBBON_TABS[self.ribbon_tab] };
+                self.custom_panels(ui, tab);
             });
         });
+    }
+
+    /// The tabs CUI's panels make: those not AutoCAD's, in order.
+    fn custom_tabs(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for p in &self.settings.ribbon_panels {
+            let builtin = RIBBON_TABS.iter().chain(&["Layout"]).any(|t| t.eq_ignore_ascii_case(&p.tab));
+            if !builtin && !p.tab.trim().is_empty() && !out.iter().any(|t| t.eq_ignore_ascii_case(&p.tab)) {
+                out.push(p.tab.clone());
+            }
+        }
+        out
+    }
+
+    /// CUI's panels on tab `tab`: a button a command.
+    fn custom_panels(&mut self, ui: &mut Ui, tab: &str) {
+        let panels: Vec<crate::settings::RibbonPanel> =
+            self.settings.ribbon_panels.iter().filter(|p| p.tab.eq_ignore_ascii_case(tab)).cloned().collect();
+        for p in panels {
+            ribbon_panel(ui, &p.name, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.set_max_width(220.0);
+                    for c in &p.commands {
+                        let tip = oxidraft_commands::COMMANDS
+                            .iter()
+                            .find(|i| i.name.eq_ignore_ascii_case(c))
+                            .map_or_else(|| c.clone(), |i| format!("{} ({})", i.description, i.name));
+                        if ui.button(c.to_string()).on_hover_text(tip).clicked() {
+                            self.run(c);
+                        }
+                    }
+                });
+            });
+        }
     }
 
     fn insert_tab(&mut self, ui: &mut Ui) {

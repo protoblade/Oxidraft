@@ -32,6 +32,16 @@ impl OxidraftApp {
         } else {
             self.default_menu(ui);
         }
+        // Commands of your own (CUI), when no command runs.
+        if !self.engine.is_active() && !self.settings.shortcut_menu.is_empty() {
+            ui.separator();
+            for c in self.settings.shortcut_menu.clone() {
+                if ui.button(&c).clicked() {
+                    self.run(&c);
+                    ui.close();
+                }
+            }
+        }
     }
 
     /// Repeat <last command> and Recent Input, shared by the idle menus.

@@ -2948,12 +2948,29 @@ fn workspaces_and_cui() {
     field(&mut h, "Toolbar command", "matchprop");
     h.get_by_label("Add to Toolbar").click();
     h.run_steps(1);
+    // A ribbon panel on a tab of its own, and a command on the shortcut menu.
+    field(&mut h, "Panel tab", "Tools");
+    field(&mut h, "Panel name", "Mine");
+    field(&mut h, "Panel commands", "circle, line");
+    h.get_by_label("Add Panel").click();
+    h.run_steps(1);
+    field(&mut h, "Menu command", "zoom");
+    h.get_by_label("Add to Menu").click();
+    h.run_steps(1);
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert!(h.query_by_label("matchprop").is_some(), "on the Quick Access Toolbar");
     h.key_press_modifiers(Modifiers::CTRL | Modifiers::SHIFT, Key::J);
     h.run_steps(2);
     assert!(h.state_mut().engine_mut().is_active(), "the shortcut started CIRCLE");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    // The Tools tab, its panel's LINE.
+    h.get_by_label("Tools").click();
+    h.run_steps(2);
+    h.get_by_label("LINE").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("LINE"));
 }
 
 #[test]
