@@ -2,6 +2,7 @@
 //! file; the drawing passes through DXF in memory on the way, so whatever
 //! Oxidraft reads and writes in DXF works the same in DWG.
 
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 
@@ -212,10 +213,48 @@ pub fn load_dxf(path: impl AsRef<Path>) -> Result<Imported, Error> {
 
 /// The drawing as acadrust holds it, layouts and all, ready to write as
 /// `version` (fields are AutoCAD 2004's: older versions get their values).
+/// The handles in DXF text, each with the kind of object it's on.
+fn written_handles(dxf: &[u8]) -> HashMap<u64, String> {
+    let text = String::from_utf8_lossy(dxf);
+    let mut lines = text.lines();
+    let (mut kind, mut out) = (String::new(), HashMap::new());
+    while let (Some(code), Some(value)) = (lines.next(), lines.next()) {
+        match code.trim() {
+            "0" => kind = value.trim().to_string(),
+            "5" => {
+                if let Ok(h) = u64::from_str_radix(value.trim(), 16) {
+                    out.insert(h, kind.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
     let mut dxf = Vec::new();
     let handles = oxidraft_io_dxf::write_with_handles(doc, &mut dxf).map_err(|e| e.to_string())?;
+    let written = written_handles(&dxf);
     let mut cad = DxfReader::from_reader(Cursor::new(dxf)).and_then(|r| r.read()).map_err(|e| e.to_string())?;
+    // Handles given out from here on are above every one written (a
+    // SEQEND's too, which acadrust doesn't count); and the applications
+    // acadrust starts with, when the file has none of them, don't keep a
+    // handle the file gives something else.
+    let highest = written.keys().copied().max().unwrap_or(0);
+    cad.header.handle_seed = cad.header.handle_seed.max(highest + 1);
+    let clashing: Vec<String> = cad
+        .app_ids
+        .iter()
+        .filter(|a| written.get(&a.handle.value()).is_some_and(|kind| kind != "APPID"))
+        .map(|a| a.name.clone())
+        .collect();
+    for name in clashing {
+        let h = cad.allocate_handle();
+        if let Some(a) = cad.app_ids.get_mut(&name) {
+            a.handle = h;
+        }
+    }
     layouts::finish(&mut cad, doc);
     groups::finish(&mut cad, doc, &handles);
     settings::finish(&mut cad, doc);
@@ -1312,11 +1351,43 @@ mod tests {
                 count(|e| matches!(e, acadrust::EntityType::Leader(_) | acadrust::EntityType::MText(_))),
             )
         };
-        let cad = DxfReader::from_reader(Cursor::new(dxf)).and_then(|r| r.read()).unwrap();
+        // The gathered blocks: one anonymous block of the three references.
+        let gathered = |cad: &CadDocument| {
+            let content = cad.entities().find_map(|e| match e {
+                acadrust::EntityType::MultiLeader(m) => m.block_content_handle,
+                _ => None,
+            });
+            let record = cad.block_records.iter().find(|r| Some(r.handle) == content).unwrap();
+            let refs = record
+                .entity_handles
+                .iter()
+                .filter(|h| matches!(cad.get_entity(**h), Some(acadrust::EntityType::Insert(_))))
+                .count();
+            (record.name.starts_with("*U"), refs)
+        };
+        let cad = DxfReader::from_reader(Cursor::new(dxf.clone())).and_then(|r| r.read()).unwrap();
         assert_eq!(kinds(&cad), (2, 0), "DXF");
+        assert_eq!(gathered(&cad), (true, 3), "DXF");
         let dwg = write(&doc, Version::R2018).unwrap();
-        let cad = DwgReader::from_stream(Cursor::new(dwg)).read().unwrap();
+        let cad = DwgReader::from_stream(Cursor::new(dwg.clone())).read().unwrap();
         assert_eq!(kinds(&cad), (2, 0), "DWG");
+        assert_eq!(gathered(&cad), (true, 3), "DWG");
+        // Read back, the anonymous block is gone.
+        let back = read(&dwg).unwrap().imported.document;
+        // Every handle once, the references' SEQENDs' too.
+        let text = String::from_utf8_lossy(&dxf).into_owned();
+        let lines: Vec<&str> = text.lines().collect();
+        let mut seen = std::collections::HashSet::new();
+        for pair in lines.chunks(2) {
+            if let [code, value] = pair
+                && code.trim() == "5"
+            {
+                assert!(seen.insert(value.trim().to_string()), "handle {value} twice");
+            }
+        }
+        let names = |d: &Document| d.blocks().map(|b| b.name.clone()).collect::<Vec<_>>();
+        assert!(names(&back).iter().all(|n| !n.starts_with("*U")), "{:?}", names(&back));
+        assert!(names(&read_dxf(&dxf).unwrap().document).iter().all(|n| !n.starts_with("*U")));
     }
 
     #[test]

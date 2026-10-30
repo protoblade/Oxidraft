@@ -4,7 +4,9 @@
 //! blocks as INSERTs. On the way out they become one MULTILEADER that keeps
 //! the XDATA; on the way in a MULTILEADER, AutoCAD's too, becomes that
 //! LEADER again (XDATA made for it when it has none), which the DXF reader
-//! makes one multileader of.
+//! makes one multileader of. Blocks gathered by MLEADERCOLLECT go out as
+//! one anonymous block of their references, AutoCAD's MULTILEADER having
+//! room for one block; it's dropped on the way in, the XDATA having them.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -66,6 +68,36 @@ fn standard_style(cad: &mut CadDocument, text_style: Option<Handle>) -> Handle {
     handle
 }
 
+/// A new anonymous block (`*U`) in `cad`, empty.
+fn anonymous_block(cad: &mut CadDocument) -> Handle {
+    let mut index = 1;
+    while cad.block_records.get(&format!("*U{index}")).is_some() {
+        index += 1;
+    }
+    let mut record = acadrust::tables::BlockRecord::new(format!("*U{index}"));
+    record.handle = cad.allocate_handle();
+    record.block_entity_handle = cad.allocate_handle();
+    record.block_end_handle = cad.allocate_handle();
+    record.flags.anonymous = true;
+    let handle = record.handle;
+    let _ = cad.block_records.add(record);
+    handle
+}
+
+/// Moves the object `h` into the block `record`.
+fn move_into(cad: &mut CadDocument, h: Handle, record: Handle) {
+    for r in cad.block_records.iter_mut() {
+        if r.handle == record {
+            r.entity_handles.push(h);
+        } else {
+            r.entity_handles.retain(|x| *x != h);
+        }
+    }
+    if let Some(e) = cad.get_entity_mut(h) {
+        e.common_mut().owner_handle = record;
+    }
+}
+
 /// Makes each of `doc`'s multileaders one MULTILEADER in `cad`, in its
 /// LEADER's place; `handles` are what each object was written as.
 pub(crate) fn finish(cad: &mut CadDocument, doc: &Document, handles: &HashMap<EntityId, Vec<u64>>) {
@@ -105,7 +137,24 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document, handles: &HashMap<En
             root.create_line(vec![v3(*tip), v3(*last)]);
         }
         let inserts = doc.leader_inserts(&e.geometry);
+        let mut kept = Vec::new();
         match (blocks, inserts.first()) {
+            // Gathered blocks: their references, as placed, in a block of
+            // their own at the drawing's origin.
+            (Some(b), Some(_)) if b.items.len() > 1 => {
+                let refs: Vec<Handle> = parts
+                    .iter()
+                    .map(|p| Handle::new(*p))
+                    .filter(|h| matches!(cad.get_entity(*h), Some(EntityType::Insert(_))))
+                    .collect();
+                let record = anonymous_block(cad);
+                for h in &refs {
+                    move_into(cad, *h, record);
+                }
+                kept = refs;
+                m.set_block_content(record, Vector3::new(0.0, 0.0, 0.0));
+                m.context.block_content_scale = Vector3::new(1.0, 1.0, 1.0);
+            }
             (Some(b), Some(Geometry::Insert { block, placement, .. })) => {
                 let Some(record) = cad.block_records.get(block).map(|r| r.handle) else { continue };
                 m.set_block_content(record, v3(placement.position));
@@ -142,6 +191,9 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document, handles: &HashMap<En
         }
         for &part in parts {
             let part = Handle::new(part);
+            if kept.contains(&part) {
+                continue;
+            }
             cad.remove_entity(part);
             for r in cad.block_records.iter_mut() {
                 r.entity_handles.retain(|h| *h != part);
@@ -173,6 +225,19 @@ pub(crate) fn unpack(cad: &mut CadDocument) {
             let root = &m.context.leader_roots[0];
             let start = point(&root.connection_point) - point(&root.direction) * root.landing_distance;
             vertices.push(start);
+        }
+        // Gathered blocks' anonymous block: the XDATA has them.
+        let content = m.block_content_handle.and_then(|b| cad.block_records.iter().find(|r| r.handle == b));
+        let content = content.map(|r| r.name.clone());
+        if m.common.extended_data.get_record(APP).is_some()
+            && let Some(name) = content
+            && name.starts_with("*U")
+        {
+            let inside = cad.block_records.get(&name).map(|r| r.entity_handles.clone()).unwrap_or_default();
+            for h in inside {
+                cad.remove_entity(h);
+            }
+            cad.block_records.remove(&name);
         }
         let mut leader = acadrust::entities::Leader::new();
         leader.common = m.common.clone();
