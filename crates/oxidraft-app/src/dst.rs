@@ -76,6 +76,86 @@ pub fn read_dst(path: &Path) -> Result<SheetSet, String> {
     Ok(set)
 }
 
+/// New IDs throughout an element copied from another.
+fn renew_ids(el: &mut Element) {
+    if let Some(a) = el.attrs.iter_mut().find(|(k, _)| k == "ID") {
+        a.1 = dst::new_id();
+    }
+    for c in &mut el.children {
+        renew_ids(c);
+    }
+}
+
+/// Whether `el` names sheet `id` anywhere in it.
+fn names(el: &Element, id: &str) -> bool {
+    el.text.trim().eq_ignore_ascii_case(id)
+        || el.attrs.iter().any(|(k, v)| k != "ID" && v.eq_ignore_ascii_case(id))
+        || el.children.iter().any(|c| names(c, id))
+}
+
+/// `el` with sheet `from` named as `to` instead.
+fn rename(el: &mut Element, from: &str, to: &str) {
+    if el.text.trim().eq_ignore_ascii_case(from) {
+        el.text = to.to_string();
+    }
+    for (k, v) in &mut el.attrs {
+        if k != "ID" && v.eq_ignore_ascii_case(from) {
+            *v = to.to_string();
+        }
+    }
+    for c in &mut el.children {
+        rename(c, from, to);
+    }
+}
+
+/// The set's sheet selections into the .dst: AutoCAD's as they are, one
+/// made or changed in Oxidraft in the form an AutoCAD selection in the set
+/// takes (its class, and the element in it that names a sheet), when the
+/// set has one to follow; one removed in Oxidraft gone.
+fn write_selections(db: &mut SheetSetDatabase, set: &SheetSet, path: &Path) {
+    let ids: Vec<(String, (String, String))> = db
+        .sheets()
+        .iter()
+        .filter_map(|s| {
+            let layout = db.layout_reference(s.id(), "Layout")?;
+            Some((s.id().to_string(), (relative(path, Path::new(&layout.file_name)), layout.name.to_lowercase())))
+        })
+        .collect();
+    let id_of = |(drawing, layout): &(String, String)| {
+        ids.iter().find(|(_, k)| k.0 == *drawing && k.1 == layout.to_lowercase()).map(|(id, _)| id.clone())
+    };
+    let current = selections(db, path);
+    let Some(sets) = db.sheet_set_mut().named_mut("SheetSelSets") else { return };
+    // A selection to follow, and its child that names a sheet.
+    let template = sets.children.iter().find_map(|s| {
+        s.prop("Name")?;
+        let reference = s.children.iter().find(|c| ids.iter().any(|(id, _)| names(c, id)))?;
+        let id = ids.iter().find(|(id, _)| names(reference, id))?.0.clone();
+        Some((s.clone(), reference.clone(), id))
+    });
+    sets.children.retain(|c| c.prop("Name").is_none_or(|n| set.selections.iter().any(|s| s.name == n)));
+    let Some((selection, reference, named)) = template else { return };
+    for s in &set.selections {
+        if current.iter().any(|c| c.name == s.name && c.sheets == s.sheets) {
+            continue;
+        }
+        let mut el = selection.clone();
+        el.children.retain(|c| !ids.iter().any(|(id, _)| names(c, id)));
+        renew_ids(&mut el);
+        el.set_prop("Name", &s.name);
+        for sheet in s.sheets.iter().filter_map(id_of) {
+            let mut r = reference.clone();
+            renew_ids(&mut r);
+            rename(&mut r, &named, &sheet);
+            el.children.push(r);
+        }
+        match sets.children.iter_mut().find(|c| c.prop("Name") == Some(s.name.as_str())) {
+            Some(old) => *old = el,
+            None => sets.children.push(el),
+        }
+    }
+}
+
 /// AutoCAD's sheet selections: each named one in the set's SheetSelSets,
 /// with the sheets it names (by their IDs, wherever in it they're named).
 fn selections(db: &SheetSetDatabase, path: &Path) -> Vec<crate::sheet_set::SheetSelection> {
@@ -215,6 +295,7 @@ pub fn write_dst(set: &SheetSet, path: &Path) -> Result<SheetSetDatabase, String
             }
         }
     }
+    write_selections(&mut db, set, path);
     db.write(&path.to_string_lossy()).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
     Ok(db)
 }
@@ -284,6 +365,16 @@ mod tests {
             db.sheets().iter().all(|s| s.named("Layout").and_then(|r| r.prop("Relative_FileName")).is_some()),
             "drawings named relative to the set"
         );
+        // One saved in Oxidraft goes in as AutoCAD's does; AutoCAD's stays.
+        let mut set = again;
+        set.save_selection("Both", &[0, 1]);
+        let db2 = write_dst(&set, &path).unwrap();
+        let back = read_dst(&path).unwrap();
+        let names: Vec<&str> = back.selections.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Issued", "Both"]);
+        assert_eq!(back.selections[1].sheets.len(), 2);
+        let sets = db2.sheet_set().named("SheetSelSets").unwrap();
+        assert!(sets.children.iter().all(|c| c.name == "AcSmSheetSelSet"), "in AutoCAD's form");
         std::fs::remove_dir_all(&dir).ok();
     }
 }
