@@ -57,7 +57,28 @@ pub fn papers() -> Vec<Paper> {
     PAPERS.iter().copied().chain(custom).collect()
 }
 
-/// What a plot is written as: AutoCAD's plotter configurations for files.
+/// The computer's printers, each name kept for the rest of the run so a
+/// [`Plotter::Printer`] stays a number.
+static PRINTERS: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+/// The computer's printers, as its print queue names them.
+pub fn printers() -> Vec<&'static str> {
+    PRINTERS.lock().map(|p| p.clone()).unwrap_or_default()
+}
+
+/// Adds the printers the system lists (ones already known keep their number).
+pub fn set_printers(names: &[String]) {
+    if let Ok(mut p) = PRINTERS.lock() {
+        for n in names {
+            if !p.iter().any(|k| k == n) {
+                p.push(Box::leak(n.clone().into_boxed_str()));
+            }
+        }
+    }
+}
+
+/// Where a plot goes: AutoCAD's plotter configurations for files, or one
+/// of the computer's printers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Plotter {
     #[default]
@@ -65,6 +86,8 @@ pub enum Plotter {
     Dwfx,
     Png,
     Jpg,
+    /// A printer, by its number in [`printers`].
+    Printer(u16),
 }
 
 impl Plotter {
@@ -77,12 +100,13 @@ impl Plotter {
             Plotter::Dwfx => "DWFx ePlot (XPS Compatible).pc3",
             Plotter::Png => "PublishToWeb PNG.pc3",
             Plotter::Jpg => "PublishToWeb JPG.pc3",
+            Plotter::Printer(i) => printers().get(i as usize).copied().unwrap_or("Printer"),
         }
     }
 
     pub fn extension(self) -> &'static str {
         match self {
-            Plotter::Pdf => "pdf",
+            Plotter::Pdf | Plotter::Printer(_) => "pdf",
             Plotter::Dwfx => "dwfx",
             Plotter::Png => "png",
             Plotter::Jpg => "jpg",
@@ -95,7 +119,13 @@ impl Plotter {
             Plotter::Dwfx => "Writes a DWFx file (XPS compatible): vectors and text, for DWF and XPS viewers.",
             Plotter::Png => "Writes a PNG image of the sheet.",
             Plotter::Jpg => "Writes a JPEG image of the sheet.",
+            Plotter::Printer(_) => "Prints on this printer, through the computer's print queue.",
         }
+    }
+
+    /// File plotters, then the computer's printers.
+    pub fn all() -> Vec<Plotter> {
+        Self::ALL.into_iter().chain((0..printers().len()).map(|i| Plotter::Printer(i as u16))).collect()
     }
 
     /// Whether it writes pixels rather than vectors.
@@ -371,6 +401,19 @@ pub fn scale_label(mm: f64, units: f64) -> String {
 mod tests {
     use super::*;
     use oxidraft_model::Geometry;
+
+    #[test]
+    fn printers_follow_the_file_plotters() {
+        set_printers(&["Test Office Printer".to_string()]);
+        set_printers(&["Test Office Printer".to_string()]);
+        let all = Plotter::all();
+        let printer = all.iter().find(|p| p.name() == "Test Office Printer").copied().unwrap();
+        assert!(matches!(printer, Plotter::Printer(_)));
+        assert_eq!(all.iter().filter(|p| p.name() == "Test Office Printer").count(), 1, "listed once");
+        assert_eq!(&all[..4], &Plotter::ALL);
+        assert_eq!(printer.extension(), "pdf");
+        assert!(!printer.is_raster());
+    }
 
     fn doc() -> Document {
         let mut d = Document::new();

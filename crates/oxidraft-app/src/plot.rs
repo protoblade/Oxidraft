@@ -211,6 +211,7 @@ impl OxidraftApp {
     /// plots the layout, as its page setup has it.
     pub(crate) fn open_plot(&mut self, preview: bool) {
         self.engine.cancel(&mut self.doc);
+        self.list_printers();
         let mut settings = self.plot_settings;
         let space = self.shown_space();
         match settings.area {
@@ -247,6 +248,11 @@ impl OxidraftApp {
     /// Plots with the dialog's settings (or the last plot's) to a PDF at
     /// `path`, and closes the dialog.
     pub fn plot_to(&mut self, path: &Path) -> Result<(), String> {
+        self.plot_out(Some(path))
+    }
+
+    /// Plots to `path`, or to the printer chosen when there's none.
+    fn plot_out(&mut self, path: Option<&Path>) -> Result<(), String> {
         let (settings, space) =
             self.plot.as_ref().map_or((self.plot_settings, self.shown_space()), |d| (d.settings, d.space));
         let sheet = {
@@ -256,10 +262,21 @@ impl OxidraftApp {
         let mut sheet = sheet.ok_or("There's nothing to plot.")?;
         self.stamp(&mut sheet, space);
         let bytes = self.plot_bytes(settings.plotter, std::slice::from_ref(&sheet))?;
-        std::fs::write(path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+        let done = match (path, settings.plotter) {
+            (Some(path), _) => {
+                std::fs::write(path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+                format!("Plot written to {}", path.display())
+            }
+            (None, plotter) => {
+                let (w, h) = (settings.paper.width, settings.paper.height);
+                let size = if settings.landscape { (h, w) } else { (w, h) };
+                crate::plotters::print_pdf(plotter.name(), &bytes, &self.file_name(), size)?;
+                format!("Plot sent to {}", plotter.name())
+            }
+        };
         let area = sheet.layout.clip;
         self.engine.log(format!("Effective plotting area: {:.2} wide by {:.2} high", area.width(), area.height()));
-        self.engine.log(format!("Plot written to {}", path.display()));
+        self.engine.log(done);
         self.plot_settings = settings;
         self.plot = None;
         Ok(())
@@ -268,6 +285,12 @@ impl OxidraftApp {
     /// OK: asks where to save the plot, then plots.
     fn plot_with_dialog(&mut self) {
         let plotter = self.plot.as_ref().map_or(self.plot_settings.plotter, |d| d.settings.plotter);
+        if let Plotter::Printer(_) = plotter {
+            if let Err(e) = self.plot_out(None) {
+                self.engine.log(e);
+            }
+            return;
+        }
         let Some(path): Option<PathBuf> = self.plot_file_path(plotter) else { return };
         if let Err(e) = self.plot_to(&path) {
             self.engine.log(e);
@@ -346,7 +369,7 @@ impl OxidraftApp {
                                     .selected_text(s.plotter.name())
                                     .width(ui.available_width())
                                     .show_ui(ui, |ui| {
-                                        for p in Plotter::ALL {
+                                        for p in Plotter::all() {
                                             ui.selectable_value(&mut s.plotter, p, p.name());
                                         }
                                     });

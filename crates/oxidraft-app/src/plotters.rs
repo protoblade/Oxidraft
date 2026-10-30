@@ -31,7 +31,7 @@ impl OxidraftApp {
     pub fn plot_bytes(&self, plotter: Plotter, sheets: &[Sheet]) -> Result<Vec<u8>, String> {
         let title = self.file_name();
         match plotter {
-            Plotter::Pdf => Ok(oxidraft_plot::pdf_pages(sheets, &title)),
+            Plotter::Pdf | Plotter::Printer(_) => Ok(oxidraft_plot::pdf_pages(sheets, &title)),
             Plotter::Dwfx => Ok(oxidraft_plot::dwfx::dwfx(sheets, &title)),
             Plotter::Png | Plotter::Jpg => {
                 let sheet = sheets.first().ok_or("There's nothing to plot.")?;
@@ -48,6 +48,12 @@ impl OxidraftApp {
                 Ok(out.into_inner())
             }
         }
+    }
+
+    /// Lists the computer's printers for the Plot dialog, once.
+    pub(crate) fn list_printers(&mut self) {
+        static LISTED: std::sync::Once = std::sync::Once::new();
+        LISTED.call_once(|| oxidraft_plot::set_printers(&system_printers()));
     }
 
     /// Asks where `plotter`'s file goes, named after the drawing.
@@ -198,5 +204,65 @@ impl OxidraftApp {
         if open && !cancel {
             self.plotter_manager = Some(d);
         }
+    }
+}
+
+/// The printers the system's print queue knows.
+fn system_printers() -> Vec<String> {
+    let run = |cmd: &str, args: &[&str]| {
+        std::process::Command::new(cmd)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let listed = if cfg!(windows) {
+        run("powershell", &["-NoProfile", "-Command", "Get-Printer | Select-Object -ExpandProperty Name"])
+    } else {
+        // CUPS: the destinations, one per line.
+        run("lpstat", &["-e"])
+    };
+    listed.map_or_else(Vec::new, |out| out.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect())
+}
+
+/// Sends a PDF to a printer through the system's print queue, on paper
+/// `size` (millimeters, as the sheet lies).
+pub(crate) fn print_pdf(printer: &str, pdf: &[u8], title: &str, size: (f64, f64)) -> Result<(), String> {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let file = std::env::temp_dir().join(format!("oxidraft-print-{}-{n}.pdf", std::process::id()));
+    std::fs::write(&file, pdf).map_err(|e| format!("Could not write {}: {e}", file.display()))?;
+    let status = if cfg!(windows) {
+        // The PDF viewer prints it.
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Start-Process", "-FilePath"])
+            .arg(&file)
+            .args(["-Verb", "PrintTo", "-ArgumentList"])
+            .arg(format!("'\"{printer}\"'"))
+            .status()
+    } else {
+        let media = format!("media=Custom.{:.0}x{:.0}mm", size.0, size.1);
+        let status = std::process::Command::new("lpr")
+            .args(["-P", printer, "-T", title, "-o", &media, "-o", "fit-to-page"])
+            .arg(&file)
+            .status();
+        // lpr has copied it to the queue.
+        std::fs::remove_file(&file).ok();
+        status
+    };
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(format!("The print queue refused the plot ({s}).")),
+        Err(e) => Err(format!("Could not reach the print queue: {e}")),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    #[test]
+    fn a_printer_the_queue_doesnt_know_is_an_error() {
+        let r = super::print_pdf("Oxidraft_No_Such_Printer", b"%PDF-1.4\n", "test", (210.0, 297.0));
+        assert!(r.is_err());
     }
 }

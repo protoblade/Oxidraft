@@ -14,7 +14,7 @@ pub mod zip;
 
 pub use pdf::{pdf, pdf_pages};
 pub use setup::{
-    Layout, MARGIN, PAPERS, Paper, PlotArea, PlotScale, PlotSettings, PlotStyle, Plotter, SCALES, papers, scale_label,
-    set_custom_papers,
+    Layout, MARGIN, PAPERS, Paper, PlotArea, PlotScale, PlotSettings, PlotStyle, Plotter, SCALES, papers, printers,
+    scale_label, set_custom_papers, set_printers,
 };
 pub use sheet::{Item, Path, Picture, Rgb, Sheet, render, render_with_pictures};
