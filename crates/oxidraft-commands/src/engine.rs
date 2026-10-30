@@ -849,8 +849,26 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: None,
     },
     CommandInfo {
+        name: "PAGESETUP",
+        aliases: &[],
+        description: "Set how a layout plots: its paper, orientation, scale and plot style",
+        make: None,
+    },
+    CommandInfo {
+        name: "TOOLBAR",
+        aliases: &["TO"],
+        description: "Show or hide the classic toolbars and the menu bar",
+        make: None,
+    },
+    CommandInfo {
+        name: "-TOOLBAR",
+        aliases: &[],
+        description: "Show or hide a toolbar by name, or ALL",
+        make: Some(|| Box::new(crate::windows::ToolbarCmd::default())),
+    },
+    CommandInfo {
         name: "CUILOAD",
-        aliases: &["MENULOAD"],
+        aliases: &["MENULOAD", "MENU"],
         description: "Load or unload AutoCAD customization files (.cuix, .cui): their commands, ribbon panels and shortcuts",
         make: None,
     },

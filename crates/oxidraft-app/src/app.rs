@@ -125,6 +125,8 @@ pub struct OxidraftApp {
     /// A CUI macro's rest after a pause, and how many inputs the command
     /// had then: it goes on after the user's.
     pub(crate) macro_rest: Option<(String, usize)>,
+    /// TOOLBAR's dialog.
+    pub(crate) toolbars_dialog: Option<crate::menubar::ToolbarsDialog>,
     pub(crate) button_images: std::collections::HashMap<String, Option<egui::TextureHandle>>,
     /// The Sheet Set Manager (SHEETSET).
     pub(crate) sheet_set: Option<crate::sheet_set::SheetSetPalette>,
@@ -377,6 +379,7 @@ impl OxidraftApp {
             cui: None,
             cui_load: None,
             macro_rest: None,
+            toolbars_dialog: None,
             button_images: Default::default(),
             sheet_set: None,
             ribbon_hidden: false,
@@ -841,7 +844,8 @@ impl OxidraftApp {
             "QVLAYOUTCLOSE" => self.qv_layouts = false,
             "CUIEXPORT" => self.cui_export(),
             "CUIIMPORT" => self.cui_import(),
-            "CUILOAD" | "MENULOAD" | "CUIUNLOAD" | "MENUUNLOAD" => self.open_cui_load(),
+            "CUILOAD" | "MENULOAD" | "CUIUNLOAD" | "MENUUNLOAD" | "MENU" => self.open_cui_load(),
+            "TOOLBAR" => self.toolbars_dialog = Some(Default::default()),
             "AUTOCOMPLETE" => {
                 self.autocomplete_off = !self.autocomplete_off;
                 self.log_toggle("AutoComplete", !self.autocomplete_off);
@@ -886,7 +890,7 @@ impl OxidraftApp {
                     .collect::<Vec<_>>()
                     .join("\n"),
             ),
-            "TABLET" | "TOOLBAR" | "TASKBAR" | "MENU" | "GRAPHICSCONFIG" | "SECURITYOPTIONS" | "REINIT"
+            "TABLET" | "TASKBAR" | "GRAPHICSCONFIG" | "SECURITYOPTIONS" | "REINIT"
             | "UPDATETHUMBSNOW" | "BLOCKICON" | "PARTIALOPEN" | "OLELINKS" | "OLESCALE" | "PLOTSTYLE"
             | "CONVERTCTB" | "CONVERTPSTYLES" | "EXPORTSETTINGS" | "WMFOPTS" | "IMAGEQUALITY" | "TPNAVIGATE"
             | "TARGETPOINT" => self.engine.log(not_applicable(name)),
@@ -1062,6 +1066,11 @@ impl OxidraftApp {
                     }
                 }
                 UiRequest::Workspace(option, name, new) => self.workspace_option(&option, &name, &new),
+                UiRequest::Toolbar(name, show) => {
+                    if let Err(e) = self.show_toolbar(&name, show) {
+                        self.engine.log(e);
+                    }
+                }
                 UiRequest::ArrangeWindows(n) => {
                     let arrange = match n {
                         1 => crate::drawings::Arrange::Horizontal,
@@ -1379,9 +1388,13 @@ impl eframe::App for OxidraftApp {
         self.update_title(&ctx);
 
         self.top_bar(ui);
+        self.menu_bar(ui);
         // Clean screen (Ctrl+0): the drawing, the command line and the status bar.
         if !self.clean_screen && !self.ribbon_hidden {
             self.ribbon(ui);
+        }
+        if !self.clean_screen {
+            self.toolbars(ui);
         }
         self.status_bar(ui);
         if self.show_file_tabs && !self.clean_screen {
@@ -1419,6 +1432,7 @@ impl eframe::App for OxidraftApp {
         self.plotter_manager_dialog(&ctx);
         self.cui_dialog(&ctx);
         self.cui_load_dialog(&ctx);
+        self.toolbars_dialog(&ctx);
         self.sheet_set_palette(&ctx);
         self.traces_palette(&ctx);
         self.quick_view_layouts(&ctx);
@@ -1609,7 +1623,6 @@ impl OxidraftApp {
 fn not_applicable(name: &str) -> String {
     let why = match name.trim().to_ascii_uppercase().as_str() {
         "TABLET" => "digitizing tablets aren't supported",
-        "TOOLBAR" | "MENU" => "Oxidraft has the ribbon; CUI adds shortcuts and Quick Access Toolbar commands",
         "TASKBAR" => "each drawing has a file tab (Ctrl+Tab goes between them)",
         "GRAPHICSCONFIG" => "drawing is always hardware accelerated",
         "SECURITYOPTIONS" => "drawings aren't password protected",

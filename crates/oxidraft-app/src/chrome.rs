@@ -457,6 +457,34 @@ impl OxidraftApp {
         }
     }
 
+    /// A toolbar's button: a command of your own; else the ribbon's icon
+    /// for the command where it has one, else its name.
+    pub(crate) fn toolbar_button(&mut self, ui: &mut Ui, command: &str) {
+        if self.custom_command(command).is_some() {
+            return self.custom_button(ui, command);
+        }
+        let r = match known_tool(command) {
+            Some(t) => {
+                let r = icon_button(ui, t.icon, 16.0, true, t.tip);
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t.label.replace('\n', " ")));
+                r
+            }
+            None => {
+                let label: Vec<String> =
+                    command.split_whitespace().map(|w| w[..1].to_string() + &w[1..].to_ascii_lowercase()).collect();
+                ui.add_space(3.0);
+                let r = ui
+                    .add(egui::Button::new(egui::RichText::new(label.join(" ")).size(11.0)).frame(false))
+                    .on_hover_text(command_tip(command));
+                ui.add_space(3.0);
+                r
+            }
+        };
+        if r.clicked() {
+            self.run(command);
+        }
+    }
+
     /// A button's name: a command of your own's, else the command's.
     pub(crate) fn button_label(&self, command: &str) -> String {
         self.custom_command(command).map_or_else(|| command.to_string(), |c| c.name.clone())

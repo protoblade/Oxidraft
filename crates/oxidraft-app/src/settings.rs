@@ -49,6 +49,12 @@ pub struct Settings {
     /// Commands of your own (CUI) and those customization files brought
     /// (CUILOAD), which panels, shortcuts and menus name by their ids.
     pub commands: Vec<CustomCommand>,
+    /// The classic menu bar (MENUBAR) and the toolbars shown, by name.
+    pub menubar: bool,
+    pub toolbars: Vec<String>,
+    /// Menus and toolbars customization files brought (CUILOAD).
+    pub menus: Vec<crate::menubar::CustomMenu>,
+    pub custom_toolbars: Vec<crate::menubar::CustomToolbar>,
 }
 
 /// A ribbon panel made in CUI: the tab it's on, its title, its commands;
@@ -250,6 +256,22 @@ mod tests {
                 name: "Tree".into(),
                 macro_text: "^C^C_CIRCLE;\\2;".into(),
                 image: "/images/tree.png".into(),
+                group: "SITE".into(),
+            }],
+            menubar: true,
+            toolbars: vec!["Draw".into()],
+            menus: vec![crate::menubar::CustomMenu {
+                name: "Site".into(),
+                items: vec![crate::menubar::MenuEntry {
+                    label: "Tree".into(),
+                    command: "SITE:TREE".into(),
+                    items: Vec::new(),
+                }],
+                group: "SITE".into(),
+            }],
+            custom_toolbars: vec![crate::menubar::CustomToolbar {
+                name: "Site".into(),
+                commands: vec!["SITE:TREE".into(), String::new()],
                 group: "SITE".into(),
             }],
         };

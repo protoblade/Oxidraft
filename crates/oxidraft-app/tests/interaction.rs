@@ -2997,6 +2997,40 @@ fn workspaces_and_cui() {
 }
 
 #[test]
+fn menu_bar_and_toolbars() {
+    let mut h = app_with_line();
+    assert!(h.query_by_label("Format").is_none(), "no menu bar at first");
+    type_all(&mut h, &["menubar", "1"]);
+    h.run_steps(2);
+    h.get_by_label("Tools").click();
+    h.run_steps(2);
+    h.get_by_label("Load Customizations...").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Load/Unload Customizations").is_some(), "the menu item ran CUILOAD");
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    // -TOOLBAR: the Zoom toolbar shown, its Window button zooming.
+    type_all(&mut h, &["-toolbar", "zoom", "show"]);
+    h.run_steps(2);
+    assert_eq!(h.state().toolbars_shown(), ["Zoom"]);
+    h.get_by_label("Zoom W").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("ZOOM"));
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    type_all(&mut h, &["-toolbar", "all", "hide"]);
+    assert!(h.state().toolbars_shown().is_empty());
+    type_all(&mut h, &["-toolbar", "nothing", "show"]);
+    assert!(h.state_mut().engine_mut().history().iter().any(|l| l.contains("No toolbar named \"nothing\"")));
+    // TOOLBAR's dialog: the menu bar off.
+    type_all(&mut h, &["toolbar"]);
+    h.run_steps(2);
+    h.get_by_label("Menu Bar").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Format").is_none(), "the menu bar gone");
+}
+
+#[test]
 fn customization_files_and_macros() {
     let mut h = app_with_line();
     let dir = std::env::temp_dir().join(format!("oxidraft-cuix-{}", std::process::id()));

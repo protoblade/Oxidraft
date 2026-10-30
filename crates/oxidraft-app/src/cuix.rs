@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use eframe::egui::{self, RichText, vec2};
 
 use crate::app::OxidraftApp;
+use crate::menubar::{CustomMenu, CustomToolbar, MenuEntry};
 use crate::settings::{CustomCommand, RibbonPanel, Settings};
 use crate::theme;
 
@@ -198,6 +199,9 @@ pub struct Customization {
     pub panels: Vec<RibbonPanel>,
     /// Keys and the id of the command they run.
     pub shortcuts: Vec<(String, String)>,
+    /// Its menus (those of the menu bar) and toolbars.
+    pub menus: Vec<CustomMenu>,
+    pub toolbars: Vec<CustomToolbar>,
     /// The images its buttons use: file name and contents.
     pub images: Vec<(String, Vec<u8>)>,
 }
@@ -267,8 +271,17 @@ pub fn read_customization(data: &[u8], fallback: &str) -> Result<Customization, 
             group: group.clone(),
         });
     }
-    // The command an element runs: the macro one of its attributes names.
-    let runs = |e: &Element| e.attrs.iter().find_map(|(_, v)| known.get(v).cloned());
+    // The command an element runs: the macro one of its attributes names,
+    // or one of the elements in it (a menu item's MacroRef).
+    fn macro_of(e: &Element, known: &HashMap<String, String>) -> Option<String> {
+        e.attrs.iter().find_map(|(_, v)| known.get(v).cloned()).or_else(|| {
+            e.children
+                .iter()
+                .filter(|c| !c.name.contains("Button") && c.name != "PopMenuItem")
+                .find_map(|c| macro_of(c, known))
+        })
+    }
+    let runs = |e: &Element| macro_of(e, &known);
     // Panels: a button a command, a split button its commands as `A|B|C`.
     fn entries(e: &Element, runs: &dyn Fn(&Element) -> Option<String>, out: &mut Vec<String>) {
         for c in &e.children {
@@ -327,9 +340,70 @@ pub fn read_customization(data: &[u8], fallback: &str) -> Result<Customization, 
             shortcuts.push((k.to_string(), command));
         }
     }
+    // The menu bar's menus (POP1 to POP499; the others are shortcut
+    // menus), each item a command, a line, or a menu of its own.
+    let label = |e: &Element| text_of(e, "Name").replace('&', "");
+    fn items(
+        e: &Element,
+        label: &dyn Fn(&Element) -> String,
+        runs: &dyn Fn(&Element) -> Option<String>,
+    ) -> Vec<MenuEntry> {
+        let mut out = Vec::new();
+        for c in &e.children {
+            match c.name.as_str() {
+                "PopMenu" => {
+                    out.push(MenuEntry { label: label(c), command: String::new(), items: items(c, label, runs) })
+                }
+                "PopMenuItem" => {
+                    let command = runs(c).unwrap_or_default();
+                    let separator = c.attr("IsSeparator").is_some_and(|v| v.eq_ignore_ascii_case("true"));
+                    if separator || command.is_empty() {
+                        out.push(MenuEntry::default());
+                    } else {
+                        out.push(MenuEntry { label: label(c), command, items: Vec::new() });
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+    let pulldown = |m: &Element| {
+        let aliases: Vec<String> =
+            m.children.iter().filter(|c| c.name == "Alias").map(|c| c.text.trim().to_ascii_uppercase()).collect();
+        aliases.is_empty()
+            || aliases.iter().any(|a| {
+                a.strip_prefix("POP").and_then(|n| n.parse::<u32>().ok()).is_some_and(|n| (1..500).contains(&n))
+            })
+    };
+    let mut menus = Vec::new();
+    for root in every("PopMenuRoot") {
+        for m in root.children.iter().filter(|m| m.name == "PopMenu" && pulldown(m)) {
+            let entries = items(m, &label, &runs);
+            if entries.iter().any(|i| !i.command.is_empty() || !i.items.is_empty()) {
+                menus.push(CustomMenu { name: label(m), items: entries, group: group.clone() });
+            }
+        }
+    }
+    // Toolbars: their buttons, `""` a line between them.
+    let mut toolbars = Vec::new();
+    for t in every("Toolbar") {
+        let commands: Vec<String> = t
+            .children
+            .iter()
+            .filter_map(|c| match c.name.as_str() {
+                "ToolbarSeparator" => Some(String::new()),
+                "ToolbarButton" => runs(c),
+                _ => None,
+            })
+            .collect();
+        if commands.iter().any(|c| !c.is_empty()) {
+            toolbars.push(CustomToolbar { name: label(t), commands, group: group.clone() });
+        }
+    }
     let used: std::collections::HashSet<&str> = commands.iter().map(|c| c.image.as_str()).collect();
     images.retain(|(f, _)| used.contains(f.as_str()));
-    Ok(Customization { group, commands, panels: placed, shortcuts, images })
+    Ok(Customization { group, commands, panels: placed, shortcuts, menus, toolbars, images })
 }
 
 /// A macro's stretch up to a pause (or its end) as what's entered: a
@@ -396,6 +470,19 @@ impl OxidraftApp {
             settings.commands.push(command);
         }
         settings.ribbon_panels.extend(c.panels);
+        settings.menus.extend(c.menus);
+        // Toolbars shown, named apart from those there are.
+        for mut t in c.toolbars {
+            let taken = |n: &str, s: &Settings| {
+                crate::menubar::TOOLBARS.iter().any(|(b, _)| b.eq_ignore_ascii_case(n))
+                    || s.custom_toolbars.iter().any(|x| x.name.eq_ignore_ascii_case(n))
+            };
+            if taken(&t.name, &settings) {
+                t.name = format!("{} ({})", t.name, t.group);
+            }
+            settings.toolbars.push(t.name.clone());
+            settings.custom_toolbars.push(t);
+        }
         for (keys, command) in c.shortcuts {
             settings.shortcuts.retain(|(k, _)| !k.eq_ignore_ascii_case(&keys));
             settings.shortcuts.push((keys, command));
@@ -413,6 +500,11 @@ impl OxidraftApp {
             s.commands.iter().filter(|c| c.group.eq_ignore_ascii_case(group)).map(|c| c.id.clone()).collect();
         s.commands.retain(|c| !c.group.eq_ignore_ascii_case(group));
         s.ribbon_panels.retain(|p| !p.group.eq_ignore_ascii_case(group));
+        s.menus.retain(|m| !m.group.eq_ignore_ascii_case(group));
+        let toolbars: Vec<String> =
+            s.custom_toolbars.iter().filter(|t| t.group.eq_ignore_ascii_case(group)).map(|t| t.name.clone()).collect();
+        s.custom_toolbars.retain(|t| !t.group.eq_ignore_ascii_case(group));
+        s.toolbars.retain(|t| !toolbars.contains(t));
         s.shortcuts.retain(|(_, c)| !gone.contains(c));
         s.quick_access.retain(|c| !gone.contains(c));
         s.shortcut_menu.retain(|c| !gone.contains(c));
@@ -615,6 +707,25 @@ mod tests {
       </MenuMacro>
     </MacroGroup>
     <MenuRoot>
+      <PopMenuRoot>
+        <PopMenu UID="PM_1"><Alias>POP501</Alias><Name>Shortcut</Name>
+          <PopMenuItem UID="PI_0"><Name>Kerb</Name><MenuItem><MacroRef MenuMacroID="MM_KERB"/></MenuItem></PopMenuItem>
+        </PopMenu>
+        <PopMenu UID="PM_2"><Alias>POP12</Alias><Name>&amp;Site</Name>
+          <PopMenuItem UID="PI_1"><Name>&amp;Tree</Name><MenuItem><MacroRef MenuMacroID="MM_TREE"/></MenuItem></PopMenuItem>
+          <PopMenuItem UID="PI_2" IsSeparator="true"/>
+          <PopMenu UID="PM_3"><Name>More</Name>
+            <PopMenuItem UID="PI_3"><Name>Lamp</Name><MenuItem><MacroRef MenuMacroID="MM_LAMP"/></MenuItem></PopMenuItem>
+          </PopMenu>
+        </PopMenu>
+      </PopMenuRoot>
+      <ToolbarRoot>
+        <Toolbar UID="TB_1"><Name>Draw</Name>
+          <ToolbarButton UID="TB_B1"><Name>Tree</Name><MenuItem><MacroRef MenuMacroID="MM_TREE"/></MenuItem></ToolbarButton>
+          <ToolbarSeparator UID="TB_S1"/>
+          <ToolbarButton UID="TB_B2" MenuMacroID="MM_KERB"><Name>Kerb</Name></ToolbarButton>
+        </Toolbar>
+      </ToolbarRoot>
       <AcceleratorRoot>
         <Accelerator UID="ACC_1" MenuMacroID="MM_KERB"><AccelShortcutKey>CTRL+SHIFT+K</AccelShortcutKey></Accelerator>
       </AcceleratorRoot>
@@ -684,6 +795,15 @@ mod tests {
         assert_eq!((c.panels[1].tab.as_str(), c.panels[1].name.as_str()), ("SITE", "Loose"), "on no tab");
         assert_eq!(c.shortcuts, [("CTRL+SHIFT+K".to_string(), "SITE:MM_KERB".to_string())]);
         assert!(crate::customize::parse_shortcut(&c.shortcuts[0].0).is_some());
+        // The menu bar's menu (not the shortcut menu), and the toolbar.
+        assert_eq!(c.menus.len(), 1);
+        let site = &c.menus[0];
+        assert_eq!(site.name, "Site");
+        let labels: Vec<(&str, &str)> = site.items.iter().map(|i| (i.label.as_str(), i.command.as_str())).collect();
+        assert_eq!(labels, [("Tree", "SITE:MM_TREE"), ("", ""), ("More", "")]);
+        assert_eq!(site.items[2].items[0].command, "SITE:MM_LAMP");
+        assert_eq!(c.toolbars[0].name, "Draw");
+        assert_eq!(c.toolbars[0].commands, ["SITE:MM_TREE", "", "SITE:MM_KERB"]);
         // As a .cui: the XML alone.
         assert_eq!(read_customization(MENU.as_bytes(), "x").unwrap().commands.len(), 3);
         let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain(MENU.encode_utf16().flat_map(u16::to_le_bytes)).collect();

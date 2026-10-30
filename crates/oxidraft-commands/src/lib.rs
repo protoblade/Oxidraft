@@ -219,6 +219,8 @@ pub enum UiRequest {
     /// WORKSPACE: an option (setCurrent, SAveas, Rename, Delete, ?), the
     /// workspace's name, and for Rename its new one.
     Workspace(String, String, String),
+    /// -TOOLBAR: this toolbar (or ALL) shown, or hidden.
+    Toolbar(String, bool),
     /// ADDSELECTED: this command, to draw with.
     RunCommand(String),
     /// TABLEEXPORT: this table, to write as CSV.

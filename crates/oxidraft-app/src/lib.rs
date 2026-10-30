@@ -40,6 +40,7 @@ mod lisp;
 mod lisp_ents;
 mod lisp_host;
 mod manage;
+mod menubar;
 mod more_app;
 mod named_views;
 mod object_props;

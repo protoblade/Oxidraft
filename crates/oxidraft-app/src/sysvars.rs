@@ -338,6 +338,10 @@ fn vars() -> Vec<Var> {
             a.show_lineweights = parse_flag(v)?;
             Ok(())
         }),
+        var!("MENUBAR", |a| flag(a.settings.menubar), |a, v| {
+            a.set_menu_bar(parse_flag(v)?);
+            Ok(())
+        }),
         var!("OFFSETDIST", |a| a.engine.vars.offset_distance.map_or("-1".into(), number), |a, v| {
             let d = parse_number(v)?;
             a.engine.vars.offset_distance = (d >= 0.0).then_some(d);
