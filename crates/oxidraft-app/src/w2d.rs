@@ -4,9 +4,10 @@
 //! stream is decoded — its readable and binary opcodes, colors (indexed
 //! through the color map too), fills and fonts — as lines, polylines,
 //! arcs, circles, solid fills, points and text in millimeters on the
-//! sheet, through the transform its descriptor gives. Pictures and
-//! compressed WHIP! blocks are left out; an opcode the reader doesn't know
-//! ends the stream, keeping what came before.
+//! sheet, through the transform its descriptor gives; WHIP!'s compressed
+//! blocks are expanded in place ([`crate::w2d_compression`]). Pictures are
+//! left out; an opcode the reader doesn't know ends the stream, keeping
+//! what came before.
 
 use oxidraft_geom::Point;
 use oxidraft_model::{Attach, Geometry, HatchPattern, Vertex};
@@ -200,8 +201,10 @@ fn record_end(data: &[u8], start: usize) -> Option<usize> {
 }
 
 /// The decoder's state as it reads a stream.
-struct Decoder<'a> {
-    data: &'a [u8],
+struct Decoder {
+    data: Vec<u8>,
+    /// Compressed blocks expanded so far.
+    expanded: usize,
     at: usize,
     /// The stream's revision (00.55 is 55, 06.00 is 600).
     revision: u32,
@@ -217,7 +220,7 @@ struct Decoder<'a> {
     out: Drawn,
 }
 
-impl Decoder<'_> {
+impl Decoder {
     fn byte(&mut self) -> Option<u8> {
         let b = *self.data.get(self.at)?;
         self.at += 1;
@@ -729,6 +732,32 @@ impl Decoder<'_> {
         Some(())
     }
 
+    /// Expands the compressed block at `start` in its place.
+    fn expand(&mut self, start: usize) -> bool {
+        const LIMIT: usize = 256 << 20;
+        let Some(op) = self.data.get(start + 5..start + 7).map(|b| u16::from_le_bytes([b[0], b[1]])) else {
+            return false;
+        };
+        if !matches!(op, 0x0010 | 0x0011 | 0x0123) || self.expanded >= 4096 {
+            return false;
+        }
+        let payload = &self.data[start + 7..];
+        let expanded = if op == 0x0011 {
+            crate::w2d_compression::expand_zlib(payload, LIMIT)
+        } else {
+            crate::w2d_compression::expand_lz(payload, self.revision, LIMIT)
+        };
+        let Ok(x) = expanded else { return false };
+        let end = start + 7 + x.consumed;
+        if self.data.get(end) != Some(&b'}') || self.data.len() - (end + 1 - start) + x.bytes.len() > LIMIT {
+            return false;
+        }
+        self.data.splice(start..=end, x.bytes);
+        self.expanded += 1;
+        self.at = start;
+        true
+    }
+
     /// Reads the stream, from after its header.
     fn run(&mut self) {
         while self.at < self.data.len() {
@@ -740,14 +769,16 @@ impl Decoder<'_> {
             }
             match op {
                 b'(' => {
-                    let Some(end) = record_end(self.data, start) else { return };
+                    let Some(end) = record_end(&self.data, start) else { return };
                     self.at = end;
-                    if !self.extended(&self.data[start..end]) {
+                    let raw = self.data[start..end].to_vec();
+                    if !self.extended(&raw) {
                         return;
                     }
                 }
-                // Extended binary: skipped by its length; one without (a
-                // compressed block) ends what can be read.
+                // Extended binary: skipped by its length; one without is a
+                // compressed block, expanded in its place (or, if it isn't
+                // one, ends what can be read).
                 b'{' => {
                     let Some(len) = self
                         .data
@@ -757,7 +788,10 @@ impl Decoder<'_> {
                         return;
                     };
                     if len == 0 {
-                        return;
+                        if !self.expand(start) {
+                            return;
+                        }
+                        continue;
                     }
                     self.at = start + 5 + len;
                 }
@@ -785,7 +819,8 @@ pub fn decode(data: &[u8], to_mm: [f64; 6]) -> Result<Drawn, String> {
         .ok_or("Not a W2D stream.")?;
     let revision = version.replace('.', "").parse::<u32>().map_err(|_| "Not a W2D stream.")?;
     let mut d = Decoder {
-        data,
+        data: data.to_vec(),
+        expanded: 0,
         at: header_end,
         revision,
         current: (0, 0),
@@ -926,6 +961,23 @@ mod tests {
         let Geometry::Text { content, rotation, height, .. } = &drawn[5].0 else { unreachable!() };
         assert_eq!((content.as_str(), *rotation), ("It's", 90.0));
         assert!((height - 1.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compressed_blocks_expand_in_place() {
+        // "L 0,0 1000,0" in a zlib wrapper, as WHIP! writes them.
+        let mut data = b"(W2D V06.00)".to_vec();
+        data.push(b'{');
+        data.extend(0u32.to_le_bytes());
+        data.extend(0x0011u16.to_le_bytes());
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut z, b"L 0,0 1000,0\n").unwrap();
+        data.extend(z.finish().unwrap());
+        data.push(b'}');
+        data.extend_from_slice(b"L 0,0 0,2000(EndOfDWF)");
+        let drawn = decode(&data, [0.001, 0.0, 0.0, 0.001, 0.0, 0.0]).unwrap();
+        assert_eq!(drawn.len(), 2, "{drawn:?}");
+        assert_eq!(drawn[0].0, Geometry::Line { start: Point::ORIGIN, end: Point::new(1.0, 0.0) });
     }
 
     #[test]

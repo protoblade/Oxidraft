@@ -76,6 +76,7 @@ pub mod update;
 mod view;
 mod viewport;
 mod w2d;
+mod w2d_compression;
 mod wblock;
 mod xref;
 
