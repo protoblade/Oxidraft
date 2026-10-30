@@ -878,7 +878,6 @@ impl OxidraftApp {
             "BATTORDER" => self.open_attribute_manager(),
             "DGNIMPORT" => self.dgn_import(),
             "DGNATTACH" => self.dgn_attach(),
-            "DGNEXPORT" => self.dgn_export(),
             "DGNCLIP" => self.run("XCLIP"),
             "DGNADJUST" => self.engine.log("A DGN file is attached as a block: LAYER and XCLIP work on it."),
             "DWFATTACH" => self.dwf_attach(),
@@ -1076,6 +1075,7 @@ impl OxidraftApp {
                     }
                 }
                 UiRequest::Workspace(option, name, new) => self.workspace_option(&option, &name, &new),
+                UiRequest::DgnExport(v8) => self.dgn_export(v8),
                 UiRequest::Toolbar(name, option) => {
                     if let Err(e) = self.toolbar_option(&name, &option) {
                         self.engine.log(e);

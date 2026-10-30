@@ -1,9 +1,0 @@
-# DGN V8 test drawing
-
-`test_dgnv8.dgn` is GDAL's DGN V8 test file, from its repository
-(<https://github.com/OSGeo/gdal>, `autotest/ogr/data/dgnv8/test_dgnv8.dgn`),
-under GDAL's license (MIT/X style; `LICENSE.TXT`, GDAL's own). Its contents
-are as GDAL's `test_dgnv8_ref.csv` lists them: a model `my_model` of points,
-lines, line strings, text, point strings, ellipses, arcs, curves, B-spline
-curves, complex chains and shapes, cells and a shared cell, on level 64
-(`Default`).

@@ -154,3 +154,24 @@ impl Command for ToolbarCmd {
         true
     }
 }
+
+/// DGNEXPORT: the DGN version to write, V7 or V8, as AutoCAD's Export DGN
+/// Settings ask; the app picks the file.
+#[derive(Default)]
+pub struct DgnExportCmd;
+
+impl Command for DgnExportCmd {
+    fn prompt(&self) -> Prompt {
+        Prompt::new("Enter DGN version").with_keywords(&["V7", "V8"]).with_default("V7")
+    }
+
+    fn input(&mut self, input: Input, ctx: &mut Ctx) -> Result<Step, String> {
+        let v8 = match input {
+            Input::Keyword(k) => k.eq_ignore_ascii_case("V8"),
+            Input::Enter => false,
+            _ => return Err("V7 or V8?".into()),
+        };
+        ctx.ui = Some(UiRequest::DgnExport(v8));
+        Ok(Step::Done)
+    }
+}

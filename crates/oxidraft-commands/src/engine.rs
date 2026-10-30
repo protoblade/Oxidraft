@@ -1169,7 +1169,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         description: "Place a DGN (V7) file as a block reference",
         make: None,
     },
-    CommandInfo { name: "DGNEXPORT", aliases: &[], description: "Save model space as a DGN (V7) file", make: None },
+    CommandInfo {
+        name: "DGNEXPORT",
+        aliases: &[],
+        description: "Save model space as a DGN file, V7 or V8",
+        make: Some(|| Box::new(crate::windows::DgnExportCmd)),
+    },
     CommandInfo { name: "DGNCLIP", aliases: &[], description: "Clip an attached DGN file (XCLIP)", make: None },
     CommandInfo { name: "DGNADJUST", aliases: &[], description: "How an attached DGN file shows", make: None },
     CommandInfo { name: "MSLIDE", aliases: &[], description: "Save the view as a slide (.sld)", make: None },

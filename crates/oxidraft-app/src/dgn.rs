@@ -361,8 +361,8 @@ impl OxidraftApp {
         self.engine.log(format!("{} attached at 0,0 as a block reference.", file.display()));
     }
 
-    /// DGNEXPORT: model space to a V7 DGN file picked.
-    pub(crate) fn dgn_export(&mut self) {
+    /// DGNEXPORT: model space to a DGN file picked, V8 or V7.
+    pub(crate) fn dgn_export(&mut self, v8: bool) {
         let stem =
             Path::new(&self.file_name()).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let Some(path) =
@@ -370,10 +370,16 @@ impl OxidraftApp {
         else {
             return;
         };
-        match std::fs::write(&path, write_dgn(&self.doc)) {
-            Ok(()) => self.engine.log(format!("Saved {} (DGN V7)", path.display())),
-            Err(e) => self.engine.log(format!("Could not write {}: {e}", path.display())),
+        if let Err(e) = self.dgn_export_to(&path, v8) {
+            self.engine.log(e);
         }
+    }
+
+    pub fn dgn_export_to(&mut self, path: &Path, v8: bool) -> Result<(), String> {
+        let data = if v8 { crate::dgn8::write_dgn8(&self.doc)? } else { write_dgn(&self.doc) };
+        std::fs::write(path, data).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+        self.engine.log(format!("Saved {} (DGN {})", path.display(), if v8 { "V8" } else { "V7" }));
+        Ok(())
     }
 }
 

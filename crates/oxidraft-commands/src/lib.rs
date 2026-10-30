@@ -222,6 +222,8 @@ pub enum UiRequest {
     /// -TOOLBAR: this toolbar (or ALL) shown, hidden, docked at a side
     /// (Top, Bottom, Left, Right) or floating: the option.
     Toolbar(String, String),
+    /// DGNEXPORT: model space to a DGN file, V8 (or V7).
+    DgnExport(bool),
     /// ADDSELECTED: this command, to draw with.
     RunCommand(String),
     /// TABLEEXPORT: this table, to write as CSV.

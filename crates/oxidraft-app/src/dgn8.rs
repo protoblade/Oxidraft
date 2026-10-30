@@ -10,7 +10,9 @@
 use std::io::Read;
 
 use oxidraft_geom::{Point, ellipse::Ellipse};
-use oxidraft_io_dwg::compound_file::{CompoundEntry, CompoundStorage, StructuredStoragePayload};
+use oxidraft_io_dwg::compound_file::{
+    BinaryRecord, CompoundEntry, CompoundStorage, CompoundStreamContent, StructuredStoragePayload,
+};
 use oxidraft_model::{Attach, Geometry, Vertex};
 
 fn u16_at(d: &[u8], i: usize) -> Option<u16> {
@@ -59,11 +61,15 @@ fn pages(s: &CompoundStorage) -> Vec<Vec<u8>> {
     found.into_iter().map(|(_, d)| d).collect()
 }
 
+/// An object as a page has it: its type and flags, its bytes, and where
+/// its attributes start.
+type Raw = (u32, Vec<u8>, usize);
+
 /// A page's objects: after its 16-byte header (the count first), zlib;
 /// each object a 4-byte framing word, then its type and flags, its length
 /// and its attribute boundary (both in 16-bit words): (type and flags,
 /// the object, where its attributes start).
-fn objects(page: &[u8]) -> Vec<(u32, Vec<u8>, usize)> {
+fn objects(page: &[u8]) -> Vec<Raw> {
     let (Some(count), Some(bytes)) = (u32_at(page, 0), page.get(16..).and_then(inflate)) else { return Vec::new() };
     let mut out = Vec::new();
     let mut at = 0;
@@ -326,10 +332,348 @@ pub fn read_dgn8(data: &[u8]) -> Result<Vec<(Geometry, String, u8)>, String> {
     Ok(out)
 }
 
+/// The drawing V8 files are written on: GDAL's V8 test drawing (MIT/X,
+/// `assets/dgn`), its header, settings and level table kept, its model's
+/// elements replaced.
+const SEED: &[u8] = include_bytes!("../assets/dgn/seed_v8.dgn");
+
+fn storage_mut<'a>(s: &'a mut CompoundStorage, name: &str) -> Option<&'a mut CompoundStorage> {
+    s.entries.iter_mut().find_map(|e| match e {
+        CompoundEntry::Storage(c) if c.name == name => Some(c),
+        _ => None,
+    })
+}
+
+fn set_stream(s: &mut CompoundStorage, name: &str, data: &[u8]) {
+    for e in &mut s.entries {
+        if let CompoundEntry::Stream(c) = e
+            && c.name == name
+        {
+            c.content = CompoundStreamContent::Binary(BinaryRecord::split(data, 4096));
+        }
+    }
+}
+
+fn deflate(d: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    let _ = e.write_all(d);
+    e.finish().unwrap_or_default()
+}
+
+/// A page of `objects` (format 2, page 1), each after its framing word.
+fn write_page(objects: &[Vec<u8>]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for o in objects {
+        body.extend(0u32.to_le_bytes());
+        body.extend(o);
+    }
+    let n = objects.len() as u32;
+    let mut out: Vec<u8> = [n, 2, 1, n].iter().flat_map(|v| v.to_le_bytes()).collect();
+    out.extend(deflate(&body));
+    out
+}
+
+/// An object made on `seed`: its header and `fields` after it, none of the
+/// seed's linkages (a fill, say); its ID, level, color and range set, its
+/// line style and weight 0.
+fn made(seed: &Raw, fields: &[u8], id: u64, level: u32, color: u32, range: [i64; 4]) -> Vec<u8> {
+    let mut o = seed.1[..0x68].to_vec();
+    o.extend(fields);
+    if o.len() % 2 == 1 {
+        o.push(0);
+    }
+    let words = (o.len() / 2) as u32;
+    let attribute_words = words;
+    let mut put = |at: usize, v: &[u8]| o[at..at + v.len()].copy_from_slice(v);
+    put(4, &words.to_le_bytes());
+    put(8, &attribute_words.to_le_bytes());
+    put(0x0c, &level.to_le_bytes());
+    put(0x10, &id.to_le_bytes());
+    put(0x2c, &0u32.to_le_bytes());
+    put(0x30, &0u32.to_le_bytes());
+    put(0x34, &color.to_le_bytes());
+    for (k, v) in [range[0], range[1], 0, range[2], range[3], 0].into_iter().enumerate() {
+        put(0x38 + 8 * k, &v.to_le_bytes());
+    }
+    o
+}
+
+/// A level's name as V8 keeps it: a 0x56d2 linkage, UTF-16 after `ff fd`.
+fn name_linkage(name: &str) -> Vec<u8> {
+    let payload: Vec<u8> = [0xff, 0xfd].into_iter().chain(name.encode_utf16().flat_map(u16::to_le_bytes)).collect();
+    let total = (12 + payload.len()).next_multiple_of(4);
+    let mut out = ((0x56d2u32 << 16) | 0x1000 | (total / 2 - 1) as u32).to_le_bytes().to_vec();
+    out.extend(1u32.to_le_bytes());
+    out.extend((payload.len() as u32).to_le_bytes());
+    out.extend(payload);
+    out.resize(total, 0);
+    out
+}
+
+/// The drawing's model space as a DGN V8 file (2D elements, a drawing
+/// unit a master unit): lines, line strings, shapes, circles, arcs,
+/// ellipses and text, everything else as line strings; a level for each
+/// layer (its name and color).
+pub fn write_dgn8(doc: &oxidraft_model::Document) -> Result<Vec<u8>, String> {
+    use oxidraft_model::Color;
+    let lost = || "The DGN V8 seed can't be read.".to_string();
+    let mut cfb = StructuredStoragePayload::decode(SEED).compound_file.ok_or_else(lost)?;
+    let (origin, scale) = {
+        let models = storage(&cfb.root, "Dgn-Md").ok_or_else(lost)?;
+        let model = storage(models, "#000000").ok_or_else(lost)?;
+        stream(model, "Dgn~Mh").as_deref().and_then(units).ok_or_else(lost)?
+    };
+    let per = 1.0 / scale;
+    let uor = |p: Point| [origin.x + p.x * per, origin.y + p.y * per];
+    let seed_graphics = {
+        let models = storage(&cfb.root, "Dgn-Md").ok_or_else(lost)?;
+        let model = storage(models, "#000000").ok_or_else(lost)?;
+        storage(model, "Dgn^G").map(pages).unwrap_or_default().iter().flat_map(|p| objects(p)).collect::<Vec<_>>()
+    };
+    let named = storage(&cfb.root, "Dgn^Nm").map(pages).unwrap_or_default();
+    let mut named: Vec<Raw> = named.iter().flat_map(|p| objects(p)).collect();
+    // Each kind's seed: a 2D, standalone element of it.
+    let seed = |kind: u16| {
+        seed_graphics
+            .iter()
+            .find(|(k, o, _)| {
+                *k as u16 == kind && k & 0x6000_0000 == 0 && u32_at(o, 0x28).is_some_and(|f| f & 0x800 == 0)
+            })
+            .cloned()
+    };
+    let seeds: Vec<(u16, Raw)> = [3u16, 4, 6, 15, 16, 17]
+        .into_iter()
+        .map(|k| seed(k).map(|s| (k, s)))
+        .collect::<Option<_>>()
+        .ok_or_else(lost)?;
+    let seed_of = |k: u16| &seeds.iter().find(|(x, _)| *x == k).expect("every kind seeded").1;
+    let id_of = |o: &[u8]| u64::from_le_bytes(o[0x10..0x18].try_into().unwrap_or_default());
+    let mut next = seed_graphics.iter().chain(&named).map(|(_, o, _)| id_of(o)).max().unwrap_or(0) + 1;
+    // Levels: the seed's (by name), and one more for each other layer.
+    let level_seed =
+        named.iter().find(|(k, o, _)| *k as u16 == 95 && u32_at(o, 0x0c) == Some(1)).cloned().ok_or_else(lost)?;
+    let mut levels: Vec<(String, u32)> = named
+        .iter()
+        .filter(|(k, o, _)| *k as u16 == 95 && u32_at(o, 0x0c) == Some(1))
+        .filter_map(|(_, o, a)| Some((level_name(&o[*a..])?.to_ascii_lowercase(), u32_at(o, 0x20)?)))
+        .collect();
+    let default = levels.first().map_or(64, |l| l.1);
+    let mut level_id = levels.iter().map(|l| l.1).max().unwrap_or(64) + 1;
+    for layer in doc.layers() {
+        let key = layer.name.to_ascii_lowercase();
+        if key == "0" || levels.iter().any(|(n, _)| *n == key) {
+            continue;
+        }
+        let mut o = level_seed.1[..level_seed.2].to_vec();
+        let attributes = (o.len() / 2) as u32;
+        o.extend(name_linkage(&layer.name));
+        let words = (o.len() / 2) as u32;
+        o[4..8].copy_from_slice(&words.to_le_bytes());
+        o[8..12].copy_from_slice(&attributes.to_le_bytes());
+        o[0x10..0x18].copy_from_slice(&next.to_le_bytes());
+        o[0x20..0x24].copy_from_slice(&level_id.to_le_bytes());
+        o[0x48..0x4c].copy_from_slice(&u32::from(layer.color).to_le_bytes());
+        o[0x5c..0x60].copy_from_slice(&level_id.to_le_bytes());
+        let a = attributes as usize * 2;
+        named.push((level_seed.0, o, a));
+        levels.push((key, level_id));
+        next += 1;
+        level_id += 1;
+    }
+    // The model's elements.
+    let model_id = id_of(&seed_of(3).1);
+    let mut out: Vec<Vec<u8>> = Vec::new();
+    let (mut low, mut high) = ([f64::MAX; 2], [f64::MIN; 2]);
+    let f = |v: f64| v.to_le_bytes();
+    for e in doc.space_in_draw_order(oxidraft_model::MODEL) {
+        let key = e.layer.to_ascii_lowercase();
+        let level = levels.iter().find(|(n, _)| *n == key).map_or(default, |l| l.1);
+        let color = match e.color {
+            Color::Index(i) => u32::from(i),
+            Color::ByBlock => 0xffff_fffe,
+            _ => 0xffff_ffff,
+        };
+        for g in doc.expanded(e) {
+            let b = g.bounds();
+            let (lo, hi) = (uor(b.min), uor(b.max));
+            let range = [lo[0].floor() as i64, lo[1].floor() as i64, hi[0].ceil() as i64, hi[1].ceil() as i64];
+            (low, high) = ([low[0].min(lo[0]), low[1].min(lo[1])], [high[0].max(hi[0]), high[1].max(hi[1])]);
+            let point = |p: Point| uor(p).iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+            let mut push = |kind: u16, fields: Vec<u8>| {
+                let mut o = made(seed_of(kind), &fields, next, level, color, range);
+                o[0x18..0x20].copy_from_slice(&model_id.to_le_bytes());
+                out.push(o);
+                next += 1;
+            };
+            let points = |pts: &[Point]| {
+                let mut d = (pts.len() as u32).to_le_bytes().to_vec();
+                d.extend([0u8; 4]);
+                for p in pts {
+                    d.extend(point(*p));
+                }
+                d
+            };
+            match &g {
+                Geometry::Point { position } => push(3, [point(*position), point(*position)].concat()),
+                Geometry::Line { start, end } => push(3, [point(*start), point(*end)].concat()),
+                Geometry::Polyline { vertices, closed } if vertices.iter().all(|v| v.bulge == 0.0) => {
+                    let mut pts: Vec<Point> = vertices.iter().map(|v| v.point).collect();
+                    if *closed && pts.len() >= 3 {
+                        pts.push(pts[0]);
+                        push(6, points(&pts));
+                    } else if pts.len() >= 2 {
+                        push(4, points(&pts));
+                    }
+                }
+                Geometry::Circle { center, radius } => push(
+                    15,
+                    [f(radius * per), f(radius * per), f(0.0)].concat().into_iter().chain(point(*center)).collect(),
+                ),
+                Geometry::Arc { center, radius, start_angle, end_angle } => {
+                    let sweep = (end_angle - start_angle).rem_euclid(360.0);
+                    let d: Vec<u8> =
+                        [f(start_angle.to_radians()), f(sweep.to_radians()), f(radius * per), f(radius * per), f(0.0)]
+                            .concat()
+                            .into_iter()
+                            .chain(point(*center))
+                            .collect();
+                    push(16, d);
+                }
+                Geometry::Ellipse(el) => {
+                    let (a, turn) = (el.major.length(), el.major.y.atan2(el.major.x));
+                    let axes = [f(a * per), f(a * el.ratio * per)].concat();
+                    if el.is_full() {
+                        push(15, [axes, f(turn).to_vec(), point(el.center)].concat());
+                    } else {
+                        let sweep = (el.end - el.start).rem_euclid(360.0);
+                        let head = [f(el.start.to_radians()), f(sweep.to_radians())].concat();
+                        push(16, [head, axes, f(turn).to_vec(), point(el.center)].concat());
+                    }
+                }
+                Geometry::Text { position, height, rotation, content, .. } => {
+                    // The seed's text fields (font, justification and the
+                    // rest) with this one's size, turn, place and text.
+                    let latin = content.chars().all(|c| u32::from(c) < 256);
+                    let mut text: Vec<u8> = if content.is_ascii() {
+                        content.bytes().collect()
+                    } else if latin {
+                        [0xff, 0xfe, 1, 0].into_iter().chain(content.chars().map(|c| u32::from(c) as u8)).collect()
+                    } else {
+                        content.chars().map(|c| if c.is_ascii() { c as u8 } else { b'?' }).collect()
+                    };
+                    text.truncate(0xffff);
+                    let mut d = seed_of(17).1[0x68..0xaa].to_vec();
+                    let mult = height * per / (6.0 / 1000.0);
+                    d[0x6e - 0x68..0x70 - 0x68].copy_from_slice(&(text.len() as u16).to_le_bytes());
+                    d[0x70 - 0x68..0x78 - 0x68].copy_from_slice(&f(mult));
+                    d[0x78 - 0x68..0x80 - 0x68].copy_from_slice(&f(mult));
+                    d[0x90 - 0x68..0x98 - 0x68].copy_from_slice(&f(rotation.to_radians()));
+                    d[0x98 - 0x68..0xa8 - 0x68].copy_from_slice(&point(*position));
+                    d[0xa8 - 0x68..0xaa - 0x68].copy_from_slice(&0u16.to_le_bytes());
+                    d.extend(text);
+                    push(17, d);
+                }
+                // Everything else as line strings of its segments.
+                _ => {
+                    let mut pts: Vec<Point> = Vec::new();
+                    for seg in g.segments() {
+                        let n = match &seg {
+                            oxidraft_geom::curve::Seg::Arc(a) => ((a.sweep.abs() / 10.0).ceil() as usize).max(2),
+                            _ => 1,
+                        };
+                        for k in 0..=n {
+                            let p = seg.point_at(k as f64 / n as f64);
+                            if pts.last().is_none_or(|q| !q.approx_eq(p)) {
+                                pts.push(p);
+                            }
+                        }
+                    }
+                    if pts.len() >= 2 {
+                        push(4, points(&pts));
+                    }
+                }
+            }
+        }
+    }
+    // The model's extents in its header, the highest ID in the file's.
+    let models = storage_mut(&mut cfb.root, "Dgn-Md").ok_or_else(lost)?;
+    let model = storage_mut(models, "#000000").ok_or_else(lost)?;
+    let mut header = stream(model, "Dgn~Mh").and_then(|h| inflate(&h)).ok_or_else(lost)?;
+    if low[0] <= high[0] {
+        // The type-66 object ends the stream; its extents at 0x90.
+        let at = (0..header.len().saturating_sub(16)).step_by(4).find(|&d| {
+            let r = d + 4;
+            u32_at(&header, d) == Some(0)
+                && u32_at(&header, r).is_some_and(|k| k as u16 == 66)
+                && u32_at(&header, r + 4).is_some_and(|w| r + 2 * w as usize == header.len())
+        });
+        if let Some(d) = at {
+            let r = d + 4 + 0x90;
+            for (k, v) in [low[0], low[1], 0.0, high[0], high[1], 0.0].into_iter().enumerate() {
+                header[r + 8 * k..r + 8 * k + 8].copy_from_slice(&(v.round() as i64).to_le_bytes());
+            }
+        }
+    }
+    // The model named Default, with no description (the seed's were
+    // my_model and my_description): its header's two name linkages.
+    let mut at = 0;
+    while let Some(k) = (at..header.len().saturating_sub(4)).find(|&k| header[k + 2..k + 4] == [0xd2, 0x56]) {
+        let size = 2 * (usize::from(header[k]) + 1);
+        let room = size.saturating_sub(12);
+        let payload: Vec<u8> = match u32_at(&header, k + 4) {
+            Some(1) => [0xff, 0xfd].into_iter().chain("Default".encode_utf16().flat_map(u16::to_le_bytes)).collect(),
+            _ => vec![0xff, 0xfd],
+        };
+        if payload.len() <= room && k + size <= header.len() {
+            header[k + 8..k + 12].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+            header[k + 12..k + size].fill(0);
+            header[k + 12..k + 12 + payload.len()].copy_from_slice(&payload);
+        }
+        at = k + size.max(4);
+    }
+    set_stream(model, "Dgn~Mh", &deflate(&header));
+    if let Some(g) = storage_mut(model, "Dgn^G") {
+        set_stream(g, "$1", &write_page(&out));
+    }
+    // The model index: its one entry, named Default too.
+    if let Some(ix) = storage_mut(&mut cfb.root, "Dgn^Ix")
+        && let Some(index) = stream(ix, "Dgn~Mix").and_then(|d| inflate(&d))
+        && index.len() >= 48
+    {
+        let name: Vec<u8> = "Default".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let mut entry = index[16..48].to_vec();
+        // The name, and a description of one blank (four-byte aligned).
+        entry[0x10..0x12].copy_from_slice(&((32 + name.len() + 2) as u16).to_le_bytes());
+        entry[0x12..0x14].copy_from_slice(&(name.len() as u16).to_le_bytes());
+        entry[0x14..0x18].copy_from_slice(&2u32.to_le_bytes());
+        entry.extend(&name);
+        entry.extend([0, 0]);
+        let mut out = index[..16].to_vec();
+        out[8..12].copy_from_slice(&1u32.to_le_bytes());
+        out.extend(entry);
+        set_stream(ix, "Dgn~Mix", &deflate(&out));
+    }
+    if let Some(n) = storage_mut(&mut cfb.root, "Dgn^Nm") {
+        let objects: Vec<Vec<u8>> = named.into_iter().map(|(_, o, _)| o).collect();
+        set_stream(n, "$1", &write_page(&objects));
+    }
+    if let Some(h) = stream(&cfb.root, "Dgn~H")
+        && let Some(mut body) = h.get(0x14..).and_then(inflate)
+        && body.len() >= 0x130
+    {
+        body[0x128..0x130].copy_from_slice(&(next - 1).to_le_bytes());
+        let mut raw = h[..0x14].to_vec();
+        raw.extend(deflate(&body));
+        set_stream(&mut cfb.root, "Dgn~H", &raw);
+    }
+    Ok(cfb.encode())
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use oxidraft_io_dwg::compound_file::{BinaryRecord, CompoundFile, CompoundStream, CompoundStreamContent};
+    use oxidraft_io_dwg::compound_file::{CompoundFile, CompoundStream};
     use std::io::Write;
 
     fn zlib(d: &[u8]) -> Vec<u8> {
@@ -496,10 +840,96 @@ pub(crate) mod tests {
         assert!(read_dgn8(b"not a compound file").is_err());
     }
 
+    #[test]
+    fn written_as_v8_and_read_back() {
+        use oxidraft_model::{Color, Document, Layer};
+        let mut doc = Document::new();
+        doc.add_layer(Layer::new("Walls", 1));
+        let p = |x: f64, y: f64| Point::new(x, y);
+        doc.add_on_layer(Geometry::Line { start: p(0.0, 0.0), end: p(100.0, 50.0) }, "Walls", Color::ByLayer);
+        doc.add(Geometry::Polyline {
+            vertices: [p(0.0, 0.0), p(10.0, 0.0), p(10.0, 10.0)].map(Vertex::at).to_vec(),
+            closed: true,
+        });
+        doc.add(Geometry::Circle { center: p(20.0, 20.0), radius: 5.0 });
+        doc.add(Geometry::Arc { center: p(50.0, 0.0), radius: 10.0, start_angle: 30.0, end_angle: 120.0 });
+        let mut el = Ellipse::full(p(0.0, 40.0), p(8.0, 0.0), 0.5);
+        (el.start, el.end) = (0.0, 90.0);
+        doc.add(Geometry::Ellipse(el));
+        doc.add_on_layer(
+            Geometry::Text {
+                position: p(5.0, 60.0),
+                height: 2.5,
+                rotation: 30.0,
+                width: 0.0,
+                attach: Attach::BottomLeft,
+                content: "Säule".into(),
+                look: Default::default(),
+            },
+            "Walls",
+            Color::Index(3),
+        );
+        doc.add(Geometry::Polyline {
+            vertices: vec![Vertex::new(p(0.0, 0.0), 1.0), Vertex::at(p(10.0, 0.0))],
+            closed: false,
+        });
+        let data = write_dgn8(&doc).unwrap();
+        let got = read_dgn8(&data).unwrap();
+        assert_eq!(got.len(), 7, "{got:?}");
+        assert!(
+            matches!(&got[0], (Geometry::Line { end, .. }, layer, 0) if end.approx_eq(p(100.0, 50.0)) && layer == "Walls")
+        );
+        assert!(
+            matches!(&got[1], (Geometry::Polyline { vertices, closed: true }, layer, 0) if vertices.len() == 3 && layer == "Default")
+        );
+        assert!(
+            matches!(&got[2], (Geometry::Circle { center, radius }, ..) if center.approx_eq(p(20.0, 20.0)) && (radius - 5.0).abs() < 1e-9)
+        );
+        assert!(
+            matches!(&got[3], (Geometry::Arc { start_angle, end_angle, .. }, ..) if (start_angle - 30.0).abs() < 1e-9 && (end_angle - 120.0).abs() < 1e-9)
+        );
+        assert!(
+            matches!(&got[4], (Geometry::Ellipse(e), ..) if e.major.approx_eq(p(8.0, 0.0)) && (e.ratio - 0.5).abs() < 1e-9 && (e.end - 90.0).abs() < 1e-9)
+        );
+        assert!(matches!(&got[5], (Geometry::Text { content, height, rotation, .. }, layer, 3)
+            if content == "Säule" && (height - 2.5).abs() < 1e-9 && (rotation - 30.0).abs() < 1e-9 && layer == "Walls"));
+        assert!(
+            matches!(&got[6], (Geometry::Polyline { vertices, closed: false }, ..) if vertices.len() > 3),
+            "the bulge as a line string"
+        );
+        // In the file: every object framed whole, IDs one each, the highest
+        // in the header; none of the seed's own elements.
+        let root = StructuredStoragePayload::decode(&data).compound_file.unwrap().root;
+        let model = storage(storage(&root, "Dgn-Md").unwrap(), "#000000").unwrap();
+        let page = pages(storage(model, "Dgn^G").unwrap()).remove(0);
+        let objs = objects(&page);
+        assert_eq!(objs.len() as u32, u32_at(&page, 0).unwrap());
+        let named = objects(&pages(storage(&root, "Dgn^Nm").unwrap()).remove(0));
+        let mut ids: Vec<u64> =
+            objs.iter().chain(&named).map(|(_, o, _)| u64::from_le_bytes(o[0x10..0x18].try_into().unwrap())).collect();
+        let highest = *ids.iter().max().unwrap();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), objs.len() + named.len(), "no ID twice");
+        let h = stream(&root, "Dgn~H").unwrap();
+        let body = inflate(&h[0x14..]).unwrap();
+        assert_eq!(u64::from_le_bytes(body[0x128..0x130].try_into().unwrap()), highest);
+        assert!(!got.iter().any(|(g, _, _)| matches!(g, Geometry::Text { content, .. } if content == "myTéxt")));
+        // The model named Default, in its index and its header.
+        let utf16 = |t: &str| t.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>();
+        let has = |b: &[u8], n: &[u8]| b.windows(n.len()).any(|w| w == n);
+        let index = inflate(&stream(storage(&root, "Dgn^Ix").unwrap(), "Dgn~Mix").unwrap()).unwrap();
+        assert_eq!(index.len(), 16 + 32 + 16);
+        assert_eq!(u16::from_le_bytes([index[16 + 0x10], index[16 + 0x11]]) as usize, index.len() - 16);
+        assert!(has(&index, &utf16("Default")) && !has(&index, &utf16("my_model")));
+        let header = inflate(&stream(model, "Dgn~Mh").unwrap()).unwrap();
+        assert!(has(&header, &utf16("Default")) && !has(&header, &utf16("my_")));
+    }
+
     /// GDAL's V8 test drawing, its contents as GDAL's reference lists them.
     #[test]
     fn gdals_v8_drawing() {
-        let got = read_dgn8(include_bytes!("../tests/fixtures/dgnv8/test_dgnv8.dgn")).unwrap();
+        let got = read_dgn8(include_bytes!("../assets/dgn/seed_v8.dgn")).unwrap();
         let p = |x: f64, y: f64| Point::new(x, y);
         let has = |want: &dyn Fn(&Geometry) -> bool| got.iter().filter(|(g, _, _)| want(g)).count();
         // A point on level 1 (color 3), the rest on level 64, "Default".
