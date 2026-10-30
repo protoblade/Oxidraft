@@ -376,9 +376,11 @@ pub(crate) fn restore(cad: &CadDocument, imported: &mut Imported) {
             _ => None,
         };
         n += 1;
+        let mut picture_file = None;
         let shown = match picture.and_then(|f| extension(&f).map(|x| (f, x))) {
             Some((file, ext)) => {
                 let stored = doc.embed_file(&format!("OLE{n}.{ext}"), file);
+                picture_file = Some(stored.clone());
                 let name = (n..).map(|i| format!("OLE{i}")).find(|d| doc.image_def(d).is_none()).unwrap_or_default();
                 doc.set_image_def(ImageDef {
                     name: name.clone(),
@@ -414,8 +416,17 @@ pub(crate) fn restore(cad: &CadDocument, imported: &mut Imported) {
         // The document it embeds (a spreadsheet, a text, slides), kept in
         // the drawing and opened from it (Cmd/Ctrl-click), as AutoCAD opens
         // an OLE object in the program that made it.
+        let kind = acadrust::entities::ole_presentation::ole_user_type(&o.encoded_payload());
+        // A picture object (Paintbrush's and the like): its picture, to edit
+        // in a picture editor (the image follows).
+        if let (None, Some(stored)) = (document(o), &picture_file) {
+            let link = Hyperlink {
+                url: format!("{EMBEDDED_PREFIX}{stored}"),
+                description: kind.clone().unwrap_or_else(|| stored.clone()),
+            };
+            doc.update(shown, |e| e.hyperlink = Some(Box::new(link)));
+        }
         if let Some((file, ext)) = document(o) {
-            let kind = acadrust::entities::ole_presentation::ole_user_type(&o.encoded_payload());
             let stored = doc.embed_file(&format!("OLE{n}.{ext}"), file);
             let link = Hyperlink {
                 url: format!("{EMBEDDED_PREFIX}{stored}"),
@@ -507,6 +518,9 @@ mod tests {
         let def = back.image_def(&name).unwrap();
         let file = def.path.strip_prefix(oxidraft_io_dxf::EMBEDDED_PREFIX).unwrap();
         assert_eq!(back.embedded_file(file), Some(png.as_slice()));
+        // Linked to its picture, to edit in a picture editor.
+        let linked = back.entities().find_map(|e| e.hyperlink.as_ref().map(|l| l.url.clone()));
+        assert_eq!(linked, Some(def.path.clone()));
         // Saved, the picture goes with the drawing.
         let again = crate::read(&crate::write(&back, crate::Version::R2018).unwrap()).unwrap().imported.document;
         assert_eq!(again.embedded_file(file), Some(png.as_slice()));

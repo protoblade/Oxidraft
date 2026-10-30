@@ -231,6 +231,14 @@ impl OxidraftApp {
             if self.doc.embedded_file(&name).is_some_and(|b| b != bytes.as_slice())
                 && self.doc.update_embedded_file(&name, bytes)
             {
+                // Images showing it show it as it is now.
+                crate::xref::copy_out_embedded(&self.doc);
+                let url = format!("{}{name}", oxidraft_io_dxf::EMBEDDED_PREFIX);
+                let images: Vec<String> =
+                    self.doc.image_defs().filter(|d| d.path == url).map(|d| d.name.clone()).collect();
+                for image in images {
+                    self.load_image(&image);
+                }
                 self.engine.log(format!("{name} was changed: what's in the drawing now is what was saved."));
             }
         }
