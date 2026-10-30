@@ -4,12 +4,22 @@
 //! WIPEOUTVARIABLES). Read from drawings Oxidraft didn't write; for those
 //! it did, its own record says (oxidraft_io_dwg writes both).
 
-use oxidraft_model::Document;
 use oxidraft_model::annotation::{LeaderArrow, TagShape};
+use oxidraft_model::{Document, MODEL};
 
 use crate::layout_dxf::RawLayouts;
 
 pub(crate) fn read(doc: &mut Document, raw: &RawLayouts) {
+    // Paper space views, on the first layout (Oxidraft's own record says
+    // which, for its own).
+    if let Some(first) = doc.layouts().iter().min_by_key(|l| l.tab_order).map(|l| l.id) {
+        for (name, _) in raw.views.iter().filter(|(_, f)| f & 1 != 0) {
+            if let Some(mut v) = doc.views().iter().find(|v| &v.name == name && v.space == MODEL).cloned() {
+                v.space = first;
+                let _ = doc.save_view(v);
+            }
+        }
+    }
     let ours = raw.apps.iter().any(|a| a.to_ascii_uppercase().starts_with("OXIDRAFT"))
         || raw.dictionaries.values().flatten().any(|(n, _)| n == crate::SETTINGS_RECORD);
     if ours {
@@ -85,6 +95,13 @@ pub(crate) fn read(doc: &mut Document, raw: &RawLayouts) {
         }
     }
     doc.set_annotation_styles(l, t);
+    // PDFFRAME and ANNOALLVISIBLE, where the variable dictionary has them.
+    if let Some(f) = variable("PDFFRAME").and_then(|v| v.parse::<u8>().ok()) {
+        doc.set_picture_frame(true, f);
+    }
+    if let Some(on) = variable("ANNOALLVISIBLE").and_then(|v| v.parse::<i32>().ok()) {
+        doc.set_anno_all_visible(on != 0);
+    }
     for (kind, _, p) in &raw.setting_objects {
         let frame = p.iter().find(|(c, _)| *c == 70).and_then(|(_, v)| v.trim().parse::<u8>().ok());
         match (kind.as_str(), frame) {

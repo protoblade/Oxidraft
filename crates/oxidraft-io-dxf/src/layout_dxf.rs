@@ -65,6 +65,8 @@ pub(crate) struct RawLayouts {
     /// $CTABLESTYLE), and the applications registered (APPID).
     pub header: HashMap<String, String>,
     pub apps: Vec<String>,
+    /// Each named view's name and flags (1: a paper space view).
+    pub views: Vec<(String, i32)>,
 }
 
 fn paper(plot: &[(i32, &str)]) -> Paper {
@@ -164,6 +166,12 @@ pub(crate) fn read(dxf: &[u8]) -> RawLayouts {
                             out.header.insert(name.to_string(), value.to_string());
                         }
                     }
+                }
+            }
+            "VIEW" if section == "TABLES" => {
+                if let Some(name) = body.iter().find(|p| p.0 == 2) {
+                    let flags = body.iter().find(|p| p.0 == 70).and_then(|p| p.1.parse().ok()).unwrap_or(0);
+                    out.views.push((name.1.to_string(), flags));
                 }
             }
             "APPID" if section == "TABLES" => {

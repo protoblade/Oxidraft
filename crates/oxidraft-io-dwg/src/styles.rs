@@ -5,7 +5,9 @@
 //! RASTERVARIABLES and WIPEOUTVARIABLES, and LIMCHECK.
 
 use acadrust::entities::{Line, LwPolyline};
-use acadrust::objects::{Dictionary, LeaderContentType, ObjectType, RasterVariables, TableStyle, WipeoutVariables};
+use acadrust::objects::{
+    Dictionary, DictionaryVariable, LeaderContentType, ObjectType, RasterVariables, TableStyle, WipeoutVariables,
+};
 use acadrust::types::{Color, DxfVersion, Handle, Vector2, Vector3};
 use acadrust::{CadDocument, EntityType};
 use oxidraft_model::annotation::{DEFAULT_LEADER_STYLE, LeaderArrow};
@@ -104,8 +106,50 @@ fn standard_table_style(cad: &mut CadDocument) -> Handle {
     h
 }
 
+/// A variable in AutoCAD's AcDbVariableDictionary (a DICTIONARYVAR), as
+/// AutoCAD keeps the drawing's newer variables.
+fn set_variable(cad: &mut CadDocument, name: &str, value: &str) {
+    let dict = named_object(cad, "AcDbVariableDictionary", |h, owner| {
+        let mut d = Dictionary::new();
+        (d.handle, d.owner) = (h, owner);
+        ObjectType::Dictionary(d)
+    });
+    let existing = match cad.objects.get(&dict) {
+        Some(ObjectType::Dictionary(d)) => d.get(name),
+        _ => None,
+    };
+    if let Some(ObjectType::DictionaryVariable(v)) = existing.and_then(|h| cad.objects.get_mut(&h)) {
+        v.value = value.to_string();
+        return;
+    }
+    let h = cad.allocate_handle();
+    let mut v = DictionaryVariable::new(name, value);
+    (v.handle, v.owner_handle) = (h, dict);
+    cad.objects.insert(h, ObjectType::DictionaryVariable(v));
+    if let Some(ObjectType::Dictionary(d)) = cad.objects.get_mut(&dict) {
+        d.add_entry(name, h);
+    }
+}
+
 pub(crate) fn finish(cad: &mut CadDocument, doc: &Document, version: DxfVersion) {
     cad.header.limit_check = doc.limits_check();
+    // Views on layouts: paper space views.
+    for v in doc.views().iter().filter(|v| v.space != oxidraft_model::MODEL) {
+        if let Some(view) = cad.views.get_mut(&v.name) {
+            view.paper_space = true;
+        }
+    }
+    // NATIVESAVE: PDFFRAME and ANNOALLVISIBLE as variables in AutoCAD's
+    // variable dictionary, where AutoCAD keeps its newer ones (where it
+    // keeps these two isn't published).
+    if crate::native_objects() {
+        if doc.picture_frame(true) != 1 {
+            set_variable(cad, "PDFFRAME", &doc.picture_frame(true).to_string());
+        }
+        if !doc.anno_all_visible() {
+            set_variable(cad, "ANNOALLVISIBLE", "0");
+        }
+    }
     // The multileader style: AutoCAD 2007's MLEADERSTYLE.
     let l = doc.leader_style();
     let leaders = doc.all_entities().any(|e| matches!(e.geometry, Geometry::Leader { .. }));
@@ -166,10 +210,66 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document, version: DxfVersion)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acadrust::objects::{DictionaryVariable, MultiLeaderStyle};
+    use acadrust::objects::MultiLeaderStyle;
     use oxidraft_geom::Point;
     use oxidraft_model::annotation::LeaderStyle;
     use std::io::Cursor;
+
+    /// `cad` without Oxidraft's own record and applications, as AutoCAD
+    /// would have it.
+    fn without_oxidraft(cad: &mut CadDocument) {
+        let root = cad.header.named_objects_dict_handle;
+        if let Some(ObjectType::Dictionary(d)) = cad.objects.get_mut(&root) {
+            d.entries.retain(|(n, _)| !n.starts_with("OXIDRAFT"));
+        }
+        let ours: Vec<String> =
+            cad.app_ids.iter().map(|a| a.name.clone()).filter(|n| n.starts_with("OXIDRAFT")).collect();
+        for name in ours {
+            cad.app_ids.remove(&name);
+        }
+    }
+
+    #[test]
+    fn views_on_layouts_and_variables_in_autocads_form() {
+        let mut doc = Document::new();
+        doc.add(Geometry::Line { start: Point::ORIGIN, end: Point::new(10.0, 0.0) });
+        let paper = oxidraft_model::Paper { width: 420.0, height: 297.0, millimeters: true, ..Default::default() };
+        let space = doc.add_layout(oxidraft_model::layout::Layout { id: 0, name: "Sheet".into(), tab_order: 1, paper });
+        let view = oxidraft_model::NamedView {
+            name: "Detail".into(),
+            center: Point::new(5.0, 5.0),
+            height: 20.0,
+            width: 30.0,
+            space,
+        };
+        doc.save_view(view).unwrap();
+        doc.set_picture_frame(true, 0);
+        doc.set_anno_all_visible(false);
+        crate::set_native_objects(true);
+        let dwg = crate::write(&doc, crate::Version::R2018);
+        crate::set_native_objects(false);
+        let mut cad = acadrust::DwgReader::from_stream(Cursor::new(dwg.unwrap())).read().unwrap();
+        assert!(cad.views.get("Detail").unwrap().paper_space);
+        let root = cad.header.named_objects_dict_handle;
+        let variable = |cad: &CadDocument, name: &str| {
+            let Some(ObjectType::Dictionary(r)) = cad.objects.get(&root) else { return None };
+            let Some(ObjectType::Dictionary(d)) = cad.objects.get(&r.get("AcDbVariableDictionary")?) else {
+                return None;
+            };
+            match cad.objects.get(&d.get(name)?) {
+                Some(ObjectType::DictionaryVariable(v)) => Some(v.value.clone()),
+                _ => None,
+            }
+        };
+        assert_eq!(variable(&cad, "PDFFRAME").as_deref(), Some("0"));
+        assert_eq!(variable(&cad, "ANNOALLVISIBLE").as_deref(), Some("0"));
+        // As AutoCAD would save it: read from AutoCAD's own forms.
+        without_oxidraft(&mut cad);
+        let back = crate::read(&acadrust::DwgWriter::write_to_vec(&cad).unwrap()).unwrap().imported.document;
+        let layout = back.layouts().into_iter().find(|l| l.name == "Sheet").unwrap().id;
+        assert_eq!(back.views().iter().find(|v| v.name == "Detail").map(|v| v.space), Some(layout));
+        assert_eq!((back.picture_frame(true), back.anno_all_visible()), (0, false));
+    }
 
     #[test]
     fn autocads_current_multileader_style_comes_in() {
