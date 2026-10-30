@@ -243,9 +243,16 @@ fn recognize(png: &[u8]) -> Result<Vec<Read>, String> {
     run().map_err(|e| format!("Handwriting couldn't be read: {}", e.message()))
 }
 
-/// Elsewhere, Tesseract's (the `tesseract` command), where it's installed.
+/// Elsewhere, Tesseract's.
 #[cfg(not(any(target_os = "macos", windows)))]
 fn recognize(png: &[u8]) -> Result<Vec<Read>, String> {
+    tesseract(png)
+}
+
+/// Tesseract's reading of `png` (the `tesseract` command, where it's
+/// installed).
+#[cfg_attr(any(target_os = "macos", windows), allow(dead_code))]
+fn tesseract(png: &[u8]) -> Result<Vec<Read>, String> {
     let file = std::env::temp_dir().join(format!("oxidraft-markup-{}.png", std::process::id()));
     std::fs::write(&file, png).map_err(|e| e.to_string())?;
     let size = image::load_from_memory(png).map(|i| (i.width(), i.height())).map_err(|e| e.to_string())?;
@@ -362,25 +369,25 @@ mod tests {
     }
 
     /// The flow every system's recognition goes through, with Tesseract's
-    /// rows (as its TSV gives them, made here for this plot's words): the
-    /// red ink's line, then the grays' less the plot's own and what the ink
-    /// already gave.
+    /// word rows for this plot's two pictures (as Tesseract 5.5.3 gives
+    /// them): the red ink's line, then the grays' less the plot's own and
+    /// what the ink already gave.
     #[test]
     fn markups_from_tesseracts_rows() {
         let p = oxidraft_raster::render_pdf_data(plot(), 0, 150.0).unwrap();
         let size = (p.width, p.height);
         const HEAD: &str =
             "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n";
-        let ink = "5\t1\t1\t1\t1\t1\t125\t148\t190\t60\t93\tMove\n\
-                   5\t1\t1\t1\t1\t2\t330\t148\t150\t60\t92\tdoor\n\
-                   5\t1\t1\t1\t1\t3\t495\t148\t210\t60\t94\there\n";
-        let gray = "5\t1\t1\t1\t1\t1\t125\t148\t190\t60\t90\tMove\n\
-                    5\t1\t1\t1\t1\t2\t330\t148\t150\t60\t91\tdoor\n\
-                    5\t1\t1\t1\t1\t3\t495\t148\t210\t60\t92\there\n\
-                    5\t1\t2\t1\t1\t1\t125\t523\t150\t60\t96\tPLAN\n\
-                    5\t1\t2\t1\t1\t2\t290\t523\t140\t60\t95\tVIEW\n\
-                    5\t1\t3\t1\t1\t1\t687\t702\t160\t50\t89\tCheck\n\
-                    5\t1\t3\t1\t1\t2\t860\t702\t90\t50\t90\tthis\n";
+        let ink = "5\t1\t1\t1\t1\t1\t131\t148\t195\t62\t96.665024\tMove\n\
+                   5\t1\t1\t1\t1\t2\t355\t148\t163\t62\t96.302551\tdoor\n\
+                   5\t1\t1\t1\t1\t3\t547\t148\t158\t62\t96.657158\there\n";
+        let gray = "5\t1\t1\t1\t1\t1\t131\t149\t194\t60\t95.845856\tMove\n\
+                    5\t1\t1\t1\t1\t2\t355\t149\t163\t60\t96.489403\tdoor\n\
+                    5\t1\t1\t1\t1\t3\t547\t149\t158\t60\t96.495827\there\n\
+                    5\t1\t2\t1\t1\t1\t132\t523\t204\t60\t96.467972\tPLAN\n\
+                    5\t1\t2\t1\t1\t2\t368\t523\t209\t60\t96.693848\tVIEW\n\
+                    5\t1\t3\t1\t1\t1\t690\t701\t186\t50\t96.421425\tCheck\n\
+                    5\t1\t3\t1\t1\t2\t896\t702\t100\t49\t96.098969\tthis\n";
         let calls = std::cell::Cell::new(0);
         let read = read_markups_by(&p, &["PLAN VIEW".to_string()], &|png| {
             let picture = image::load_from_memory(png).map_err(|e| e.to_string())?;
@@ -391,6 +398,20 @@ mod tests {
         })
         .unwrap();
         assert_eq!(calls.get(), 2, "the red ink, then all of it");
+        let texts: Vec<&str> = read.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts, ["Move door here", "Check this"], "{read:?}");
+        assert!((read[0].min.0 - 0.1).abs() < 0.03 && (read[0].min.1 - 0.75).abs() < 0.05, "{read:?}");
+    }
+
+    /// Tesseract's own reading, as Linux has it, where it's installed.
+    #[test]
+    fn the_markups_read_by_tesseract() {
+        if std::process::Command::new("tesseract").arg("--version").output().is_err() {
+            eprintln!("tesseract isn't installed: not tried");
+            return;
+        }
+        let p = oxidraft_raster::render_pdf_data(plot(), 0, 150.0).unwrap();
+        let read = read_markups_by(&p, &["PLAN VIEW".to_string()], &tesseract).unwrap();
         let texts: Vec<&str> = read.iter().map(|r| r.text.as_str()).collect();
         assert_eq!(texts, ["Move door here", "Check this"], "{read:?}");
         assert!((read[0].min.0 - 0.1).abs() < 0.03 && (read[0].min.1 - 0.75).abs() < 0.05, "{read:?}");
