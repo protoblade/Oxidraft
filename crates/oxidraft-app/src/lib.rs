@@ -33,6 +33,8 @@ mod layer_walk;
 mod layers;
 mod layouts;
 mod lisp;
+mod lisp_ents;
+mod lisp_host;
 mod manage;
 mod more_app;
 mod named_views;

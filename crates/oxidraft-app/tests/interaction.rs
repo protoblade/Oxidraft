@@ -3251,3 +3251,86 @@ fn autolisp_at_the_command_line_and_from_a_file() {
     assert!(history(&mut h).iter().any(|l| l.starts_with("; error: bad argument type")));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn autolisp_programs_ask_the_user_and_change_objects() {
+    let mut h = app_with_line();
+    let dir = std::env::temp_dir().join(format!("oxidraft-lisp-ask-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("tools.lsp");
+    std::fs::write(
+        &file,
+        r#"(defun c:RING (/ c r)
+  (setq c (getpoint "Center: "))
+  (setq r (getdist c "Radius: "))
+  (command "_.CIRCLE" c r)
+  (princ))
+(defun c:REDDEN (/ ss i e)
+  (if (setq ss (ssget '((0 . "LINE"))))
+    (repeat (setq i (sslength ss))
+      (setq e (entget (ssname ss (setq i (1- i)))))
+      (entmod (subst (cons 8 "Red") (assoc 8 e) e))))
+  (princ))
+(defun c:TWOPT () (command "_.LINE" pause pause "") (princ))
+"#,
+    )
+    .unwrap();
+    h.state_mut().load_lisp(&file);
+    let circles = |h: &mut Harness<'_, OxidraftApp>| {
+        h.state_mut()
+            .document_mut()
+            .entities()
+            .filter_map(|e| match e.geometry {
+                Geometry::Circle { center, radius } => Some((center, radius, e.layer.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // getpoint and getdist wait for what's typed.
+    h.state_mut().type_command("ring");
+    assert_eq!(h.state_mut().engine_mut().prompt(), "Center:");
+    h.state_mut().type_command("50,50");
+    assert_eq!(h.state_mut().engine_mut().prompt(), "Radius:");
+    h.state_mut().type_command("5");
+    h.run();
+    assert_eq!(circles(&mut h), [(Point::new(50.0, 50.0), 5.0, "0".to_string())]);
+
+    // ssget with a filter, then entget, subst and entmod.
+    h.state_mut().type_command("redden");
+    h.state_mut().type_command("all");
+    h.state_mut().type_command("");
+    h.run();
+    let doc = h.state_mut().document_mut();
+    assert!(doc.entities().filter(|e| matches!(e.geometry, Geometry::Line { .. })).all(|e| e.layer == "Red"));
+    assert!(doc.layer("Red").is_some(), "entmod made the layer");
+    assert_eq!(circles(&mut h)[0].2, "0", "the filter left the circle out");
+
+    // PAUSE waits for each point.
+    let before = h.state_mut().document_mut().len();
+    h.state_mut().type_command("twopt");
+    h.state_mut().type_command("0,0");
+    h.state_mut().type_command("10,10");
+    h.run();
+    let doc = h.state_mut().document_mut();
+    assert_eq!(doc.len(), before + 1);
+    assert!(
+        matches!(doc.entities().last().unwrap().geometry, Geometry::Line { end, .. } if end == Point::new(10.0, 10.0))
+    );
+    assert!(!h.state_mut().engine_mut().is_active(), "the empty string ended LINE");
+
+    // entmake, and ssget "X" with a filter.
+    h.state_mut().type_command("(entmake '((0 . \"CIRCLE\") (8 . \"Holes\") (10 1 1 0) (40 . 2.0)))");
+    h.state_mut().type_command("(setq n (sslength (ssget \"X\" '((0 . \"CIRCLE\")))))");
+    h.run();
+    let history = h.state_mut().engine_mut().history().to_vec();
+    assert_eq!(history.last().map(String::as_str), Some("2"));
+    assert!(circles(&mut h).iter().any(|c| c.2 == "Holes"));
+
+    // Esc at a prompt cancels the program.
+    h.state_mut().type_command("ring");
+    h.key_press(Key::Escape);
+    h.run();
+    let history = h.state_mut().engine_mut().history().to_vec();
+    assert!(history.iter().any(|l| l == "; error: Function cancelled"), "{history:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}

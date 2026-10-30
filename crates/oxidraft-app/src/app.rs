@@ -134,7 +134,7 @@ pub struct OxidraftApp {
     /// FONTMAP's font mapping file.
     pub(crate) font_map: String,
     /// AutoLISP: what APPLOAD and the command line defined.
-    pub(crate) lisp: crate::lisp::Lisp,
+    pub(crate) lisp: crate::lisp_host::LispThread,
     /// VSLIDE's slide, shown until REDRAW.
     pub(crate) slide: Option<oxidraft_plot::slide::Slide>,
     /// DATALINK's file, and the newest object before its table was placed.
@@ -997,6 +997,8 @@ impl OxidraftApp {
         let cursor = self.cursor.unwrap_or(Point::ORIGIN);
         let tolerance = self.pick_tolerance();
         self.engine.submit(&text, &mut self.doc, cursor, tolerance);
+        // What was typed may answer what a LISP program waits for.
+        self.lisp_pump();
     }
 
     /// Opens what commands asked for. Returns true if there was anything.
@@ -1431,6 +1433,11 @@ impl eframe::App for OxidraftApp {
         // Requests from what was typed this frame show on the next.
         if self.handle_ui_requests(&ctx) {
             ctx.request_repaint();
+        }
+        // A LISP program goes on once the user has answered it.
+        self.lisp_pump();
+        if self.lisp.running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
         }
         self.last_focus = ctx.memory(|m| m.focused());
     }

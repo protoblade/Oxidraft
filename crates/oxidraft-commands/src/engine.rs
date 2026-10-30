@@ -2164,6 +2164,8 @@ pub struct Engine {
     /// shortcut menu's Recent Input.
     started: Vec<&'static str>,
     inputs: Vec<String>,
+    /// How many inputs commands have had (AutoLISP's PAUSE waits for one).
+    fed: usize,
     /// Selected objects: the pickfirst set when idle, or the set being built
     /// at a "Select objects:" prompt.
     selection: Vec<EntityId>,
@@ -2218,6 +2220,7 @@ impl Engine {
             typed: Vec::new(),
             started: Vec::new(),
             inputs: Vec::new(),
+            fed: 0,
             selection: Vec::new(),
             selection_windows: Vec::new(),
             selection_lassos: Vec::new(),
@@ -2678,6 +2681,11 @@ impl Engine {
         } else {
             free
         }
+    }
+
+    /// How many inputs commands have had so far.
+    pub fn inputs_fed(&self) -> usize {
+        self.fed
     }
 
     /// Whether `name` is a command's name or alias.
@@ -3246,6 +3254,7 @@ impl Engine {
 
     fn feed(&mut self, input: Input, doc: &mut Document, cursor: Point, pick_tolerance: f64) {
         let Some(active) = &mut self.active else { return };
+        self.fed += 1;
         // MULTIPLE: the command named starts, and starts again each time it ends.
         if std::ptr::eq(active.info, find("MULTIPLE").unwrap_or(active.info))
             && let Input::Text(name) = &input
