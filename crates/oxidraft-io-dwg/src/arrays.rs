@@ -1,8 +1,9 @@
 //! Associative arrays as AutoCAD keeps them. AutoCAD's come in as arrays:
 //! an array action body's items (each one's place in the rows and columns
 //! and the reference that shows it) give a rectangular or polar array's
-//! layout, as in AutoCAD's drawings. With NATIVESAVE, rectangular and
-//! polar arrays go out that way too: the association network AutoCAD
+//! layout, as in AutoCAD's drawings (a path array's path is what its other
+//! dependency is on). With NATIVESAVE, Oxidraft's arrays go out that way
+//! too: the association network AutoCAD
 //! keeps in the space's extension dictionary (and the drawing's), an
 //! action with a dependency on the array's block reference, its array
 //! body with an item for each reference, and the layout as value
@@ -13,8 +14,8 @@ use std::collections::HashMap;
 
 use acadrust::objects::{
     AssocAction, AssocActionBody, AssocActionDependency, AssocArrayActionBody, AssocArrayItem, AssocDependency,
-    AssocEvalValue, AssocEvalVariant, AssocNetwork, AssocValueParam, AssocValueParamVariable, AssociativeData,
-    AssociativeObject, Dictionary, ObjectType,
+    AssocEvalValue, AssocEvalVariant, AssocGeomDependency, AssocNetwork, AssocPersistentSubentId, AssocValueParam,
+    AssocValueParamVariable, AssociativeData, AssociativeObject, Dictionary, ObjectType,
 };
 use acadrust::types::{Handle, Vector3};
 use acadrust::{CadDocument, EntityType};
@@ -25,6 +26,7 @@ use oxidraft_model::{Document, EntityId, Geometry};
 
 const RECTANGULAR: &str = "AcDbAssocArrayRectangularParameters";
 const POLAR: &str = "AcDbAssocArrayPolarParameters";
+const PATH: &str = "AcDbAssocArrayPathParameters";
 
 /// A row-major 4×4 matrix: turned `degrees` about the origin, then moved
 /// by `by`.
@@ -126,9 +128,6 @@ fn value(name: &str, v: AssocEvalValue, unit_type: i32) -> AssocValueParam {
 pub(crate) fn write(cad: &mut CadDocument, doc: &Document, handles: &HashMap<EntityId, Vec<u64>>) {
     for e in doc.all_entities() {
         let (Some(a), Geometry::Insert { block, placement, .. }) = (e.array.as_deref(), &e.geometry) else { continue };
-        if matches!(a.layout, ArrayLayout::Path { .. }) {
-            continue;
-        }
         let Some(&h) = handles.get(&e.id).and_then(|h| h.first()) else { continue };
         let insert = Handle::new(h);
         let Some(EntityType::Insert(reference)) = cad.get_entity(insert) else { continue };
@@ -147,6 +146,8 @@ pub(crate) fn write(cad: &mut CadDocument, doc: &Document, handles: &HashMap<Ent
             .collect();
         let Some(outer) = doc.block(block) else { continue };
         let Some(&(_, first, _)) = refs.first() else { continue };
+        // A path array's path: the object it's laid along, in the world.
+        let mut path_on = None;
         let (class, values, rect) = match &a.layout {
             ArrayLayout::Rect { rows, columns, row_spacing, column_spacing } => {
                 let n = |v: usize| AssocEvalValue::Long(v as i32);
@@ -171,8 +172,35 @@ pub(crate) fn write(cad: &mut CadDocument, doc: &Document, handles: &HashMap<Ent
                 ];
                 (POLAR, values, None)
             }
-            ArrayLayout::Path { .. } => continue,
+            ArrayLayout::Path { path, items, align, spacing, rows } => {
+                let world = placement.place(outer.base, path);
+                let same = |g: &Geometry| {
+                    let (a, b) = (g.segments(), world.segments());
+                    a.len() == b.len()
+                        && g.is_closed() == world.is_closed()
+                        && a.iter().zip(&b).all(|(x, y)| x.start().approx_eq(y.start()) && x.end().approx_eq(y.end()))
+                };
+                path_on = doc
+                    .all_entities()
+                    .find(|p| p.id != e.id && p.space == e.space && p.array.is_none() && same(&p.geometry))
+                    .and_then(|p| handles.get(&p.id).and_then(|h| h.first()))
+                    .map(|h| Handle::new(*h));
+                let length: f64 = path.segments().iter().map(|s| s.length()).sum();
+                let gaps = if path.is_closed() { *items } else { items.saturating_sub(1) };
+                let step = spacing.unwrap_or(length / gaps.max(1) as f64);
+                let values = vec![
+                    value("Items", AssocEvalValue::Long(*items as i32), 0),
+                    value("ItemSpacing", AssocEvalValue::Real(step), 1),
+                    value("Rows", AssocEvalValue::Long(rows.0.max(1) as i32), 0),
+                    value("RowSpacing", AssocEvalValue::Real(rows.1), 1),
+                    value("Levels", AssocEvalValue::Long(1), 0),
+                    value("AlignItems", AssocEvalValue::Long(i32::from(*align)), 0),
+                    value("Method", AssocEvalValue::Long(i32::from(spacing.is_some())), 0),
+                ];
+                (PATH, values, Some(*items))
+            }
         };
+        let turned = !matches!(a.layout, ArrayLayout::Rect { .. });
         // Each item: its place in the rows and columns, and where it is from
         // the first (moved, or for a polar array turned too).
         let items = refs
@@ -185,7 +213,7 @@ pub(crate) fn write(cad: &mut CadDocument, doc: &Document, handles: &HashMap<Ent
                 };
                 let offset = at - first;
                 let mut item = AssocArrayItem { location, flags: 8, first_handle: Some(h), ..Default::default() };
-                if rect.is_some() {
+                if !turned {
                     item.uses_default_transform = true;
                     item.x_direction = Vector3::new(offset.x, offset.y, 0.0);
                 } else {
@@ -232,6 +260,40 @@ pub(crate) fn write(cad: &mut CadDocument, doc: &Document, handles: &HashMap<Ent
                 ..Default::default()
             }),
         );
+        // A path array reads its path, as AutoCAD's do: a dependency on its
+        // one edge.
+        let mut dependencies = vec![AssocActionDependency { is_owned: true, dependency }];
+        if let Some(path) = path_on {
+            let geom = associative(
+                cad,
+                "ACDBASSOCGEOMDEPENDENCY",
+                "AcDbAssocGeomDependency",
+                action,
+                AssociativeData::GeomDependency(AssocGeomDependency {
+                    dependency: AssocDependency {
+                        class_version: 2,
+                        is_read_dependency: true,
+                        is_attached_to_object: true,
+                        is_delegating_to_owning_action: true,
+                        order: i32::MAX,
+                        dependent_on: path,
+                        dependency_body_id: 2,
+                        ..Default::default()
+                    },
+                    enabled: true,
+                    persistent_subent: AssocPersistentSubentId {
+                        class_name: "AcDbAssocSingleEdgePersSubentId".to_string(),
+                        class_code: 1,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            );
+            if let Some(e) = cad.get_entity_mut(path) {
+                e.common_mut().reactors.push(geom);
+            }
+            dependencies.push(AssocActionDependency { is_owned: true, dependency: geom });
+        }
         let index = match cad.objects.get_mut(&network) {
             Some(ObjectType::Associative(o)) => match &mut o.data {
                 AssociativeData::Network(n) => {
@@ -251,8 +313,8 @@ pub(crate) fn write(cad: &mut CadDocument, doc: &Document, handles: &HashMap<Ent
             owning_network: network,
             action_body: body,
             action_index: index,
-            max_dependency_index: 1,
-            dependencies: vec![AssocActionDependency { is_owned: true, dependency }],
+            max_dependency_index: dependencies.len() as i32,
+            dependencies,
             owned_parameters: Vec::new(),
             values,
         });
@@ -287,31 +349,47 @@ fn circumcenter(a: Point, b: Point, c: Point) -> Option<Point> {
     ))
 }
 
+/// The object an action's dependency `h` is on.
+fn dependent_on(cad: &CadDocument, h: Handle) -> Option<Handle> {
+    match cad.objects.get(&h) {
+        Some(ObjectType::Associative(o)) => match &o.data {
+            AssociativeData::Dependency(d) => Some(d.dependent_on),
+            AssociativeData::GeomDependency(g) => Some(g.dependency.dependent_on),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The angle (degrees) `a` is from `b`, from -180 to 180.
+fn turn_between(a: f64, b: f64) -> f64 {
+    (a - b + 540.0).rem_euclid(360.0) - 180.0
+}
+
 /// AutoCAD's arrays (those Oxidraft's own data doesn't already make one):
-/// their layout from their items, their block made again as Oxidraft's,
-/// every item where it was.
+/// their layout from their items (and a path array's path, what its other
+/// dependency is on), their block made again as Oxidraft's — when that
+/// puts every item where AutoCAD has it; otherwise they stay references.
 pub(crate) fn restore(cad: &CadDocument, imported: &mut Imported) {
     for o in cad.objects.values() {
         let ObjectType::Associative(o) = o else { continue };
         let AssociativeData::ArrayActionBody(body) = &o.data else { continue };
         let Some(ObjectType::Associative(action)) = cad.objects.get(&o.owner) else { continue };
         let AssociativeData::Action(action) = &action.data else { continue };
-        // The array: what the action's dependency is on.
-        let insert = action.dependencies.iter().find_map(|d| match cad.objects.get(&d.dependency) {
-            Some(ObjectType::Associative(dep)) => match &dep.data {
-                AssociativeData::Dependency(dep) => Some(dep.dependent_on),
-                _ => None,
-            },
+        let on: Vec<Handle> = action.dependencies.iter().filter_map(|d| dependent_on(cad, d.dependency)).collect();
+        let Some((insert, reference)) = on.iter().find_map(|h| match cad.get_entity(*h) {
+            Some(EntityType::Insert(r)) => Some((*h, r)),
             _ => None,
-        });
-        let Some(insert) = insert else { continue };
-        let Some(EntityType::Insert(reference)) = cad.get_entity(insert) else { continue };
+        }) else {
+            continue;
+        };
         let Some(&id) = imported.handles.get(&insert.value()) else { continue };
+        let path_id = on.iter().filter(|h| **h != insert).find_map(|h| imported.handles.get(&h.value()).copied());
         let doc = &mut imported.document;
         let Some(e) = doc.entity(id).filter(|e| e.array.is_none()) else { continue };
         let Geometry::Insert { placement, .. } = e.geometry.clone() else { continue };
-        // Its items: their places in the rows and columns, where they are
-        // in the array's block and how far they're turned.
+        // Its items in the layout's order: their places in the rows and
+        // columns, where they are in the array's block, how far turned.
         let mut items: Vec<([i32; 3], Point, f64, String)> = body
             .items
             .iter()
@@ -326,11 +404,15 @@ pub(crate) fn restore(cad: &CadDocument, imported: &mut Imported) {
         let Some((_, first, first_turn, item_block)) = items.first().cloned() else { continue };
         let Some(item_base) = doc.block(&item_block).map(|b| b.base) else { continue };
         let Some(array_base) = doc.block(&reference.block_name).map(|b| b.base) else { continue };
+        // Each item in the world: where, how far turned.
+        let world: Vec<(Point, f64)> =
+            items.iter().map(|i| (placement.apply(array_base, i.1), placement.rotation + i.2)).collect();
         let at = |l: [i32; 3]| items.iter().find(|i| i.0 == l).map(|i| i.1 - first);
-        let (layout, turn) = if body.parameter_block.eq_ignore_ascii_case(RECTANGULAR) {
-            let columns = items.iter().map(|i| i.0[0]).max().unwrap_or(0) as usize + 1;
-            let rows = items.iter().map(|i| i.0[1]).max().unwrap_or(0) as usize + 1;
-            // The columns' direction, made the array's own turn.
+        let columns = items.iter().map(|i| i.0[0]).max().unwrap_or(0) as usize + 1;
+        let rows = items.iter().map(|i| i.0[1]).max().unwrap_or(0) as usize + 1;
+        let class = body.parameter_block.as_str();
+        // The layout, and how far the array's reference turns past its own.
+        let (layout, turn) = if class.eq_ignore_ascii_case(RECTANGULAR) {
             let (across, up) = (at([1, 0, 0]), at([0, 1, 0]));
             let turn = match (across, up) {
                 (Some(d), _) if d.length() > 0.0 => d.y.atan2(d.x).to_degrees(),
@@ -340,34 +422,76 @@ pub(crate) fn restore(cad: &CadDocument, imported: &mut Imported) {
             let column_spacing = across.map_or(1.0, |d| d.rotated_about(Point::ORIGIN, -turn).x);
             let row_spacing = up.map_or(1.0, |d| d.rotated_about(Point::ORIGIN, -turn).y);
             (ArrayLayout::Rect { rows, columns, row_spacing, column_spacing }, turn)
-        } else if body.parameter_block.eq_ignore_ascii_case(POLAR) && items.len() >= 2 {
+        } else if class.eq_ignore_ascii_case(POLAR) && items.len() >= 2 {
             let (second, second_turn) = (items[1].1, items[1].2);
-            let rotate = (second_turn - first_turn).abs() > 1e-9;
+            let rotate = turn_between(second_turn, first_turn).abs() > 1e-9;
             let center = if rotate {
-                center_of_turn(first, second, second_turn - first_turn)
+                center_of_turn(first, second, turn_between(second_turn, first_turn))
             } else {
                 items.get(2).and_then(|third| circumcenter(first, second, third.1))
             };
             let Some(center) = center else { continue };
             let angle = |p: Point| (p - center).y.atan2((p - center).x).to_degrees();
-            let step = (angle(second) - angle(first) + 540.0).rem_euclid(360.0) - 180.0;
+            let step = turn_between(angle(second), angle(first));
             let n = items.len();
             let fill =
                 if (step * n as f64).abs() >= 360.0 - 1e-6 { 360.0 * step.signum() } else { step * (n - 1) as f64 };
             // The center in the block Oxidraft makes, its first item at the item's base.
             (ArrayLayout::Polar { center: item_base + (center - first), items: n, fill, rotate }, 0.0)
+        } else if class.eq_ignore_ascii_case(PATH) {
+            let Some(path) = path_id.and_then(|p| doc.entity(p)).map(|e| e.geometry.clone()) else { continue };
+            let length: f64 = path.segments().iter().map(|s| s.length()).sum();
+            let gaps = if path.is_closed() { columns } else { columns.saturating_sub(1) };
+            let from = |k: usize| world.get(k).map(|w| oxidraft_model::assoc_array::length_at(&path, w.0));
+            let step = match (from(0), from(1)) {
+                (Some(a), Some(b)) if columns > 1 => b - a,
+                _ => length,
+            };
+            let spacing = ((step * gaps as f64 - length).abs() > 1e-6 * length.max(1.0)).then_some(step);
+            let align = items.iter().filter(|i| i.0[1] == 0).any(|i| turn_between(i.2, first_turn).abs() > 1e-9);
+            // Rows to the path's left at its start.
+            let row = match (world.first(), items.iter().position(|i| i.0 == [0, 1, 0]).and_then(|k| world.get(k))) {
+                (Some(a), Some(b)) => {
+                    let start = oxidraft_model::assoc_array::at_length(&path.segments(), 0.0).map_or(0.0, |s| s.1);
+                    (b.0 - a.0).rotated_about(Point::ORIGIN, -start).y
+                }
+                _ => 0.0,
+            };
+            // The path in the block Oxidraft makes, turned with its first item.
+            let new = oxidraft_model::Placement { position: world[0].0, rotation: world[0].1, ..placement };
+            let back = oxidraft_model::Placement {
+                position: item_base,
+                scale: 1.0 / new.scale,
+                rotation: -new.rotation,
+                mirror: new.mirror,
+            };
+            let local = back.place(new.position, &path);
+            let layout = ArrayLayout::Path { path: Box::new(local), items: columns, align, spacing, rows: (rows, row) };
+            (layout, first_turn)
         } else {
             continue;
         };
-        // The first item in the world, where the array's reference now goes.
-        let world = placement.position + (first - array_base).rotated_about(Point::ORIGIN, placement.rotation);
+        // Where Oxidraft's block puts each item: AutoCAD's places, or not at all.
+        let new = oxidraft_model::Placement { position: world[0].0, rotation: placement.rotation + turn, ..placement };
+        let made = layout.items(item_base);
+        let close = |a: Point, b: Point| a.distance(b) <= 1e-6 * (1.0 + a.length().max(b.length()));
+        let same = made.len() == world.len()
+            && made.iter().zip(&world).all(|((q, t), (w, wt))| {
+                close(new.apply(item_base, *q), *w) && turn_between(new.rotation + t, *wt).abs() < 1e-6
+            });
+        if !same {
+            continue;
+        }
         let array = AssocArray { layout: layout.clone(), item: item_block, replaced: Vec::new() };
         doc.update(id, |e| {
             e.array = Some(Box::new(array));
-            if let Geometry::Insert { placement, .. } = &mut e.geometry {
-                placement.position = world;
-                placement.rotation += turn;
-            }
+            e.geometry =
+                match std::mem::replace(&mut e.geometry, Geometry::Line { start: Point::ORIGIN, end: Point::ORIGIN }) {
+                    Geometry::Insert { block, attributes, clip, .. } => {
+                        Geometry::Insert { block, placement: new, attributes, clip }
+                    }
+                    g => g,
+                };
         });
         doc.set_array_layout(id, layout);
     }
@@ -383,8 +507,21 @@ mod tests {
         let mut doc = Document::new();
         let c = doc.add(Geometry::Circle { center: Point::new(10.0, 10.0), radius: 2.0 });
         doc.add(Geometry::Line { start: Point::new(100.0, 0.0), end: Point::new(110.0, 0.0) });
+        if let ArrayLayout::Path { path, .. } = &layout {
+            doc.add(path.as_ref().clone());
+        }
         let id = doc.make_array(&[c], layout).unwrap();
         (doc, id)
+    }
+
+    /// A path array along an L of lines from the circle's center (the
+    /// path, in the drawing too), aligned or not, divided or measured, in
+    /// two rows.
+    fn path_layout(align: bool, spacing: Option<f64>) -> ArrayLayout {
+        let vertices =
+            [(10.0, 10.0), (50.0, 10.0), (50.0, 40.0)].map(|(x, y)| oxidraft_model::Vertex::at(Point::new(x, y)));
+        let path = Geometry::Polyline { vertices: vertices.to_vec(), closed: false };
+        ArrayLayout::Path { path: Box::new(path), items: 5, align, spacing, rows: (2, 6.0) }
     }
 
     /// Where each of the array's items is, in the world.
@@ -424,6 +561,8 @@ mod tests {
             ArrayLayout::Rect { rows: 2, columns: 3, row_spacing: 15.0, column_spacing: 20.0 },
             ArrayLayout::Polar { center: Point::new(30.0, 10.0), items: 6, fill: 360.0, rotate: true },
             ArrayLayout::Polar { center: Point::new(30.0, 10.0), items: 4, fill: 90.0, rotate: false },
+            path_layout(true, None),
+            path_layout(false, Some(12.0)),
         ] {
             let (doc, id) = arrayed(layout.clone());
             let before = items(&doc, id);
@@ -458,6 +597,13 @@ mod tests {
                 let got = back.array(id).unwrap().layout.clone();
                 match (&layout, &got) {
                     (ArrayLayout::Rect { .. }, ArrayLayout::Rect { .. }) => assert_eq!(got, layout),
+                    (
+                        ArrayLayout::Path { items: n, align, spacing, rows, .. },
+                        ArrayLayout::Path { items: m, align: a, spacing: s, rows: r, .. },
+                    ) => {
+                        assert!(n == m && align == a && rows.0 == r.0 && (rows.1 - r.1).abs() < 1e-6, "{got:?}");
+                        assert_eq!(spacing.is_some(), s.is_some(), "{got:?}");
+                    }
                     (
                         ArrayLayout::Polar { items: n, fill, rotate, .. },
                         ArrayLayout::Polar { items: m, fill: f, rotate: r, .. },
