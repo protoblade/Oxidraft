@@ -2953,6 +2953,7 @@ dependencies = [
  "sha2",
  "tar",
  "ureq",
+ "windows",
  "winresource",
 ]
 

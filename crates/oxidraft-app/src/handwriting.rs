@@ -1,7 +1,8 @@
 //! Handwriting on a marked-up plot read as text, as Markup Assist reads
-//! it but without Autodesk's cloud: macOS's own text recognition (Vision)
-//! over the plot's colored ink alone (a red or blue pen's), so the plot's
-//! own black lines and text are left out. Elsewhere it isn't read.
+//! it but without Autodesk's cloud: the system's own text recognition
+//! (Vision on macOS, Windows.Media.Ocr on Windows, Tesseract elsewhere
+//! where it's installed) over the plot's colored ink, and over all of it
+//! less the text the drawing plots there (a black pen's writing).
 
 use std::sync::mpsc::{Receiver, TryRecvError};
 
@@ -194,9 +195,94 @@ fn recognize(png: &[u8]) -> Result<Vec<Read>, String> {
     })
 }
 
-#[cfg(not(target_os = "macos"))]
-fn recognize(_: &[u8]) -> Result<Vec<Read>, String> {
-    Err("Handwriting is read on macOS only.".into())
+/// Windows' own text recognition (Windows.Media.Ocr), in the languages
+/// the user's profile has.
+#[cfg(windows)]
+fn recognize(png: &[u8]) -> Result<Vec<Read>, String> {
+    use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapDecoder, BitmapPixelFormat, SoftwareBitmap};
+    use windows::Media::Ocr::OcrEngine;
+    use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream};
+    let run = || -> windows::core::Result<Vec<Read>> {
+        let stream = InMemoryRandomAccessStream::new()?;
+        let writer = DataWriter::CreateDataWriter(&stream)?;
+        writer.WriteBytes(png)?;
+        writer.StoreAsync()?.join()?;
+        writer.FlushAsync()?.join()?;
+        writer.DetachStream()?;
+        stream.Seek(0)?;
+        let decoder = BitmapDecoder::CreateAsync(&stream)?.join()?;
+        let bitmap = decoder.GetSoftwareBitmapAsync()?.join()?;
+        let bitmap =
+            SoftwareBitmap::ConvertWithAlpha(&bitmap, BitmapPixelFormat::Bgra8, BitmapAlphaMode::Premultiplied)?;
+        let (w, h) = (f64::from(bitmap.PixelWidth()?), f64::from(bitmap.PixelHeight()?));
+        let engine = OcrEngine::TryCreateFromUserProfileLanguages()?;
+        let result = engine.RecognizeAsync(&bitmap)?.join()?;
+        let mut out = Vec::new();
+        for line in result.Lines()? {
+            // The line's box: its words' together (top-left origin, pixels).
+            let mut bounds: Option<(f64, f64, f64, f64)> = None;
+            for word in line.Words()? {
+                let r = word.BoundingRect()?;
+                let (x0, y0) = (f64::from(r.X), f64::from(r.Y));
+                let (x1, y1) = (x0 + f64::from(r.Width), y0 + f64::from(r.Height));
+                bounds = Some(match bounds {
+                    Some((a, b, c, d)) => (a.min(x0), b.min(y0), c.max(x1), d.max(y1)),
+                    None => (x0, y0, x1, y1),
+                });
+            }
+            let Some((x0, y0, x1, y1)) = bounds else { continue };
+            out.push(Read { text: line.Text()?.to_string(), min: (x0 / w, 1.0 - y1 / h), max: (x1 / w, 1.0 - y0 / h) });
+        }
+        Ok(out)
+    };
+    run().map_err(|e| format!("Handwriting couldn't be read: {}", e.message()))
+}
+
+/// Elsewhere, Tesseract's (the `tesseract` command), where it's installed.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn recognize(png: &[u8]) -> Result<Vec<Read>, String> {
+    let file = std::env::temp_dir().join(format!("oxidraft-markup-{}.png", std::process::id()));
+    std::fs::write(&file, png).map_err(|e| e.to_string())?;
+    let size = image::load_from_memory(png).map(|i| (i.width(), i.height())).map_err(|e| e.to_string())?;
+    let run = std::process::Command::new("tesseract").arg(&file).args(["stdout", "tsv"]).output();
+    std::fs::remove_file(&file).ok();
+    let out = run.map_err(|_| "Handwriting is read by tesseract, which isn't installed.".to_string())?;
+    Ok(tesseract_lines(&String::from_utf8_lossy(&out.stdout), size))
+}
+
+/// Tesseract's TSV (a row a word: level, page, block, paragraph, line,
+/// word, left, top, width, height, confidence, text) as lines of text, on
+/// a picture `size` pixels big.
+#[cfg_attr(any(target_os = "macos", windows), allow(dead_code))]
+fn tesseract_lines(tsv: &str, (w, h): (u32, u32)) -> Vec<Read> {
+    let mut lines: Vec<((u32, u32, u32), Vec<String>, (f64, f64, f64, f64))> = Vec::new();
+    for row in tsv.lines().skip(1) {
+        let f: Vec<&str> = row.split('\t').collect();
+        let [level, _, block, par, line, _, left, top, width, height, _, text] = f[..] else { continue };
+        let num = |v: &str| v.trim().parse::<f64>().unwrap_or(0.0);
+        if level.trim() != "5" || text.trim().is_empty() {
+            continue;
+        }
+        let key = (num(block) as u32, num(par) as u32, num(line) as u32);
+        let (x0, y0) = (num(left), num(top));
+        let (x1, y1) = (x0 + num(width), y0 + num(height));
+        match lines.iter_mut().find(|l| l.0 == key) {
+            Some(l) => {
+                l.1.push(text.trim().to_string());
+                l.2 = (l.2.0.min(x0), l.2.1.min(y0), l.2.2.max(x1), l.2.3.max(y1));
+            }
+            None => lines.push((key, vec![text.trim().to_string()], (x0, y0, x1, y1))),
+        }
+    }
+    let (w, h) = (f64::from(w.max(1)), f64::from(h.max(1)));
+    lines
+        .into_iter()
+        .map(|(_, words, (x0, y0, x1, y1))| Read {
+            text: words.join(" "),
+            min: (x0 / w, 1.0 - y1 / h),
+            max: (x1 / w, 1.0 - y0 / h),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -232,6 +318,18 @@ mod tests {
             format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes(),
         );
         out
+    }
+
+    #[test]
+    fn tesseracts_words_made_lines() {
+        let tsv = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n\
+                   4\t1\t1\t1\t1\t0\t10\t20\t200\t30\t-1\t\n\
+                   5\t1\t1\t1\t1\t1\t10\t20\t80\t30\t91\tMove\n\
+                   5\t1\t1\t1\t1\t2\t100\t22\t110\t28\t90\tdoor\n\
+                   5\t1\t2\t1\t1\t1\t50\t300\t60\t20\t88\tOK\n";
+        let lines = tesseract_lines(tsv, (400, 400));
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Move door", "OK"]);
+        assert_eq!((lines[0].min, lines[0].max), ((0.025, 0.875), (0.525, 0.95)));
     }
 
     #[test]
