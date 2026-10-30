@@ -204,6 +204,17 @@ pub struct Customization {
     pub toolbars: Vec<CustomToolbar>,
     /// The images its buttons use: file name and contents.
     pub images: Vec<(String, Vec<u8>)>,
+    pub workspaces: Vec<CuiWorkspace>,
+}
+
+/// A workspace a customization file defines: the menu bar shown or not,
+/// the toolbars it shows and its ribbon's first tab.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CuiWorkspace {
+    pub name: String,
+    pub menubar: bool,
+    pub toolbars: Vec<String>,
+    pub tab: Option<String>,
 }
 
 /// The file name in a path written either way.
@@ -212,8 +223,13 @@ fn file_name(path: &str) -> &str {
 }
 
 /// A customization file's commands, ribbon and shortcuts; `fallback`
-/// names its group when it doesn't.
-pub fn read_customization(data: &[u8], fallback: &str) -> Result<Customization, String> {
+/// names its group when it doesn't. Its buttons' images are found in
+/// `resources` (name and file) too, where the file doesn't hold them.
+pub fn read_customization(
+    data: &[u8],
+    fallback: &str,
+    resources: Vec<(String, Vec<u8>)>,
+) -> Result<Customization, String> {
     let parts = if data.starts_with(b"PK") {
         crate::datalink::unzip(data)
     } else {
@@ -232,6 +248,9 @@ pub fn read_customization(data: &[u8], fallback: &str) -> Result<Customization, 
             }
         }
     }
+    let stem = |s: &str| s.rsplit_once('.').map_or(s, |(a, _)| a).to_ascii_lowercase();
+    let held: std::collections::HashSet<String> = images.iter().map(|(f, _)| stem(f)).collect();
+    images.extend(resources.into_iter().filter(|(f, _)| !held.contains(&stem(f))));
     let every = |name: &str| docs.iter().flat_map(|d| d.named(name)).collect::<Vec<_>>();
     if every("CustSection").is_empty() && every("MenuGroup").is_empty() && every("RibbonRoot").is_empty() {
         return Err("Not an AutoCAD customization file.".into());
@@ -401,9 +420,39 @@ pub fn read_customization(data: &[u8], fallback: &str) -> Result<Customization, 
             toolbars.push(CustomToolbar { name: label(t), commands, group: group.clone() });
         }
     }
+    // Workspaces: the toolbars and ribbon tabs each shows, by their UIDs.
+    let by_uid = |kind: &str, name: &dyn Fn(&Element) -> String| -> HashMap<String, String> {
+        every(kind).iter().filter_map(|e| Some((e.attr("UID")?.to_string(), name(e)))).collect()
+    };
+    let toolbar_names = by_uid("Toolbar", &label);
+    let tab_names = by_uid("RibbonTabSource", &|t: &Element| {
+        t.attr("Text").or_else(|| t.attr("Name")).unwrap_or_default().to_string()
+    });
+    let hidden =
+        |v: &str| ["0", "false", "no", "hide", "hidden", "off"].contains(&v.trim().to_ascii_lowercase().as_str());
+    let shown = |e: &Element| {
+        ["Display", "Show", "Visible", "ToolbarVisible"].iter().filter_map(|a| e.attr(a)).all(|v| !hidden(v))
+    };
+    let target = |e: &Element, names: &HashMap<String, String>| e.attrs.iter().find_map(|(_, v)| names.get(v).cloned());
+    let mut workspaces = Vec::new();
+    for w in every("Workspace") {
+        let name = Some(text_of(w, "Name")).filter(|n| !n.is_empty()).or_else(|| w.attr("Name").map(str::to_string));
+        let Some(name) = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) else { continue };
+        let (mut bars, mut tabs) = (Vec::new(), Vec::new());
+        w.every(&|e| e.name == "WorkspaceToolbar", &mut bars);
+        w.every(&|e| e.name == "WorkspaceRibbonTabSourceReference", &mut tabs);
+        workspaces.push(CuiWorkspace {
+            name,
+            menubar: w
+                .attr("MenuBar")
+                .is_some_and(|v| ["on", "true", "yes", "1", "show"].contains(&v.trim().to_ascii_lowercase().as_str())),
+            toolbars: bars.iter().filter(|t| shown(t)).filter_map(|t| target(t, &toolbar_names)).collect(),
+            tab: tabs.iter().filter(|t| shown(t)).find_map(|t| target(t, &tab_names)),
+        });
+    }
     let used: std::collections::HashSet<&str> = commands.iter().map(|c| c.image.as_str()).collect();
     images.retain(|(f, _)| used.contains(f.as_str()));
-    Ok(Customization { group, commands, panels: placed, shortcuts, menus, toolbars, images })
+    Ok(Customization { group, commands, panels: placed, shortcuts, menus, toolbars, images, workspaces })
 }
 
 /// The command a macro starts (`^C^C_LINE` starts LINE), if it starts one
@@ -464,7 +513,15 @@ impl OxidraftApp {
     pub fn load_customization(&mut self, path: &Path) -> Result<String, String> {
         let data = std::fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
         let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let c = read_customization(&data, &stem)?;
+        // Images it names but doesn't hold: in a resource DLL of its name
+        // beside it, as AutoCAD keeps them (acad.cuix's in acadbtn.xmx).
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let resources = [format!("{stem}.dll"), format!("{stem}.xmx"), format!("{stem}btn.xmx")]
+            .iter()
+            .filter_map(|f| std::fs::read(dir.join(f)).ok())
+            .flat_map(|d| crate::pe_resources::resource_images(&d))
+            .collect();
+        let c = read_customization(&data, &stem, resources)?;
         let dir = self.customization_dir(&c.group);
         if !c.images.is_empty() {
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -483,16 +540,45 @@ impl OxidraftApp {
         settings.ribbon_panels.extend(c.panels);
         settings.menus.extend(c.menus);
         // Toolbars shown, named apart from those there are.
+        let taken = |n: &str, s: &Settings| {
+            crate::menubar::TOOLBARS.iter().any(|(b, _)| b.eq_ignore_ascii_case(n))
+                || s.custom_toolbars.iter().any(|x| x.name.eq_ignore_ascii_case(n))
+        };
+        let mut renamed = HashMap::new();
         for mut t in c.toolbars {
-            let taken = |n: &str, s: &Settings| {
-                crate::menubar::TOOLBARS.iter().any(|(b, _)| b.eq_ignore_ascii_case(n))
-                    || s.custom_toolbars.iter().any(|x| x.name.eq_ignore_ascii_case(n))
-            };
             if taken(&t.name, &settings) {
-                t.name = format!("{} ({})", t.name, t.group);
+                let name = format!("{} ({})", t.name, t.group);
+                renamed.insert(std::mem::replace(&mut t.name, name), t.name.clone());
             }
             settings.toolbars.push(t.name.clone());
             settings.custom_toolbars.push(t);
+        }
+        // Its workspaces (but AutoCAD's Drafting & Annotation, Oxidraft's
+        // own), named apart from those there are.
+        let tabs = crate::chrome::custom_tabs_of(&settings.ribbon_panels);
+        for w in c.workspaces {
+            if w.name.eq_ignore_ascii_case(crate::customize::DRAFTING) {
+                continue;
+            }
+            let toolbars = w
+                .toolbars
+                .iter()
+                .map(|t| renamed.get(t).unwrap_or(t).clone())
+                .filter(|t| taken(t, &settings))
+                .collect();
+            let ribbon_tab = w.tab.as_deref().and_then(|t| crate::chrome::ribbon_tab_index(t, &tabs)).unwrap_or(0);
+            let mut name = w.name;
+            if settings.workspaces.iter().any(|x| x.name.eq_ignore_ascii_case(&name)) {
+                name = format!("{name} ({})", c.group);
+            }
+            settings.workspaces.push(crate::customize::Workspace {
+                name,
+                menubar: w.menubar,
+                toolbars,
+                ribbon_tab,
+                group: c.group.clone(),
+                ..Default::default()
+            });
         }
         for (keys, command) in c.shortcuts {
             settings.shortcuts.retain(|(k, _)| !k.eq_ignore_ascii_case(&keys));
@@ -517,6 +603,10 @@ impl OxidraftApp {
         s.custom_toolbars.retain(|t| !t.group.eq_ignore_ascii_case(group));
         s.toolbars.retain(|t| !toolbars.contains(t));
         s.shortcuts.retain(|(_, c)| !gone.contains(c));
+        s.workspaces.retain(|w| !w.group.eq_ignore_ascii_case(group));
+        if !s.workspaces.iter().any(|w| w.name.eq_ignore_ascii_case(&s.workspace)) {
+            s.workspace.clear();
+        }
         s.quick_access.retain(|c| !gone.contains(c));
         s.shortcut_menu.retain(|c| !gone.contains(c));
         s
@@ -764,6 +854,39 @@ mod tests {
 </CustSection>"#;
 
     #[test]
+    fn images_from_a_resource_dll() {
+        let xml = r#"<CustSection><MenuGroup Name="G"><MacroGroup Name="G">
+  <MenuMacro UID="M1"><Macro type="Any"><Name>Tree</Name><Command>^C^C_CIRCLE</Command>
+    <SmallImage Name="RCDATA_16_TREE"/></Macro></MenuMacro>
+  <MenuMacro UID="M2"><Macro type="Any"><Name>Kerb</Name><Command>^C^C_PLINE</Command>
+    <SmallImage Name="RCDATA_16_MISSING"/></Macro></MenuMacro>
+</MacroGroup></MenuGroup></CustSection>"#;
+        let png = oxidraft_plot::png::png(&oxidraft_plot::Picture { width: 1, height: 1, rgba: vec![9; 4] }, false);
+        let dll = crate::pe_resources::tests::dll(&[(10, "RCDATA_16_TREE", &png), (10, "RCDATA_16_OTHER", &png)]);
+        let c = read_customization(xml.as_bytes(), "x", crate::pe_resources::resource_images(&dll)).unwrap();
+        let images: Vec<&str> = c.commands.iter().map(|c| c.image.as_str()).collect();
+        assert_eq!(images, ["RCDATA_16_TREE.png", ""]);
+        assert_eq!(c.images, [("RCDATA_16_TREE.png".to_string(), png)], "only the images used");
+    }
+
+    #[test]
+    fn workspaces_read() {
+        let xml = r#"<CustSection><MenuGroup Name="G"><MenuRoot>
+  <ToolbarRoot><Toolbar UID="TB1"><Name>One</Name></Toolbar><Toolbar UID="TB2"><Name>Two</Name></Toolbar></ToolbarRoot>
+  <WorkspaceRoot><Workspace UID="W1" MenuBar="off"><Name>Plain</Name>
+    <WorkspaceToolbar ToolbarId="TB1" Display="0"/><WorkspaceToolbar ToolbarId="TB2" Display="1"/>
+    <WorkspaceToolbar ToolbarId="ELSEWHERE"/>
+    <WorkspaceRibbonRoot><WorkspaceRibbonTabSourceReference TabId="NONE"/></WorkspaceRibbonRoot>
+  </Workspace></WorkspaceRoot>
+</MenuRoot></MenuGroup></CustSection>"#;
+        let c = read_customization(xml.as_bytes(), "x", Vec::new()).unwrap();
+        assert_eq!(
+            c.workspaces,
+            [CuiWorkspace { name: "Plain".into(), menubar: false, toolbars: vec!["Two".into()], tab: None }]
+        );
+    }
+
+    #[test]
     fn the_command_a_macro_starts() {
         assert_eq!(macro_command("^C^C_line").as_deref(), Some("LINE"));
         assert_eq!(macro_command("*^C^C._circle;\\2;").as_deref(), Some("CIRCLE"));
@@ -800,7 +923,7 @@ mod tests {
             ("Images/tree_16.png".into(), png.clone()),
             ("Images/unused.png".into(), png),
         ]);
-        let c = read_customization(&zip, "fallback").unwrap();
+        let c = read_customization(&zip, "fallback", Vec::new()).unwrap();
         assert_eq!(c.group, "SITE");
         let names: Vec<&str> = c.commands.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["Tree & Shrub", "Kerb", "Lamp"]);
@@ -823,9 +946,9 @@ mod tests {
         assert_eq!(c.toolbars[0].name, "Draw");
         assert_eq!(c.toolbars[0].commands, ["SITE:MM_TREE", "", "SITE:MM_KERB"]);
         // As a .cui: the XML alone.
-        assert_eq!(read_customization(MENU.as_bytes(), "x").unwrap().commands.len(), 3);
+        assert_eq!(read_customization(MENU.as_bytes(), "x", Vec::new()).unwrap().commands.len(), 3);
         let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain(MENU.encode_utf16().flat_map(u16::to_le_bytes)).collect();
-        assert_eq!(read_customization(&utf16, "x").unwrap().group, "SITE");
-        assert!(read_customization(b"<html/>", "x").is_err());
+        assert_eq!(read_customization(&utf16, "x", Vec::new()).unwrap().group, "SITE");
+        assert!(read_customization(b"<html/>", "x", Vec::new()).is_err());
     }
 }

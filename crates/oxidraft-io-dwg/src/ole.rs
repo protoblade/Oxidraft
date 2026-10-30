@@ -296,8 +296,9 @@ pub(crate) fn write(cad: &mut CadDocument, doc: &Document, handles: &HashMap<Ent
     }
 }
 
-/// A headerless DIB (BITMAPINFO and bits) as a .bmp file.
-fn bmp_from_dib(dib: &[u8]) -> Option<Vec<u8>> {
+/// A headerless DIB (BITMAPINFO and bits), as OLE presentations and
+/// Windows resources keep bitmaps, as a .bmp file.
+pub fn bmp_from_dib(dib: &[u8]) -> Option<Vec<u8>> {
     let u32_at = |i: usize| dib.get(i..i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
     let header = u32_at(0)? as usize;
     let bits = u16::from_le_bytes([*dib.get(14)?, *dib.get(15)?]);

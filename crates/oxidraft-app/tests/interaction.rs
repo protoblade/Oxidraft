@@ -3072,7 +3072,17 @@ fn customization_files_and_macros() {
     </MacroGroup>
     <MenuRoot><AcceleratorRoot>
       <Accelerator UID="A1" MenuMacroID="MM_KERB"><AccelShortcutKey>CTRL+SHIFT+K</AccelShortcutKey></Accelerator>
-    </AcceleratorRoot></MenuRoot>
+    </AcceleratorRoot>
+    <ToolbarRoot>
+      <Toolbar UID="TB_SITE"><Name>Site</Name><ToolbarButton UID="TBB" MenuMacroID="MM_KERB"><Name>Kerb</Name></ToolbarButton></Toolbar>
+    </ToolbarRoot>
+    <WorkspaceRoot>
+      <Workspace UID="WS_0"><Name>Drafting &amp; Annotation</Name></Workspace>
+      <Workspace UID="WS_1" MenuBar="on"><Name>Site Design</Name>
+        <WorkspaceToolbar ToolbarId="TB_SITE" Display="1"/>
+        <WorkspaceRibbonRoot><WorkspaceRibbonTabSourceReference TabId="T1"/></WorkspaceRibbonRoot>
+      </Workspace>
+    </WorkspaceRoot></MenuRoot>
   </MenuGroup>
   <RibbonRoot>
     <RibbonPanelSourceCollection>
@@ -3097,6 +3107,12 @@ fn customization_files_and_macros() {
     .unwrap();
     assert_eq!(h.state_mut().load_customization(&cuix).unwrap(), "SITE");
     assert!(dir.join("cui/SITE/tree.png").is_file(), "its image kept with the settings");
+    // Its workspace: the menu bar, its toolbar and its ribbon tab (AutoCAD's
+    // Drafting & Annotation being Oxidraft's own).
+    let workspaces = h.state().workspaces();
+    let site = workspaces.iter().find(|w| w.name == "Site Design").expect("its workspace");
+    assert_eq!((site.menubar, site.toolbars.clone(), site.ribbon_tab), (true, vec!["Site".to_string()], 100));
+    assert_eq!(workspaces.iter().filter(|w| w.name.starts_with("Drafting")).count(), 1);
     h.run_steps(2);
     // Its tab, and its buttons running their macros.
     h.get_by_label("Landscape").click();
@@ -3133,6 +3149,9 @@ fn customization_files_and_macros() {
     assert_eq!(h.state_mut().engine_mut().active_name(), Some("PLINE"), "its shortcut");
     h.key_press(Key::Escape);
     h.run_steps(2);
+    h.state_mut().set_workspace("Site Design").unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().current_workspace(), "Site Design");
     // CUILOAD's dialog: the group listed, and unloaded.
     type_all(&mut h, &["cuiload"]);
     h.run_steps(2);
@@ -3141,6 +3160,8 @@ fn customization_files_and_macros() {
     h.run_steps(2);
     assert!(h.query_by_label("Landscape").is_none(), "its tab gone");
     assert!(h.state().customization_groups().is_empty());
+    assert!(!h.state().workspaces().iter().any(|w| w.name == "Site Design"), "its workspace gone");
+    assert_eq!(h.state().current_workspace(), "Drafting & Annotation");
     std::fs::remove_dir_all(&dir).ok();
 }
 

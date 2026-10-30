@@ -21,6 +21,27 @@ const LAYOUT_TAB: usize = RIBBON_TABS.len();
 /// Tabs of your own (CUI) are numbered from here.
 const CUSTOM_TAB: usize = 100;
 
+/// The tabs of your own (CUI) that `panels` put on the ribbon.
+pub(crate) fn custom_tabs_of(panels: &[crate::settings::RibbonPanel]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in panels {
+        let builtin = RIBBON_TABS.iter().chain(&["Layout"]).any(|t| t.eq_ignore_ascii_case(&p.tab));
+        if !builtin && !p.tab.trim().is_empty() && !out.iter().any(|t| t.eq_ignore_ascii_case(&p.tab)) {
+            out.push(p.tab.clone());
+        }
+    }
+    out
+}
+
+/// The ribbon's tab named `name`: AutoCAD's, or one of `custom`.
+pub(crate) fn ribbon_tab_index(name: &str, custom: &[String]) -> Option<usize> {
+    let name = name.trim();
+    RIBBON_TABS
+        .iter()
+        .position(|t| t.eq_ignore_ascii_case(name))
+        .or_else(|| custom.iter().position(|t| t.eq_ignore_ascii_case(name)).map(|i| CUSTOM_TAB + i))
+}
+
 const LAYOUT_TOOLS: &[Tool] = &[
     tool(Icon::NewLayout, "New", Some("LAYOUT N"), "Creates a layout (LAYOUT New)"),
     tool(Icon::PageSetup, "Page Setup", Some("PAGESETUP"), "Sets the layout's paper and orientation (PAGESETUP)"),
@@ -412,14 +433,7 @@ impl OxidraftApp {
 
     /// The tabs CUI's panels make: those not AutoCAD's, in order.
     fn custom_tabs(&self) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        for p in &self.settings.ribbon_panels {
-            let builtin = RIBBON_TABS.iter().chain(&["Layout"]).any(|t| t.eq_ignore_ascii_case(&p.tab));
-            if !builtin && !p.tab.trim().is_empty() && !out.iter().any(|t| t.eq_ignore_ascii_case(&p.tab)) {
-                out.push(p.tab.clone());
-            }
-        }
-        out
+        custom_tabs_of(&self.settings.ribbon_panels)
     }
 
     /// CUI's panels on tab `tab`: a button a command, with the ribbon's

@@ -31,6 +31,8 @@ pub struct Workspace {
     pub ribbon_tab: usize,
     pub menubar: bool,
     pub toolbars: Vec<String>,
+    /// The customization group (CUILOAD) it came from, if one did.
+    pub group: String,
 }
 
 impl Workspace {
@@ -135,6 +137,7 @@ impl OxidraftApp {
             ribbon_tab: self.ribbon_tab,
             menubar: self.settings.menubar,
             toolbars: self.settings.toolbars.clone(),
+            group: String::new(),
         }
     }
 
