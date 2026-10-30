@@ -3022,6 +3022,16 @@ fn menu_bar_and_toolbars() {
     assert!(h.state().toolbars_shown().is_empty());
     type_all(&mut h, &["-toolbar", "nothing", "show"]);
     assert!(h.state_mut().engine_mut().history().iter().any(|l| l.contains("No toolbar named \"nothing\"")));
+    // Workspaces keep the menu bar and toolbars.
+    type_all(&mut h, &["-toolbar", "draw", "show"]);
+    type_all(&mut h, &["wssave", "Classic"]);
+    type_all(&mut h, &["wscurrent", "Drafting & Annotation"]);
+    assert!(h.state().toolbars_shown().is_empty());
+    h.run_steps(2);
+    assert!(h.query_by_label("Format").is_none(), "AutoCAD's own workspace: no menu bar");
+    type_all(&mut h, &["wscurrent", "Classic"]);
+    assert_eq!(h.state().toolbars_shown(), ["Draw"]);
+    h.run_steps(2);
     // TOOLBAR's dialog: the menu bar off.
     type_all(&mut h, &["toolbar"]);
     h.run_steps(2);

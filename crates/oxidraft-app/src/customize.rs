@@ -15,8 +15,8 @@ use crate::theme;
 /// AutoCAD's own workspace, which can't be deleted.
 pub const DRAFTING: &str = "Drafting & Annotation";
 
-/// A named arrangement: which palettes are open, the ribbon's tab, and
-/// whether the screen is clean.
+/// A named arrangement: which palettes are open, the ribbon's tab,
+/// whether the screen is clean, and the menu bar and toolbars shown.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Workspace {
@@ -29,6 +29,8 @@ pub struct Workspace {
     pub xrefs: bool,
     pub clean_screen: bool,
     pub ribbon_tab: usize,
+    pub menubar: bool,
+    pub toolbars: Vec<String>,
 }
 
 impl Workspace {
@@ -131,11 +133,13 @@ impl OxidraftApp {
             xrefs: self.xref_palette_open,
             clean_screen: self.clean_screen,
             ribbon_tab: self.ribbon_tab,
+            menubar: self.settings.menubar,
+            toolbars: self.settings.toolbars.clone(),
         }
     }
 
     /// Makes workspace `name` current: its palettes open, the others
-    /// closed, its ribbon tab.
+    /// closed, its ribbon tab, menu bar and toolbars.
     pub fn set_workspace(&mut self, name: &str) -> Result<(), String> {
         let w = self
             .workspaces()
@@ -156,7 +160,8 @@ impl OxidraftApp {
         if w.quickcalc != self.quickcalc.is_some() {
             self.toggle_quickcalc();
         }
-        let settings = Settings { workspace: w.name.clone(), ..self.settings.clone() };
+        let settings =
+            Settings { workspace: w.name.clone(), menubar: w.menubar, toolbars: w.toolbars, ..self.settings.clone() };
         self.keep_settings(settings);
         Ok(())
     }
