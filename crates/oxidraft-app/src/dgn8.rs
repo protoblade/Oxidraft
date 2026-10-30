@@ -534,7 +534,7 @@ pub(crate) mod tests {
             2
         );
         let arc = got.iter().find_map(|(g, _, _)| match g {
-            Geometry::Ellipse(e) if !e.is_full() => Some(e.clone()),
+            Geometry::Ellipse(e) if !e.is_full() => Some(*e),
             _ => None,
         });
         let at = arc.expect("the elliptical arc").point_at(280.0);
