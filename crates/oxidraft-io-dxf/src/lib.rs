@@ -975,6 +975,11 @@ pub fn settings_of(doc: &Document) -> Vec<(String, f64)> {
         ("LEADER_ANNOTATIVE".into(), flag(l.annotative)),
     ];
     settings.extend(styles);
+    // Named views on layouts: each one's layout, by its tab order.
+    settings.extend(doc.views().iter().filter(|v| v.space != MODEL).filter_map(|v| {
+        let layout = doc.layout(v.space)?;
+        Some((format!("VIEW_LAYOUT:{}", v.name), f64::from(layout.tab_order)))
+    }));
     let named: Vec<(&'static str, f64)> = vec![
         ("LEADER_ARROWHEAD", l.arrowhead.code()),
         ("LEADER_ARROW_SIZE", l.arrow_size),
@@ -1092,6 +1097,13 @@ fn read_settings(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
                     "DIM_ANNOTATIVE" => d.annotative = v != 0.0,
                     "LEADER_ANNOTATIVE" => l.annotative = v != 0.0,
                     _ => {
+                        if let Some(view) = key.strip_prefix("VIEW_LAYOUT:")
+                            && let Some(layout) = doc.layouts().into_iter().find(|l| f64::from(l.tab_order) == v)
+                            && let Some(mut named) = doc.views().iter().find(|n| n.name == view).cloned()
+                        {
+                            named.space = layout.id;
+                            let _ = doc.save_view(named);
+                        }
                         if let Some(name) = key.strip_prefix("ANNOTATIVE_STYLE:")
                             && let Some(mut s) = doc.text_style(name).cloned()
                         {
@@ -1261,7 +1273,8 @@ fn build(doc: &Document) -> Built {
             ..Default::default()
         });
     }
-    for v in doc.views().iter().filter(|v| v.space == oxidraft_model::MODEL) {
+    // All of them; which layout one's on is in Oxidraft's settings.
+    for v in doc.views() {
         drawing.add_view(dxf::tables::View {
             name: v.name.clone(),
             view_center_point: DxfPoint::new(v.center.x, v.center.y, 0.0),

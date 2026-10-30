@@ -35,6 +35,8 @@ pub enum TabRequest {
     Arrange(Arrange),
     /// The arranged drawings put away (QVDRAWINGCLOSE).
     CloseArranged,
+    /// A drawing opened (or gone back to) at one of its named views.
+    OpenView(PathBuf, String),
 }
 
 /// The drawings open in the window, and which one is current.
@@ -213,6 +215,13 @@ impl Drawings {
                     app.after_saving(crate::files::Then::Close);
                 } else {
                     app.new_drawing();
+                }
+            }
+            TabRequest::OpenView(path, view) => {
+                self.handle(ctx, TabRequest::Open(path.clone()));
+                let app = &mut self.list[self.active];
+                if app.path.as_deref() == Some(path.as_path()) {
+                    app.go_to_view(&view);
                 }
             }
             TabRequest::Arrange(a) => self.arrange(ctx, a),

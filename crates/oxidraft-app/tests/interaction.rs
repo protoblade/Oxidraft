@@ -3008,6 +3008,17 @@ fn sheet_sets_share_and_markup() {
         let space = plan.add_layout(layout);
         plan.set_space(space);
         plan.add(Geometry::Circle { center: Point::new(100.0, 100.0), radius: 20.0 });
+        // A named view on the Details sheet: a sheet view.
+        if *name == "Details" {
+            let view = oxidraft_model::NamedView {
+                name: "Detail A".into(),
+                center: Point::new(100.0, 100.0),
+                height: 50.0,
+                width: 80.0,
+                space,
+            };
+            plan.save_view(view).unwrap();
+        }
         plan.set_space(oxidraft_model::MODEL);
     }
     let drawing = dir.join("plans").join("plan.dxf");
@@ -3033,6 +3044,13 @@ fn sheet_sets_share_and_markup() {
     assert_eq!(app.publish_sheet_set(&pdf), Ok(1));
     app.tick_sheets(&[]);
     assert!(std::fs::read_to_string(&set).unwrap().contains("Details only"));
+    // Sheet views: the named views on the sheets' layouts.
+    let views = app.sheet_views().unwrap();
+    assert_eq!(views.iter().map(|v| (v.sheet, v.name.as_str())).collect::<Vec<_>>(), [(1, "Detail A")]);
+    // A subset, kept with the sheet.
+    app.sheet_set_mut().unwrap().sheets[1].subset = "Details".into();
+    app.save_sheet_selection("Details only").unwrap();
+    assert!(std::fs::read_to_string(&set).unwrap().contains("\"subset\": \"Details\""));
     // A custom property, in a field.
     app.sheet_set_mut().unwrap().properties.push(("Client".into(), "Ada".into()));
     let note = app.document_mut().add(Geometry::Text {

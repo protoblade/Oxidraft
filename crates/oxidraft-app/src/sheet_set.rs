@@ -27,6 +27,8 @@ pub struct SheetRef {
     pub layout: String,
     /// Its own custom properties: name and value.
     pub properties: Vec<(String, String)>,
+    /// The subset it's in (empty: none), as `Plans` or `Plans/Ground`.
+    pub subset: String,
 }
 
 /// Sheets kept together under a name, to publish together.
@@ -47,6 +49,16 @@ pub struct SheetSet {
     /// The set's custom properties: name and value.
     pub properties: Vec<(String, String)>,
     pub selections: Vec<SheetSelection>,
+    /// The sheet views' numbers: a view (its drawing and name) and its number.
+    pub view_numbers: Vec<((String, String), String)>,
+}
+
+/// A sheet view: a named view on a sheet's layout.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetView {
+    pub sheet: usize,
+    pub name: String,
+    pub number: String,
 }
 
 impl SheetSet {
@@ -79,11 +91,23 @@ pub(crate) struct SheetSetPalette {
     ticked: Vec<usize>,
     /// The name a new sheet selection gets.
     selection_name: String,
+    /// The Sheet Views list shown (not the Sheet List), and the views
+    /// found in the sheets' drawings.
+    show_views: bool,
+    views: Option<Vec<SheetView>>,
 }
 
 impl SheetSetPalette {
     fn new(path: Option<PathBuf>, set: SheetSet) -> Self {
-        Self { path, set, selected: None, ticked: Vec::new(), selection_name: String::new() }
+        Self {
+            path,
+            set,
+            selected: None,
+            ticked: Vec::new(),
+            selection_name: String::new(),
+            show_views: false,
+            views: None,
+        }
     }
 }
 
@@ -180,11 +204,39 @@ impl OxidraftApp {
                 drawing: name.clone(),
                 layout: l.name.clone(),
                 properties: Vec::new(),
+                subset: String::new(),
             });
             added += 1;
         }
         p.set.save(&set_path)?;
         Ok(added)
+    }
+
+    /// The sheet views: the named views on each sheet's layout, in sheet
+    /// order, numbered as the set has them.
+    pub fn sheet_views(&self) -> Result<Vec<SheetView>, String> {
+        let p = self.sheet_set.as_ref().ok_or("No sheet set is open.")?;
+        let mut out = Vec::new();
+        for (i, s) in p.set.sheets.iter().enumerate() {
+            let file = drawing_path(p.path.as_deref(), s);
+            let read;
+            let doc = if self.path.as_deref() == Some(file.as_path()) {
+                &self.doc
+            } else {
+                read = crate::xref::read_drawing(&file)?;
+                &read
+            };
+            let Some(layout) = doc.layouts().into_iter().find(|l| l.name.eq_ignore_ascii_case(&s.layout)) else {
+                continue;
+            };
+            for v in doc.views().iter().filter(|v| v.space == layout.id) {
+                let key = (s.drawing.clone(), v.name.clone());
+                let number =
+                    p.set.view_numbers.iter().find(|(k, _)| *k == key).map(|(_, n)| n.clone()).unwrap_or_default();
+                out.push(SheetView { sheet: i, name: v.name.clone(), number });
+            }
+        }
+        Ok(out)
     }
 
     /// The sheet set open in the Sheet Set Manager.
@@ -396,6 +448,7 @@ impl OxidraftApp {
         let (mut new, mut load, mut add, mut publish, mut archive, mut open_drawing) =
             (false, false, false, false, false, None);
         let mut sheet_list = false;
+        let (mut views_wanted, mut view_to_open) = (false, None);
         let mut changed = false;
         egui::Window::new("SHEET SET MANAGER")
             .id(egui::Id::unique("sheet_set"))
@@ -415,8 +468,53 @@ impl OxidraftApp {
                     return;
                 }
                 ui.label(RichText::new(&p.set.name).strong());
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(!p.show_views, "Sheet List").clicked() {
+                        p.show_views = false;
+                    }
+                    if ui.selectable_label(p.show_views, "Sheet Views").clicked() {
+                        p.show_views = true;
+                        p.views = None;
+                    }
+                });
+                if p.show_views {
+                    views_wanted = p.views.is_none();
+                    let mut open_view = None;
+                    egui::ScrollArea::vertical().id_salt("sheet_views").max_height(260.0).show(ui, |ui| {
+                        for v in p.views.iter_mut().flatten() {
+                            let Some(sheet) = p.set.sheets.get(v.sheet) else { continue };
+                            ui.horizontal(|ui| {
+                                let r = ui.add(egui::TextEdit::singleline(&mut v.number).desired_width(36.0));
+                                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "View number"));
+                                if r.changed() {
+                                    let key = (sheet.drawing.clone(), v.name.clone());
+                                    p.set.view_numbers.retain(|(k, _)| *k != key);
+                                    p.set.view_numbers.push((key, v.number.clone()));
+                                    changed = true;
+                                }
+                                let r = ui.selectable_label(
+                                    false,
+                                    format!("{}  ({} - {})", v.name, sheet.number, sheet.title),
+                                );
+                                if r.double_clicked() {
+                                    open_view = Some((drawing_path(p.path.as_deref(), sheet), v.name.clone()));
+                                }
+                            });
+                        }
+                    });
+                    view_to_open = open_view;
+                    return;
+                }
                 egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                    let mut subset: Option<&str> = None;
                     for (i, s) in p.set.sheets.iter().enumerate() {
+                        // A subset's name heads its sheets.
+                        if subset != Some(s.subset.as_str()) {
+                            subset = Some(s.subset.as_str());
+                            if !s.subset.is_empty() {
+                                ui.label(RichText::new(&s.subset).strong());
+                            }
+                        }
                         let label = format!("{} - {}", s.number, s.title);
                         let mut ticked = p.ticked.contains(&i);
                         let r = ui
@@ -453,6 +551,29 @@ impl OxidraftApp {
                         let r = ui.add(egui::TextEdit::singleline(&mut p.set.sheets[i].title).desired_width(150.0));
                         r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Sheet title"));
                         changed |= r.changed();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Subset:");
+                        let r = ui.add(
+                            egui::TextEdit::singleline(&mut p.set.sheets[i].subset)
+                                .desired_width(150.0)
+                                .hint_text("none"),
+                        );
+                        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Sheet subset"));
+                        // Sheets of a subset kept together, in the order they came.
+                        if r.lost_focus() {
+                            let sheet = p.set.sheets[i].clone();
+                            let order: Vec<String> = p.set.sheets.iter().fold(Vec::new(), |mut acc, s| {
+                                if !acc.contains(&s.subset) {
+                                    acc.push(s.subset.clone());
+                                }
+                                acc
+                            });
+                            p.set.sheets.sort_by_key(|s| order.iter().position(|o| *o == s.subset));
+                            p.selected = p.set.sheets.iter().position(|s| *s == sheet);
+                            p.ticked.clear();
+                            changed = true;
+                        }
                     });
                     ui.horizontal(|ui| {
                         if ui.button("Open").clicked() {
@@ -580,6 +701,20 @@ impl OxidraftApp {
         }
         if sheet_list && let Err(e) = self.insert_sheet_list() {
             self.engine.log(e);
+        }
+        if views_wanted {
+            let found = self.sheet_views();
+            match found {
+                Ok(views) => {
+                    if let Some(p) = &mut self.sheet_set {
+                        p.views = Some(views);
+                    }
+                }
+                Err(e) => self.engine.log(e),
+            }
+        }
+        if let Some((file, view)) = view_to_open {
+            self.tab_request = Some(crate::drawings::TabRequest::OpenView(file, view));
         }
         if let Some(file) = sheet {
             self.tab_request = Some(crate::drawings::TabRequest::Open(file));
