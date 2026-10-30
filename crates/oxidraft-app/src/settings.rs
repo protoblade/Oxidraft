@@ -46,15 +46,33 @@ pub struct Settings {
     pub ribbon_panels: Vec<RibbonPanel>,
     /// Commands added to the shortcut menu (CUI).
     pub shortcut_menu: Vec<String>,
+    /// Commands of your own (CUI) and those customization files brought
+    /// (CUILOAD), which panels, shortcuts and menus name by their ids.
+    pub commands: Vec<CustomCommand>,
 }
 
-/// A ribbon panel made in CUI: the tab it's on, its title, its commands.
+/// A ribbon panel made in CUI: the tab it's on, its title, its commands;
+/// and the customization file's group it came from (CUILOAD), if any.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RibbonPanel {
     pub tab: String,
     pub name: String,
     pub commands: Vec<String>,
+    pub group: String,
+}
+
+/// A command as CUI makes them: what names it (`id`), its button's name,
+/// its macro as AutoCAD writes them (`^C^C_CIRCLE;\2;`), an image file
+/// for its button, and the customization file's group it came from.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CustomCommand {
+    pub id: String,
+    pub name: String,
+    pub macro_text: String,
+    pub image: String,
+    pub group: String,
 }
 
 /// Where a palette sits: docked at the left or right of the drawing
@@ -223,9 +241,17 @@ mod tests {
             ribbon_panels: vec![RibbonPanel {
                 tab: "Tools".into(),
                 name: "Mine".into(),
-                commands: vec!["LINE".into()],
+                commands: vec!["LINE".into(), "SITE:TREE".into()],
+                group: "SITE".into(),
             }],
             shortcut_menu: vec!["ZOOM".into()],
+            commands: vec![CustomCommand {
+                id: "SITE:TREE".into(),
+                name: "Tree".into(),
+                macro_text: "^C^C_CIRCLE;\\2;".into(),
+                image: "/images/tree.png".into(),
+                group: "SITE".into(),
+            }],
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);

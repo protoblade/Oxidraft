@@ -21,6 +21,8 @@ pub struct Customization {
     pub quick_access: Vec<String>,
     pub aliases: Vec<(String, String)>,
     pub workspaces: Vec<crate::customize::Workspace>,
+    pub commands: Vec<crate::settings::CustomCommand>,
+    pub ribbon_panels: Vec<crate::settings::RibbonPanel>,
 }
 
 /// The block references' attributes as CSV: block name, count 1, X, Y,
@@ -325,6 +327,8 @@ impl OxidraftApp {
             quick_access: self.settings.quick_access.clone(),
             aliases: self.settings.aliases.clone(),
             workspaces: self.settings.workspaces.clone(),
+            commands: self.settings.commands.clone(),
+            ribbon_panels: self.settings.ribbon_panels.clone(),
         };
         let written = serde_json::to_string_pretty(&c)
             .map_err(|e| e.to_string())
@@ -358,13 +362,29 @@ impl OxidraftApp {
             s.workspaces.retain(|x| !x.name.eq_ignore_ascii_case(&w.name));
             s.workspaces.push(w);
         }
+        for command in c.commands {
+            s.commands.retain(|x| !x.id.eq_ignore_ascii_case(&command.id));
+            s.commands.push(command);
+        }
+        for p in c.ribbon_panels {
+            if !s.ribbon_panels.contains(&p) {
+                s.ribbon_panels.push(p);
+            }
+        }
         self.keep_settings(s);
         Ok(())
     }
 
+    /// CUIIMPORT: AutoCAD's .cuix or .cui (loaded as CUILOAD loads
+    /// them), or a file CUIEXPORT wrote.
     pub(crate) fn cui_import(&mut self) {
-        let Some(path) = rfd::FileDialog::new().add_filter("Customization", &["json"]).pick_file() else { return };
-        match self.cui_import_from(&path) {
+        let Some(path) = rfd::FileDialog::new().add_filter("Customization", &["cuix", "cui", "json"]).pick_file()
+        else {
+            return;
+        };
+        let json = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"));
+        let taken = if json { self.cui_import_from(&path) } else { self.load_customization(&path).map(|_| ()) };
+        match taken {
             Ok(()) => self.engine.log(format!("Customization taken in from {}", path.display())),
             Err(e) => self.engine.log(e),
         }

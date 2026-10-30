@@ -2997,6 +2997,97 @@ fn workspaces_and_cui() {
 }
 
 #[test]
+fn customization_files_and_macros() {
+    let mut h = app_with_line();
+    let dir = std::env::temp_dir().join(format!("oxidraft-cuix-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    h.state_mut().keep_settings_in(dir.join("settings.json"));
+    // A partial customization: a ribbon tab with a panel, a shortcut, and
+    // a button image of its own.
+    let menu = r#"<?xml version="1.0" encoding="utf-8"?>
+<CustSection>
+  <MenuGroup Name="SITE">
+    <MacroGroup Name="SITE">
+      <MenuMacro UID="MM_TREE"><Macro type="Any"><Name>Tree</Name><Command>^C^C_CIRCLE;\2;</Command>
+        <SmallImage Name="tree.png"/></Macro></MenuMacro>
+      <MenuMacro UID="MM_BOX"><Macro type="Any"><Name>Box</Name><Command>^C^C_LINE;200,200;220,200;220,220;;</Command></Macro></MenuMacro>
+      <MenuMacro UID="MM_KERB"><Macro type="Any"><Name>Kerb</Name><Command>^C^C_PLINE</Command></Macro></MenuMacro>
+    </MacroGroup>
+    <MenuRoot><AcceleratorRoot>
+      <Accelerator UID="A1" MenuMacroID="MM_KERB"><AccelShortcutKey>CTRL+SHIFT+K</AccelShortcutKey></Accelerator>
+    </AcceleratorRoot></MenuRoot>
+  </MenuGroup>
+  <RibbonRoot>
+    <RibbonPanelSourceCollection>
+      <RibbonPanelSource UID="P1" Text="Site Works"><RibbonRow>
+        <RibbonCommandButton MenuMacroID="MM_TREE"/><RibbonCommandButton MenuMacroID="MM_BOX"/>
+      </RibbonRow></RibbonPanelSource>
+    </RibbonPanelSourceCollection>
+    <RibbonTabSourceCollection>
+      <RibbonTabSource UID="T1" Text="Landscape"><RibbonPanelSourceReference PanelId="P1"/></RibbonTabSource>
+    </RibbonTabSourceCollection>
+  </RibbonRoot>
+</CustSection>"#;
+    let png = oxidraft_plot::png::png(
+        &oxidraft_plot::Picture { width: 2, height: 2, rgba: [0, 128, 0, 255].repeat(4) },
+        false,
+    );
+    let cuix = dir.join("site.cuix");
+    std::fs::write(
+        &cuix,
+        oxidraft_plot::zip::zip(&[("MenuGroup.cui".into(), menu.as_bytes().to_vec()), ("images/tree.png".into(), png)]),
+    )
+    .unwrap();
+    assert_eq!(h.state_mut().load_customization(&cuix).unwrap(), "SITE");
+    assert!(dir.join("cui/SITE/tree.png").is_file(), "its image kept with the settings");
+    h.run_steps(2);
+    // Its tab, and its buttons running their macros.
+    h.get_by_label("Landscape").click();
+    h.run_steps(2);
+    h.get_by_label("Tree").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("CIRCLE"), "waiting at the macro's pause");
+    // The center given, the macro goes on: a radius of 2.
+    type_all(&mut h, &["150,150"]);
+    h.run_steps(2);
+    assert!(!h.state_mut().engine_mut().is_active());
+    let circle = h.state_mut().document_mut().entities().find_map(|e| match e.geometry {
+        Geometry::Circle { center, radius } => Some((center, radius)),
+        _ => None,
+    });
+    assert_eq!(circle, Some((Point::new(150.0, 150.0), 2.0)));
+    let before = h.state_mut().document_mut().len();
+    h.get_by_label("Box").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().document_mut().len(), before + 2, "two lines, and Enter ended LINE");
+    assert!(!h.state_mut().engine_mut().is_active());
+    let ends: Vec<Point> = h
+        .state_mut()
+        .document_mut()
+        .entities()
+        .filter_map(|e| match e.geometry {
+            Geometry::Line { end, .. } => Some(end),
+            _ => None,
+        })
+        .collect();
+    assert!(ends.contains(&Point::new(220.0, 220.0)), "the points as written: {ends:?}");
+    h.key_press_modifiers(Modifiers::CTRL | Modifiers::SHIFT, Key::K);
+    h.run_steps(2);
+    assert_eq!(h.state_mut().engine_mut().active_name(), Some("PLINE"), "its shortcut");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    // CUILOAD's dialog: the group listed, and unloaded.
+    type_all(&mut h, &["cuiload"]);
+    h.run_steps(2);
+    assert!(h.query_by_label("Load/Unload Customizations").is_some());
+    h.get_by_label("Unload").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Landscape").is_none(), "its tab gone");
+    assert!(h.state().customization_groups().is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn sheet_sets_share_and_markup() {
     let mut h = app_with_line();
     let dir = std::env::temp_dir().join(format!("oxidraft-sheetset-{}", std::process::id()));

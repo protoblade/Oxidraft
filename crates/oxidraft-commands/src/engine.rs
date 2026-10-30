@@ -849,6 +849,12 @@ pub const COMMANDS: &[CommandInfo] = &[
         make: None,
     },
     CommandInfo {
+        name: "CUILOAD",
+        aliases: &["MENULOAD"],
+        description: "Load or unload AutoCAD customization files (.cuix, .cui): their commands, ribbon panels and shortcuts",
+        make: None,
+    },
+    CommandInfo {
         name: "SHEETSET",
         aliases: &["SSM"],
         description: "The Sheet Set Manager: sheets from drawings' layouts, published and archived together",
@@ -1093,14 +1099,14 @@ pub const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "CUIIMPORT",
-        aliases: &["CUILOAD"],
-        description: "Take in shortcuts, toolbar commands, aliases and workspaces from a file",
+        aliases: &[],
+        description: "Take in an AutoCAD customization file (.cuix, .cui), or one CUIEXPORT wrote",
         make: None,
     },
     CommandInfo {
         name: "CUIUNLOAD",
-        aliases: &[],
-        description: "Back to the built-in shortcuts and Quick Access Toolbar",
+        aliases: &["MENUUNLOAD"],
+        description: "Unload customization groups, or go back to the built-in shortcuts and Quick Access Toolbar",
         make: None,
     },
     CommandInfo { name: "AUTOCOMPLETE", aliases: &[], description: "Command line AutoComplete on or off", make: None },

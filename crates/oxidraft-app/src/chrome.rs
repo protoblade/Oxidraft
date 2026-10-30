@@ -248,8 +248,26 @@ impl OxidraftApp {
                 }
                 // Commands added to the Quick Access Toolbar (CUI).
                 for command in self.settings.quick_access.clone() {
-                    let label = egui::RichText::new(command.to_ascii_lowercase()).size(11.5).color(theme::text());
-                    if ui.add(egui::Button::new(label).frame(false)).on_hover_text(&command).clicked() {
+                    let r = match self.custom_command(&command).cloned() {
+                        // One of your own: its image, else its name.
+                        Some(c) => match self.button_image(ui.ctx(), &c.image) {
+                            Some(t) => ui.add(
+                                egui::Button::image(egui::Image::new(&t).fit_to_exact_size(egui::vec2(16.0, 16.0)))
+                                    .frame(false),
+                            ),
+                            None => ui.add(
+                                egui::Button::new(egui::RichText::new(&c.name).size(11.5).color(theme::text()))
+                                    .frame(false),
+                            ),
+                        },
+                        None => ui.add(
+                            egui::Button::new(
+                                egui::RichText::new(command.to_ascii_lowercase()).size(11.5).color(theme::text()),
+                            )
+                            .frame(false),
+                        ),
+                    };
+                    if r.on_hover_text(self.button_tip(&command)).clicked() {
                         self.run(&command);
                     }
                 }
@@ -420,10 +438,11 @@ impl OxidraftApp {
                         let others: Vec<&str> = split.collect();
                         self.custom_button(ui, main);
                         if !others.is_empty() {
-                            let more = format!("More like {main}");
+                            let more = format!("More like {}", self.button_label(main));
                             let r = ui.menu_button("+", |ui| {
                                 for c in others {
-                                    if ui.button(c).on_hover_text(command_tip(c)).clicked() {
+                                    let label = self.button_label(c);
+                                    if ui.button(label).on_hover_text(self.button_tip(c)).clicked() {
                                         self.run(c);
                                         ui.close();
                                     }
@@ -438,9 +457,35 @@ impl OxidraftApp {
         }
     }
 
-    /// A CUI panel's command: the ribbon's own tool (its icon) when it has
+    /// A button's name: a command of your own's, else the command's.
+    pub(crate) fn button_label(&self, command: &str) -> String {
+        self.custom_command(command).map_or_else(|| command.to_string(), |c| c.name.clone())
+    }
+
+    pub(crate) fn button_tip(&self, command: &str) -> String {
+        match self.custom_command(command) {
+            Some(c) => format!("{} ({})", c.name, c.macro_text),
+            None => command_tip(command),
+        }
+    }
+
+    /// A CUI panel's command: one of your own with its image (if it has
+    /// one) and name; else the ribbon's own tool (its icon) when it has
     /// one, else a button with its name.
     fn custom_button(&mut self, ui: &mut Ui, command: &str) {
+        if let Some(c) = self.custom_command(command).cloned() {
+            let r = match self.button_image(ui.ctx(), &c.image) {
+                Some(t) => ui.add(egui::Button::image_and_text(
+                    egui::Image::new(&t).fit_to_exact_size(egui::vec2(16.0, 16.0)),
+                    c.name.as_str(),
+                )),
+                None => ui.button(c.name.as_str()),
+            };
+            if r.on_hover_text(self.button_tip(command)).clicked() {
+                self.run_macro(&c.macro_text);
+            }
+            return;
+        }
         match known_tool(command) {
             Some(t) => self.small_tool(ui, t),
             None => {

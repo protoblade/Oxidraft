@@ -12,6 +12,7 @@ mod classic;
 mod clipboard;
 mod cmdline;
 mod compare;
+mod cuix;
 mod customize;
 mod datalink;
 mod dcl;

@@ -36,7 +36,7 @@ impl OxidraftApp {
         if !self.engine.is_active() && !self.settings.shortcut_menu.is_empty() {
             ui.separator();
             for c in self.settings.shortcut_menu.clone() {
-                if ui.button(&c).clicked() {
+                if ui.button(self.button_label(&c)).clicked() {
                     self.run(&c);
                     ui.close();
                 }

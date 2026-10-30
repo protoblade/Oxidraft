@@ -118,8 +118,14 @@ pub struct OxidraftApp {
     pub(crate) export_pdf: Option<crate::publish::ExportPdf>,
     /// PLOTTERMANAGER's dialog.
     pub(crate) plotter_manager: Option<crate::plotters::PlotterManager>,
-    /// CUI's dialog.
+    /// CUI's dialog, the Load/Unload Customizations dialog (CUILOAD), and
+    /// the button images of your own, read.
     pub(crate) cui: Option<crate::customize::CuiDialog>,
+    pub(crate) cui_load: Option<crate::cuix::CuiLoadDialog>,
+    /// A CUI macro's rest after a pause, and how many inputs the command
+    /// had then: it goes on after the user's.
+    pub(crate) macro_rest: Option<(String, usize)>,
+    pub(crate) button_images: std::collections::HashMap<String, Option<egui::TextureHandle>>,
     /// The Sheet Set Manager (SHEETSET).
     pub(crate) sheet_set: Option<crate::sheet_set::SheetSetPalette>,
     /// RIBBONCLOSE and COMMANDLINEHIDE.
@@ -369,6 +375,9 @@ impl OxidraftApp {
             export_pdf: None,
             plotter_manager: None,
             cui: None,
+            cui_load: None,
+            macro_rest: None,
+            button_images: Default::default(),
             sheet_set: None,
             ribbon_hidden: false,
             command_line_hidden: false,
@@ -704,6 +713,12 @@ impl OxidraftApp {
     /// A button's macro may pick the command's options too, as AutoCAD's
     /// "^C^C_MVIEW _L _ON" does: "MVIEW L ON".
     pub(crate) fn run(&mut self, name: &str) {
+        // A command of your own (CUI, CUILOAD): its macro.
+        if let Some(c) = self.custom_command(name) {
+            let m = c.macro_text.clone();
+            self.run_macro(&m);
+            return;
+        }
         self.command_text.clear();
         let mut words = name.split_whitespace();
         let Some(command) = words.next() else { return };
@@ -717,7 +732,7 @@ impl OxidraftApp {
     }
 
     /// Commands about files and the view, which the engine doesn't know about.
-    fn run_app_command(&mut self, name: &str) -> bool {
+    pub(crate) fn run_app_command(&mut self, name: &str) -> bool {
         // A slide shows until the drawing is drawn again.
         if matches!(
             name.trim().to_ascii_uppercase().as_str(),
@@ -825,16 +840,8 @@ impl OxidraftApp {
             "QVLAYOUT" => self.qv_layouts = true,
             "QVLAYOUTCLOSE" => self.qv_layouts = false,
             "CUIEXPORT" => self.cui_export(),
-            "CUIIMPORT" | "CUILOAD" => self.cui_import(),
-            "CUIUNLOAD" => {
-                let settings = crate::settings::Settings {
-                    shortcuts: Vec::new(),
-                    quick_access: Vec::new(),
-                    ..self.settings.clone()
-                };
-                self.keep_settings(settings);
-                self.engine.log("Back to the built-in shortcuts and Quick Access Toolbar.");
-            }
+            "CUIIMPORT" => self.cui_import(),
+            "CUILOAD" | "MENULOAD" | "CUIUNLOAD" | "MENUUNLOAD" => self.open_cui_load(),
             "AUTOCOMPLETE" => {
                 self.autocomplete_off = !self.autocomplete_off;
                 self.log_toggle("AutoComplete", !self.autocomplete_off);
@@ -1020,8 +1027,10 @@ impl OxidraftApp {
         let cursor = self.cursor.unwrap_or(Point::ORIGIN);
         let tolerance = self.pick_tolerance();
         self.engine.submit(&text, &mut self.doc, cursor, tolerance);
-        // What was typed may answer what a LISP program waits for.
+        // What was typed may answer what a LISP program or a paused macro
+        // waits for.
         self.lisp_pump();
+        self.macro_pump();
     }
 
     /// Opens what commands asked for. Returns true if there was anything.
@@ -1409,6 +1418,7 @@ impl eframe::App for OxidraftApp {
         self.export_pdf_dialog(&ctx);
         self.plotter_manager_dialog(&ctx);
         self.cui_dialog(&ctx);
+        self.cui_load_dialog(&ctx);
         self.sheet_set_palette(&ctx);
         self.traces_palette(&ctx);
         self.quick_view_layouts(&ctx);
@@ -1468,6 +1478,7 @@ impl eframe::App for OxidraftApp {
         // answered it.
         self.dcl_dialog(&ctx);
         self.lisp_pump();
+        self.macro_pump();
         if self.lisp.running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(30));
         }

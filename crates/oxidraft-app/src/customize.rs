@@ -96,6 +96,14 @@ pub(crate) struct CuiDialog {
     panel: (String, String, String),
     shortcut_menu: Vec<String>,
     menu_command: String,
+    commands: Vec<crate::settings::CustomCommand>,
+    /// A command being made: its name, macro and image file.
+    new_command: (String, String, String),
+}
+
+/// What names a command made in CUI: its name, upper case, spaces as `_`.
+pub fn command_id(name: &str) -> String {
+    name.split_whitespace().collect::<Vec<_>>().join("_").to_ascii_uppercase()
 }
 
 impl OxidraftApp {
@@ -277,171 +285,262 @@ impl OxidraftApp {
             panel: (String::new(), String::new(), String::new()),
             shortcut_menu: self.settings.shortcut_menu.clone(),
             menu_command: String::new(),
+            commands: self.settings.commands.clone(),
+            new_command: Default::default(),
         });
     }
 
-    /// CUI: the Customize User Interface dialog — keyboard shortcuts of
-    /// your own beside the built-in ones, the Quick Access Toolbar's
-    /// commands, ribbon panels of your own (on AutoCAD's tabs or tabs of
-    /// their own) and commands added to the shortcut menu.
+    /// CUI: the Customize User Interface dialog — commands of your own
+    /// (a macro and an image for the button), keyboard shortcuts of your
+    /// own beside the built-in ones, the Quick Access Toolbar's commands,
+    /// ribbon panels of your own (on AutoCAD's tabs or tabs of their own)
+    /// and commands added to the shortcut menu.
     pub(crate) fn cui_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut d) = self.cui.take() else { return };
         let (mut open, mut ok, mut cancel) = (true, false, false);
         let mut fields = Vec::new();
+        // Below its title, above OK and Cancel.
+        let max_height = (self.dialog_area(ctx).bottom() - 60.0 - 110.0).max(200.0);
         egui::Window::new("Customize User Interface")
             .id(egui::Id::unique("cui"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
-            .default_pos([340.0, 120.0])
+            .default_pos([340.0, 60.0])
             .constrain_to(self.dialog_area(ctx))
             .show(ctx, |ui| {
-                ui.label(RichText::new("Keyboard Shortcuts").strong());
-                egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-                    egui::Grid::new("cui_keys").num_columns(3).spacing([16.0, 2.0]).show(ui, |ui| {
-                        let mut remove = None;
-                        for (i, (keys, command)) in d.shortcuts.iter().enumerate() {
-                            ui.label(keys);
-                            ui.label(command);
+                // The sections scroll when the window is short; OK and
+                // Cancel stay in sight.
+                egui::ScrollArea::vertical().id_salt("cui_sections").max_height(max_height).show(ui, |ui| {
+                    egui::CollapsingHeader::new(RichText::new("Commands").strong())
+                        .id_salt("cui_commands_header")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            let mut remove = None;
+                            egui::ScrollArea::vertical().id_salt("cui_commands").max_height(110.0).show(ui, |ui| {
+                                for (i, c) in d.commands.iter().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        let group =
+                                            if c.group.is_empty() { String::new() } else { format!(" [{}]", c.group) };
+                                        ui.label(format!("{}: {}{group}", c.name, c.macro_text))
+                                            .on_hover_text(format!("Panels, shortcuts and menus name it {}", c.id));
+                                        if ui.small_button("Remove").clicked() {
+                                            remove = Some(i);
+                                        }
+                                    });
+                                }
+                            });
+                            if let Some(i) = remove {
+                                d.commands.remove(i);
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label("Name:");
+                                let r = ui.add(egui::TextEdit::singleline(&mut d.new_command.0).desired_width(90.0));
+                                r.widget_info(|| {
+                                    egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Command name")
+                                });
+                                fields.push(r.id);
+                                ui.label("Macro:");
+                                let r = ui.add(
+                                    egui::TextEdit::singleline(&mut d.new_command.1)
+                                        .desired_width(130.0)
+                                        .hint_text("^C^C_CIRCLE;\\2;"),
+                                );
+                                r.widget_info(|| {
+                                    egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Command macro")
+                                });
+                                fields.push(r.id);
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Image:");
+                                let r = ui.add(
+                                    egui::TextEdit::singleline(&mut d.new_command.2)
+                                        .desired_width(200.0)
+                                        .hint_text("PNG, BMP or JPEG"),
+                                );
+                                r.widget_info(|| {
+                                    egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Command image")
+                                });
+                                fields.push(r.id);
+                                if ui.button("Browse...").clicked()
+                                    && let Some(file) = rfd::FileDialog::new()
+                                        .add_filter("Images", &["png", "bmp", "jpg", "jpeg"])
+                                        .pick_file()
+                                {
+                                    d.new_command.2 = file.to_string_lossy().into_owned();
+                                }
+                                let id = command_id(&d.new_command.0);
+                                let valid = !id.is_empty() && !d.new_command.1.trim().is_empty();
+                                if ui.add_enabled(valid, egui::Button::new("Add Command")).clicked() {
+                                    d.commands.retain(|c| !c.id.eq_ignore_ascii_case(&id));
+                                    let (name, macro_text, image) = std::mem::take(&mut d.new_command);
+                                    d.commands.push(crate::settings::CustomCommand {
+                                        id,
+                                        name: name.trim().to_string(),
+                                        macro_text: macro_text.trim().to_string(),
+                                        image: image.trim().to_string(),
+                                        group: String::new(),
+                                    });
+                                }
+                            });
+                            ui.colored_label(
+                                theme::text_dim(),
+                                "Panels, shortcuts and menus name a command of your own by its name, spaces as _.",
+                            );
+                        });
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Keyboard Shortcuts").strong());
+                    egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                        egui::Grid::new("cui_keys").num_columns(3).spacing([16.0, 2.0]).show(ui, |ui| {
+                            let mut remove = None;
+                            for (i, (keys, command)) in d.shortcuts.iter().enumerate() {
+                                ui.label(keys);
+                                ui.label(command);
+                                if ui.small_button("Remove").clicked() {
+                                    remove = Some(i);
+                                }
+                                ui.end_row();
+                            }
+                            if let Some(i) = remove {
+                                d.shortcuts.remove(i);
+                            }
+                            for (keys, command) in BUILT_IN {
+                                ui.colored_label(theme::text_dim(), *keys);
+                                ui.colored_label(theme::text_dim(), *command);
+                                ui.label("");
+                                ui.end_row();
+                            }
+                        });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Keys:");
+                        let r = ui.add(
+                            egui::TextEdit::singleline(&mut d.keys).desired_width(110.0).hint_text("Ctrl+Shift+L"),
+                        );
+                        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Shortcut keys"));
+                        fields.push(r.id);
+                        ui.label("Command:");
+                        let r = ui.add(egui::TextEdit::singleline(&mut d.command).desired_width(110.0));
+                        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Shortcut command"));
+                        fields.push(r.id);
+                        let command = d.command.trim().to_ascii_uppercase();
+                        let valid = parse_shortcut(&d.keys).is_some() && !command.is_empty();
+                        if ui.add_enabled(valid, egui::Button::new("Add Shortcut")).clicked() {
+                            let keys = d.keys.trim().to_string();
+                            d.shortcuts.retain(|(k, _)| !k.eq_ignore_ascii_case(&keys));
+                            d.shortcuts.push((keys, command));
+                            d.keys.clear();
+                            d.command.clear();
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Quick Access Toolbar").strong());
+                    ui.colored_label(theme::text_dim(), "New, Open, Save, Undo and Redo, then these:");
+                    let mut remove = None;
+                    ui.horizontal_wrapped(|ui| {
+                        for (i, c) in d.quick_access.iter().enumerate() {
+                            if ui.button(format!("{c}  x")).on_hover_text("Remove").clicked() {
+                                remove = Some(i);
+                            }
+                        }
+                    });
+                    if let Some(i) = remove {
+                        d.quick_access.remove(i);
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Command:");
+                        let r = ui.add(egui::TextEdit::singleline(&mut d.toolbar_command).desired_width(140.0));
+                        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Toolbar command"));
+                        fields.push(r.id);
+                        let command = d.toolbar_command.trim().to_ascii_uppercase();
+                        if ui.add_enabled(!command.is_empty(), egui::Button::new("Add to Toolbar")).clicked() {
+                            if !d.quick_access.contains(&command) {
+                                d.quick_access.push(command);
+                            }
+                            d.toolbar_command.clear();
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Ribbon Panels").strong());
+                    let mut remove = None;
+                    for (i, p) in d.panels.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{} › {}: {}", p.tab, p.name, p.commands.join(", ")));
                             if ui.small_button("Remove").clicked() {
                                 remove = Some(i);
                             }
-                            ui.end_row();
-                        }
-                        if let Some(i) = remove {
-                            d.shortcuts.remove(i);
-                        }
-                        for (keys, command) in BUILT_IN {
-                            ui.colored_label(theme::text_dim(), *keys);
-                            ui.colored_label(theme::text_dim(), *command);
-                            ui.label("");
-                            ui.end_row();
-                        }
-                    });
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Keys:");
-                    let r =
-                        ui.add(egui::TextEdit::singleline(&mut d.keys).desired_width(110.0).hint_text("Ctrl+Shift+L"));
-                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Shortcut keys"));
-                    fields.push(r.id);
-                    ui.label("Command:");
-                    let r = ui.add(egui::TextEdit::singleline(&mut d.command).desired_width(110.0));
-                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Shortcut command"));
-                    fields.push(r.id);
-                    let command = d.command.trim().to_ascii_uppercase();
-                    let valid = parse_shortcut(&d.keys).is_some() && !command.is_empty();
-                    if ui.add_enabled(valid, egui::Button::new("Add Shortcut")).clicked() {
-                        let keys = d.keys.trim().to_string();
-                        d.shortcuts.retain(|(k, _)| !k.eq_ignore_ascii_case(&keys));
-                        d.shortcuts.push((keys, command));
-                        d.keys.clear();
-                        d.command.clear();
-                    }
-                });
-                ui.add_space(8.0);
-                ui.label(RichText::new("Quick Access Toolbar").strong());
-                ui.colored_label(theme::text_dim(), "New, Open, Save, Undo and Redo, then these:");
-                let mut remove = None;
-                ui.horizontal_wrapped(|ui| {
-                    for (i, c) in d.quick_access.iter().enumerate() {
-                        if ui.button(format!("{c}  x")).on_hover_text("Remove").clicked() {
-                            remove = Some(i);
-                        }
-                    }
-                });
-                if let Some(i) = remove {
-                    d.quick_access.remove(i);
-                }
-                ui.horizontal(|ui| {
-                    ui.label("Command:");
-                    let r = ui.add(egui::TextEdit::singleline(&mut d.toolbar_command).desired_width(140.0));
-                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Toolbar command"));
-                    fields.push(r.id);
-                    let command = d.toolbar_command.trim().to_ascii_uppercase();
-                    if ui.add_enabled(!command.is_empty(), egui::Button::new("Add to Toolbar")).clicked() {
-                        if !d.quick_access.contains(&command) {
-                            d.quick_access.push(command);
-                        }
-                        d.toolbar_command.clear();
-                    }
-                });
-                ui.add_space(8.0);
-                ui.label(RichText::new("Ribbon Panels").strong());
-                let mut remove = None;
-                for (i, p) in d.panels.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{} › {}: {}", p.tab, p.name, p.commands.join(", ")));
-                        if ui.small_button("Remove").clicked() {
-                            remove = Some(i);
-                        }
-                    });
-                }
-                if let Some(i) = remove {
-                    d.panels.remove(i);
-                }
-                ui.horizontal(|ui| {
-                    ui.label("Tab:");
-                    let r = ui.add(egui::TextEdit::singleline(&mut d.panel.0).desired_width(80.0).hint_text("Home"));
-                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Panel tab"));
-                    fields.push(r.id);
-                    ui.label("Panel:");
-                    let r = ui.add(egui::TextEdit::singleline(&mut d.panel.1).desired_width(80.0));
-                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Panel name"));
-                    fields.push(r.id);
-                    ui.label("Commands:");
-                    let r = ui
-                        .add(egui::TextEdit::singleline(&mut d.panel.2).desired_width(140.0).hint_text("LINE, CIRCLE"));
-                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Panel commands"));
-                    fields.push(r.id);
-                    // `A|B|C`: a split button.
-                    let commands: Vec<String> = d
-                        .panel
-                        .2
-                        .split([',', ' '])
-                        .map(|c| c.trim().to_ascii_uppercase())
-                        .filter(|c| !c.is_empty())
-                        .collect();
-                    let valid = !d.panel.0.trim().is_empty() && !d.panel.1.trim().is_empty() && !commands.is_empty();
-                    if ui.add_enabled(valid, egui::Button::new("Add Panel")).clicked() {
-                        d.panels.push(crate::settings::RibbonPanel {
-                            tab: d.panel.0.trim().to_string(),
-                            name: d.panel.1.trim().to_string(),
-                            commands,
                         });
-                        d.panel.1.clear();
-                        d.panel.2.clear();
                     }
-                });
-                ui.colored_label(
-                    theme::text_dim(),
-                    "A tab that isn't the ribbon's is made for its panels; CIRCLE|ARC is a split button.",
-                );
-                ui.add_space(8.0);
-                ui.label(RichText::new("Shortcut Menu").strong());
-                let mut remove = None;
-                ui.horizontal_wrapped(|ui| {
-                    for (i, c) in d.shortcut_menu.iter().enumerate() {
-                        if ui.button(format!("{c}  x")).on_hover_text("Remove").clicked() {
-                            remove = Some(i);
+                    if let Some(i) = remove {
+                        d.panels.remove(i);
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Tab:");
+                        let r =
+                            ui.add(egui::TextEdit::singleline(&mut d.panel.0).desired_width(80.0).hint_text("Home"));
+                        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Panel tab"));
+                        fields.push(r.id);
+                        ui.label("Panel:");
+                        let r = ui.add(egui::TextEdit::singleline(&mut d.panel.1).desired_width(80.0));
+                        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Panel name"));
+                        fields.push(r.id);
+                        ui.label("Commands:");
+                        let r = ui.add(
+                            egui::TextEdit::singleline(&mut d.panel.2).desired_width(140.0).hint_text("LINE, CIRCLE"),
+                        );
+                        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Panel commands"));
+                        fields.push(r.id);
+                        // `A|B|C`: a split button.
+                        let commands: Vec<String> = d
+                            .panel
+                            .2
+                            .split([',', ' '])
+                            .map(|c| c.trim().to_ascii_uppercase())
+                            .filter(|c| !c.is_empty())
+                            .collect();
+                        let valid =
+                            !d.panel.0.trim().is_empty() && !d.panel.1.trim().is_empty() && !commands.is_empty();
+                        if ui.add_enabled(valid, egui::Button::new("Add Panel")).clicked() {
+                            d.panels.push(crate::settings::RibbonPanel {
+                                tab: d.panel.0.trim().to_string(),
+                                name: d.panel.1.trim().to_string(),
+                                commands,
+                                group: String::new(),
+                            });
+                            d.panel.1.clear();
+                            d.panel.2.clear();
                         }
-                    }
-                });
-                if let Some(i) = remove {
-                    d.shortcut_menu.remove(i);
-                }
-                ui.horizontal(|ui| {
-                    ui.label("Command:");
-                    let r = ui.add(egui::TextEdit::singleline(&mut d.menu_command).desired_width(140.0));
-                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Menu command"));
-                    fields.push(r.id);
-                    let command = d.menu_command.trim().to_ascii_uppercase();
-                    if ui.add_enabled(!command.is_empty(), egui::Button::new("Add to Menu")).clicked() {
-                        if !d.shortcut_menu.contains(&command) {
-                            d.shortcut_menu.push(command);
+                    });
+                    ui.colored_label(
+                        theme::text_dim(),
+                        "A tab that isn't the ribbon's is made for its panels; CIRCLE|ARC is a split button.",
+                    );
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Shortcut Menu").strong());
+                    let mut remove = None;
+                    ui.horizontal_wrapped(|ui| {
+                        for (i, c) in d.shortcut_menu.iter().enumerate() {
+                            if ui.button(format!("{c}  x")).on_hover_text("Remove").clicked() {
+                                remove = Some(i);
+                            }
                         }
-                        d.menu_command.clear();
+                    });
+                    if let Some(i) = remove {
+                        d.shortcut_menu.remove(i);
                     }
+                    ui.horizontal(|ui| {
+                        ui.label("Command:");
+                        let r = ui.add(egui::TextEdit::singleline(&mut d.menu_command).desired_width(140.0));
+                        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Menu command"));
+                        fields.push(r.id);
+                        let command = d.menu_command.trim().to_ascii_uppercase();
+                        if ui.add_enabled(!command.is_empty(), egui::Button::new("Add to Menu")).clicked() {
+                            if !d.shortcut_menu.contains(&command) {
+                                d.shortcut_menu.push(command);
+                            }
+                            d.menu_command.clear();
+                        }
+                    });
                 });
                 let row = vec2(ui.available_width().max(440.0), 24.0);
                 ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
@@ -451,11 +550,13 @@ impl OxidraftApp {
             });
         self.text_fields.extend(fields);
         if ok {
+            self.button_images.clear();
             let settings = Settings {
                 shortcuts: d.shortcuts,
                 quick_access: d.quick_access,
                 ribbon_panels: d.panels,
                 shortcut_menu: d.shortcut_menu,
+                commands: d.commands,
                 ..self.settings.clone()
             };
             self.keep_settings(settings);
