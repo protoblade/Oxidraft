@@ -36,11 +36,11 @@ impl Command for GripStretch {
         for (id, g) in self.stretched(to).collect::<Vec<_>>() {
             ctx.doc.modify(id, g);
         }
-        // An annotative text's or block's point: only this scale's
+        // An annotative object's representation grip (a text's point, a
+        // dimension's line, a multileader's text end): only this scale's
         // representation moves, as in AutoCAD.
         for (id, grip, g) in &self.targets {
-            let anchor =
-                *grip == 0 && matches!(g, Geometry::Text { .. } | Geometry::Insert { .. } | Geometry::Tolerance { .. });
+            let anchor = g.representation_grip() == Some(*grip);
             if anchor && ctx.doc.entity(*id).is_some_and(|e| e.annotative.is_some()) {
                 ctx.doc.move_scale_representation(*id, to - self.base);
             }

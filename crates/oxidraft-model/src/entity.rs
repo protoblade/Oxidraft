@@ -1543,7 +1543,7 @@ impl Annotative {
     /// The geometry `g`, sized and placed for scale `s` from the one it's
     /// shown at.
     pub fn for_scale(&self, g: &Geometry, s: f64) -> Geometry {
-        g.annotation_scaled(s / self.shown).translated(self.offset(s) - self.offset(self.shown))
+        g.annotation_scaled(s / self.shown).representation_moved(self.offset(s) - self.offset(self.shown))
     }
 }
 

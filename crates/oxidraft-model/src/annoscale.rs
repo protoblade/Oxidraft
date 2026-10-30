@@ -82,6 +82,41 @@ impl Geometry {
         )
     }
 
+    /// The grip that moves a scale's representation on its own: a text's
+    /// or block's point, a dimension's line (or text), a multileader's
+    /// last point (where its text is).
+    pub fn representation_grip(&self) -> Option<usize> {
+        match self {
+            Geometry::Text { .. } | Geometry::Insert { .. } | Geometry::Tolerance { .. } => Some(0),
+            Geometry::Dimension { .. } | Geometry::RadialDimension { .. } => Some(2),
+            Geometry::AngularDimension { .. } => Some(3),
+            Geometry::Leader { points, .. } => points.len().checked_sub(1),
+            _ => None,
+        }
+    }
+
+    /// A scale's representation moved by `d`: the whole of a text or block,
+    /// a dimension's line or text (what it measures stays), a multileader's
+    /// text end (its arrowhead stays).
+    pub fn representation_moved(&self, d: Point) -> Geometry {
+        if d.length() < 1e-12 {
+            return self.clone();
+        }
+        let mut g = self.clone();
+        match &mut g {
+            Geometry::Dimension { line, .. } => *line = *line + d,
+            Geometry::RadialDimension { text_at, .. } => *text_at = *text_at + d,
+            Geometry::AngularDimension { arc, .. } => *arc = *arc + d,
+            Geometry::Leader { points, .. } => {
+                if let Some(last) = points.last_mut() {
+                    *last = *last + d;
+                }
+            }
+            _ => return self.translated(d),
+        }
+        g
+    }
+
     /// The same annotation sized `factor` times: text taller about its
     /// point, dimensions and leaders with a larger DIMSCALE, a hatch's
     /// pattern larger, a block larger about its insertion point; what
@@ -390,5 +425,37 @@ mod tests {
         doc.set_anno_scale(1.0, false);
         assert_eq!(at(&doc), Point::new(15.0, 10.0));
         assert!(!doc.anno_reset(id), "nothing moved on its own now");
+    }
+
+    #[test]
+    fn a_dimensions_line_moves_at_one_scale() {
+        let mut doc = Document::new();
+        let id = doc.add(Geometry::Dimension {
+            p1: Point::ORIGIN,
+            p2: Point::new(100.0, 0.0),
+            line: Point::new(0.0, 10.0),
+            rotation: 0.0,
+            aligned: false,
+            text: None,
+            scale: 1.0,
+            extra: Default::default(),
+        });
+        doc.set_annotative(id, true);
+        doc.set_anno_scale(50.0, true);
+        let parts = |d: &Document| match d.entity(id).unwrap().geometry {
+            Geometry::Dimension { p1, line, .. } => (p1, line),
+            _ => unreachable!(),
+        };
+        // Its line moved by its grip at 1:50: there only; what it measures stays.
+        let g = doc.entity(id).unwrap().geometry.clone();
+        assert_eq!(g.representation_grip(), Some(2));
+        let d = Point::new(0.0, 30.0);
+        doc.modify(id, g.representation_moved(d));
+        doc.move_scale_representation(id, d);
+        assert_eq!(parts(&doc), (Point::ORIGIN, Point::new(0.0, 40.0)));
+        doc.set_anno_scale(1.0, false);
+        assert_eq!(parts(&doc), (Point::ORIGIN, Point::new(0.0, 10.0)), "1:1's line where it was");
+        doc.set_anno_scale(50.0, false);
+        assert_eq!(parts(&doc).1, Point::new(0.0, 40.0));
     }
 }
