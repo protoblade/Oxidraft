@@ -19,6 +19,7 @@ use oxidraft_model::{
     constant_width, hatch, is_dependent, linetype,
 };
 
+mod acad_styles;
 mod array_xdata;
 mod clip_dxf;
 mod dim_xdata;
@@ -2274,6 +2275,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
     order.sort_by(|a, b| a.0.total_cmp(&b.0));
     doc.set_draw_order(&order.into_iter().map(|(_, id)| id).collect::<Vec<_>>());
     restyle_mtext(&mut doc);
+    acad_styles::read(&mut doc, &raw.layouts);
     read_settings(&mut doc, &raw.layouts);
     // A freshly opened file starts with an empty undo history.
     doc.forget_history();

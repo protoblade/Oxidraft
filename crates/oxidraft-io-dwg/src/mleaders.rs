@@ -32,7 +32,7 @@ fn point(v: &Vector3) -> Point {
 
 /// The MULTILEADER style a new multileader names: the drawing's Standard,
 /// made (in an ACAD_MLEADERSTYLE dictionary) when there's none.
-fn standard_style(cad: &mut CadDocument, text_style: Option<Handle>) -> Handle {
+pub(crate) fn standard_style(cad: &mut CadDocument, text_style: Option<Handle>) -> Handle {
     let found = cad.objects.iter().find_map(|(h, o)| match o {
         ObjectType::MultiLeaderStyle(s) if s.name.eq_ignore_ascii_case("Standard") => Some(*h),
         _ => None,
@@ -85,7 +85,7 @@ fn anonymous_block(cad: &mut CadDocument) -> Handle {
 }
 
 /// Moves the object `h` into the block `record`.
-fn move_into(cad: &mut CadDocument, h: Handle, record: Handle) {
+pub(crate) fn move_into(cad: &mut CadDocument, h: Handle, record: Handle) {
     for r in cad.block_records.iter_mut() {
         if r.handle == record {
             r.entity_handles.push(h);
@@ -107,6 +107,7 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document, handles: &HashMap<En
     let text_style = cad.text_styles.get("Standard").map(|s| s.handle);
     let style = Some(standard_style(cad, text_style));
     let ls = doc.leader_style();
+    let arrowhead = crate::styles::arrow_block(cad, ls.arrowhead);
     for e in doc.all_entities() {
         let Geometry::Leader { points, content, scale, more, blocks } = &e.geometry else { continue };
         let Some(written) = handles.get(&e.id) else { continue };
@@ -120,6 +121,7 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document, handles: &HashMap<En
         m.context.text_style_handle = text_style;
         let side = if last.x >= prev.x { 1.0 } else { -1.0 };
         let landing = if ls.landing_on { ls.landing * scale } else { 0.0 };
+        m.arrowhead_handle = arrowhead;
         m.arrowhead_size = ls.arrow_size * scale;
         m.text_height = ls.text_height * scale;
         m.enable_landing = ls.landing_on;

@@ -33,6 +33,9 @@ pub(crate) struct RawViewport {
     pub clip: Vec<Point>,
 }
 
+/// An object as read: its type, handle, and group codes and values.
+pub(crate) type RawObject = (String, u64, Vec<(i32, String)>);
+
 #[derive(Default)]
 pub(crate) struct RawLayouts {
     /// Page setups by upper-case layout name.
@@ -54,6 +57,13 @@ pub(crate) struct RawLayouts {
     pub dictionaries: HashMap<u64, Vec<(String, u64)>>,
     /// XRECORD objects' group codes and values, by handle.
     pub xrecords: HashMap<u64, Vec<(i32, String)>>,
+    /// AutoCAD's own objects for settings Oxidraft has (MLEADERSTYLE,
+    /// TABLESTYLE, RASTERVARIABLES, WIPEOUTVARIABLES).
+    pub setting_objects: Vec<RawObject>,
+    /// Header variables the dxf crate doesn't read ($CMLEADERSTYLE,
+    /// $CTABLESTYLE), and the applications registered (APPID).
+    pub header: HashMap<String, String>,
+    pub apps: Vec<String>,
 }
 
 fn paper(plot: &[(i32, &str)]) -> Paper {
@@ -145,7 +155,24 @@ pub(crate) fn read(dxf: &[u8]) -> RawLayouts {
         let end = pairs[i..].iter().position(|p| p.0 == 0).map_or(pairs.len(), |n| i + n);
         let body = &pairs[i..end];
         match value {
-            "SECTION" => section = body.iter().find(|p| p.0 == 2).map_or("", |p| p.1),
+            "SECTION" => {
+                section = body.iter().find(|p| p.0 == 2).map_or("", |p| p.1);
+                if section == "HEADER" {
+                    for w in body.windows(2) {
+                        if let [(9, name @ ("$CMLEADERSTYLE" | "$CTABLESTYLE")), (_, value)] = w {
+                            out.header.insert(name.to_string(), value.to_string());
+                        }
+                    }
+                }
+            }
+            "APPID" if section == "TABLES" => {
+                out.apps.extend(body.iter().filter(|p| p.0 == 2).map(|p| p.1.to_string()));
+            }
+            kind @ ("MLEADERSTYLE" | "TABLESTYLE" | "RASTERVARIABLES" | "WIPEOUTVARIABLES") if section == "OBJECTS" => {
+                let handle = body.iter().find(|p| p.0 == 5).and_then(|p| u64::from_str_radix(p.1, 16).ok());
+                let pairs = body.iter().map(|(c, v)| (*c, v.to_string())).collect();
+                out.setting_objects.push((kind.to_string(), handle.unwrap_or(0), pairs));
+            }
             "BLOCK" => block = body.iter().find(|p| p.0 == 2).map(|p| p.1.to_string()),
             "ENDBLK" => block = None,
             kind @ ("LWPOLYLINE" | "CIRCLE") if section == "ENTITIES" || section == "BLOCKS" => {

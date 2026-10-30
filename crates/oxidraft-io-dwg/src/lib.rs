@@ -24,6 +24,7 @@ mod layouts;
 mod mleaders;
 mod ole;
 mod settings;
+mod styles;
 
 pub type Error = String;
 
@@ -153,6 +154,10 @@ fn imported_from(cad: &mut CadDocument) -> Result<Imported, Error> {
     annotative::restore(cad, &mut imported);
     dimbreaks::restore(cad, &mut imported);
     ole::restore(cad, &mut imported);
+    // acadrust's DXF leaves $LIMCHECK out.
+    if cad.header.limit_check {
+        imported.document.set_limits_check(true);
+    }
     Ok(imported)
 }
 
@@ -331,6 +336,7 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
             t.annotative = true;
         }
     }
+    styles::finish(&mut cad, doc, version);
     if version >= DxfVersion::AC1021 {
         mleaders::finish(&mut cad, doc, &handles);
     }
@@ -366,10 +372,33 @@ pub fn write_dxf(doc: &Document) -> Result<Vec<u8>, Error> {
         oxidraft_model::Geometry::Text { look, .. } => look.columns.is_some(),
         _ => false,
     });
-    let newer = oxidraft_io_dxf::needs_newer_version(doc) || leaders;
+    // A multileader or table style of its own, too: AutoCAD keeps them in
+    // objects AutoCAD 2000 hasn't.
+    let styles = doc.leader_style() != oxidraft_model::annotation::DEFAULT_LEADER_STYLE
+        || doc.table_style() != oxidraft_model::table::DEFAULT_TABLE_STYLE;
+    let newer = oxidraft_io_dxf::needs_newer_version(doc) || leaders || styles;
     let version = if newer { DxfVersion::AC1024 } else { DxfVersion::AC1015 };
     let cad = cad(doc, version)?;
-    DxfWriter::new(&cad).with_version(version).write_to_vec().map_err(|e| e.to_string())
+    let dxf = DxfWriter::new(&cad).with_version(version).write_to_vec().map_err(|e| e.to_string())?;
+    Ok(if doc.limits_check() { with_limcheck(dxf) } else { dxf })
+}
+
+/// A DXF with $LIMCHECK on in its header, after $LIMMAX (acadrust's
+/// leaves it out).
+fn with_limcheck(dxf: Vec<u8>) -> Vec<u8> {
+    let find = |from: usize, what: &[u8]| dxf[from..].windows(what.len()).position(|w| w == what).map(|i| from + i);
+    let Some(at) = find(0, b"$LIMMAX").and_then(|i| find(i, b"\n  9")).filter(|_| find(0, b"$LIMCHECK").is_none())
+    else {
+        return dxf;
+    };
+    let end: &[u8] = if dxf[..at].ends_with(b"\r") { b"\r\n" } else { b"\n" };
+    let mut out = dxf[..at + 1].to_vec();
+    for line in [&b"  9"[..], b"$LIMCHECK", b" 70", b"     1"] {
+        out.extend_from_slice(line);
+        out.extend_from_slice(end);
+    }
+    out.extend_from_slice(&dxf[at + 1..]);
+    out
 }
 
 pub fn save_dxf(doc: &Document, path: impl AsRef<Path>) -> Result<(), Error> {
