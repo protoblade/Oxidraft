@@ -1,7 +1,8 @@
 //! Plotted sheets as DWFx (EXPORTDWFX, the DWFx ePlot plotter): the XML
 //! Paper Specification package Autodesk's DWFx builds on, a fixed page a
-//! sheet, its lines and fills as paths and its text as glyphs in the
-//! embedded fonts. Viewers of DWFx and XPS files open it.
+//! sheet, its lines and fills as paths, its text as glyphs in the
+//! embedded fonts and its pictures as PNG images. Viewers of DWFx and XPS
+//! files open it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -43,10 +44,14 @@ fn data(paths: &[(Vec<Point>, bool)], height: f64) -> String {
     d.trim_end().to_string()
 }
 
-/// Fonts numbered across the pages (by key), and those a page uses.
-struct Fonts {
+/// Fonts and pictures numbered across the pages (by key), and those a
+/// page uses.
+struct Fonts<'a> {
     numbers: BTreeMap<String, usize>,
     on_page: BTreeSet<usize>,
+    pictures: &'a std::collections::HashMap<String, std::sync::Arc<crate::Picture>>,
+    images: BTreeMap<(String, bool), usize>,
+    images_on_page: BTreeSet<usize>,
 }
 
 /// The page's elements.
@@ -106,8 +111,30 @@ fn elements(out: &mut String, items: &[Item], height: f64, fonts: &mut Fonts) {
                 elements(out, items, height, fonts);
                 out.push_str("</Canvas>\n");
             }
-            // Pictures aren't carried yet.
-            Item::Image { .. } => {}
+            // The image fills the parallelogram from `origin` along `u` and
+            // `v`, or the clip polygon inside it; its top row is at `v`.
+            Item::Image { name, origin, u, v, clip, gray } => {
+                let Some(picture) = fonts.pictures.get(name) else { continue };
+                let (w, h) = (picture.width, picture.height);
+                let next = fonts.images.len() + 1;
+                let n = *fonts.images.entry((name.clone(), *gray)).or_insert(next);
+                fonts.images_on_page.insert(n);
+                let outline = if clip.len() >= 3 {
+                    clip.clone()
+                } else {
+                    vec![*origin, *origin + *u, *origin + *u + *v, *origin + *v]
+                };
+                let k = PX_PER_MM;
+                let m = [k * u.x, -k * u.y, -k * v.x, k * v.y, k * (origin.x + v.x), k * (height - origin.y - v.y)];
+                let _ = writeln!(
+                    out,
+                    "<Path Data=\"{}\"><Path.Fill><ImageBrush ImageSource=\"/Resources/Images/{n}.png\" \
+                     Viewbox=\"0,0,{w},{h}\" ViewboxUnits=\"Absolute\" Viewport=\"0,0,1,1\" \
+                     ViewportUnits=\"Absolute\" Transform=\"{}\"/></Path.Fill></Path>",
+                    data(&[(outline, true)], height),
+                    m.map(num).join(",")
+                );
+            }
         }
     }
 }
@@ -118,14 +145,31 @@ const RELS: &str = "http://schemas.openxmlformats.org/package/2006/relationships
 /// Sheets as one DWFx file, a page each.
 pub fn dwfx(sheets: &[Sheet], title: &str) -> Vec<u8> {
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut fonts = Fonts { numbers: BTreeMap::new(), on_page: BTreeSet::new() };
+    let no_pictures = std::collections::HashMap::new();
+    let mut fonts = Fonts {
+        numbers: BTreeMap::new(),
+        on_page: BTreeSet::new(),
+        pictures: &no_pictures,
+        images: BTreeMap::new(),
+        images_on_page: BTreeSet::new(),
+    };
+    let mut images: Vec<(String, Vec<u8>)> = Vec::new();
     let mut pages = String::new();
     for (i, sheet) in sheets.iter().enumerate() {
         let n = i + 1;
         let l = &sheet.layout;
         let mut body = String::new();
         fonts.on_page.clear();
+        fonts.images_on_page.clear();
+        fonts.pictures = &sheet.pictures;
+        let before = fonts.images.len();
         elements(&mut body, &sheet.items, l.height, &mut fonts);
+        // This page's new pictures, as PNG parts.
+        for ((name, gray), n) in fonts.images.iter().filter(|(_, n)| **n > before) {
+            if let Some(p) = sheet.pictures.get(name) {
+                images.push((format!("Resources/Images/{n}.png"), crate::png::png(p, *gray)));
+            }
+        }
         let clip = &l.clip;
         let page = format!(
             "<FixedPage xmlns=\"{XPS}\" Width=\"{}\" Height=\"{}\" xml:lang=\"und\">\n\
@@ -146,6 +190,11 @@ pub fn dwfx(sheets: &[Sheet], title: &str) -> Vec<u8> {
                     "<Relationship Id=\"F{f}\" Type=\"{XPS}/required-resource\" Target=\"/Resources/Fonts/{f}.ttf\"/>"
                 )
             })
+            .chain(fonts.images_on_page.iter().map(|i| {
+                format!(
+                    "<Relationship Id=\"I{i}\" Type=\"{XPS}/required-resource\" Target=\"/Resources/Images/{i}.png\"/>"
+                )
+            }))
             .collect();
         files.push((
             format!("Documents/1/Pages/_rels/{n}.fpage.rels"),
@@ -171,6 +220,7 @@ pub fn dwfx(sheets: &[Sheet], title: &str) -> Vec<u8> {
                  <Default Extension=\"fdoc\" ContentType=\"application/vnd.ms-package.xps-fixeddocument+xml\"/>\
                  <Default Extension=\"fpage\" ContentType=\"application/vnd.ms-package.xps-fixedpage+xml\"/>\
                  <Default Extension=\"ttf\" ContentType=\"application/vnd.ms-opentype\"/>\
+                 <Default Extension=\"png\" ContentType=\"image/png\"/>\
                  <Default Extension=\"xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>\
                  </Types>"
             )
@@ -208,6 +258,7 @@ pub fn dwfx(sheets: &[Sheet], title: &str) -> Vec<u8> {
         ),
     ];
     package.extend(files);
+    package.extend(images);
     zip(&package)
 }
 
@@ -267,5 +318,35 @@ mod tests {
         let rels =
             String::from_utf8(files.iter().find(|(n, _)| n.ends_with("1.fpage.rels")).unwrap().1.clone()).unwrap();
         assert!(rels.contains("/Resources/Fonts/1.ttf"));
+    }
+
+    fn picture_sheet() -> crate::Sheet {
+        let mut doc = Document::new();
+        doc.add(Geometry::Image {
+            adjust: Default::default(),
+            image: "ortho".into(),
+            origin: Point::new(0.0, 0.0),
+            u: Point::new(100.0, 0.0),
+            v: Point::new(0.0, 50.0),
+            clip: Vec::new(),
+        });
+        let picture =
+            std::sync::Arc::new(crate::Picture { width: 2, height: 1, rgba: vec![255, 0, 0, 255, 0, 0, 255, 255] });
+        let settings = PlotSettings { area: PlotArea::Extents, ..PlotSettings::default() };
+        crate::render_with_pictures(&doc, oxidraft_model::MODEL, &settings, &|_| Some(picture.clone())).unwrap()
+    }
+
+    #[test]
+    fn pictures_as_png_images() {
+        let files = unzip(&dwfx(&[picture_sheet()], "Plan"));
+        let get = |name: &str| files.iter().find(|(n, _)| n == name).map(|(_, c)| c.clone());
+        let png = get("Resources/Images/1.png").expect("the picture's PNG");
+        assert!(png.starts_with(b"\x89PNG"));
+        let page = String::from_utf8(get("Documents/1/Pages/1.fpage").unwrap()).unwrap();
+        assert!(page.contains("ImageBrush ImageSource=\"/Resources/Images/1.png\" Viewbox=\"0,0,2,1\""), "{page}");
+        let rels = String::from_utf8(get("Documents/1/Pages/_rels/1.fpage.rels").unwrap()).unwrap();
+        assert!(rels.contains("Target=\"/Resources/Images/1.png\""));
+        let types = String::from_utf8(get("[Content_Types].xml").unwrap()).unwrap();
+        assert!(types.contains("image/png"));
     }
 }

@@ -58,7 +58,7 @@ What AutoCAD LT has that Oxidraft doesn't, yet:
 - **Associative arrays:** levels (3D) and rows along a path; AutoCAD sees an array as a block reference.
 - **Multileaders** gathered onto one block (`MLEADERCOLLECT`) show only the first block to AutoCAD, and multileaders saved as AutoCAD 2004 or older are LEADERs with their text or blocks.
 - **Text:** MTEXT's stacked fractions show as plain text (1/2), and columns and paragraph indents (`\p`) aren't laid out; annotative text and dimension styles (objects are made annotative one by one), and per-scale positions (`ANNORESET` has none to reset).
-- **Export:** DWF6 files (`EXPORTDWF` writes DWFx); DWFx and WMF leave pictures out. `INSERTOBJ` links other files rather than embedding them as OLE objects.
+- **Export:** DWF6 files (`EXPORTDWF` writes DWFx); WMF puts a turned or slanted picture over its bounds, unturned. `INSERTOBJ` links other files rather than embedding them as OLE objects.
 - **Sheet sets** are Oxidraft's own files (.oxss), not AutoCAD's .dst; sheet lists, custom properties and sheet selections aren't there.
 - **Interface:** `CUI` customizes shortcuts and the Quick Access Toolbar, not the ribbon or menus; tiled and cascaded drawings are previews to pick from, not windows to work in side by side.
 - **Autodesk's cloud:** `SHARE` makes a package rather than a link; Markup Assist and Traces.

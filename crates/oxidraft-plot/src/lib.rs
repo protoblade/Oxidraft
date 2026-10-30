@@ -5,6 +5,7 @@ pub mod ctb;
 pub mod dwfx;
 pub mod font;
 pub mod pdf;
+pub mod png;
 pub mod rich;
 pub mod setup;
 pub mod sheet;

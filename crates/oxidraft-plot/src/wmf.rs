@@ -1,7 +1,7 @@
 //! A plotted sheet as a Windows Metafile (WMFOUT): a placeable metafile
-//! of pens and polylines, brushes and polygons, and text in the style's
-//! typeface, turned as it's drawn; other programs scale it as they place
-//! it.
+//! of pens and polylines, brushes and polygons, text in the style's
+//! typeface, turned as it's drawn, and pictures as bitmaps over their
+//! bounds; other programs scale it as they place it.
 
 use crate::sheet::{Item, Rgb, Sheet};
 
@@ -12,6 +12,40 @@ struct Wmf {
     /// Logical units per millimeter, and the sheet's height (WMF runs down).
     k: f64,
     height: f64,
+    pictures: std::collections::HashMap<String, std::sync::Arc<crate::Picture>>,
+}
+
+/// The most pixels a side a picture keeps: metafiles stay a sensible size.
+const MOST_PIXELS: u32 = 2000;
+
+/// A device-independent bitmap of the picture: 24-bit, rows bottom to top,
+/// over white; scaled down to fit [`MOST_PIXELS`].
+fn dib(p: &crate::Picture, gray: bool) -> (u32, u32, Vec<u8>) {
+    let shrink = (p.width.max(p.height) as f64 / MOST_PIXELS as f64).max(1.0);
+    let (w, h) = (((p.width as f64 / shrink) as u32).max(1), ((p.height as f64 / shrink) as u32).max(1));
+    let row = (w as usize * 3).div_ceil(4) * 4;
+    let mut out = Vec::with_capacity(40 + row * h as usize);
+    for v in [40u32, w, h] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&24u16.to_le_bytes());
+    for v in [0u32, (row * h as usize) as u32, 0, 0, 0, 0] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    for y in (0..h).rev() {
+        let sy = ((y as f64 * shrink) as u32).min(p.height - 1);
+        let start = out.len();
+        for x in 0..w {
+            let sx = ((x as f64 * shrink) as u32).min(p.width - 1);
+            let i = ((sy * p.width + sx) * 4) as usize;
+            let px = [p.rgba[i], p.rgba[i + 1], p.rgba[i + 2], p.rgba[i + 3]];
+            let [r, g, b] = crate::png::over_white(px, gray);
+            out.extend_from_slice(&[b, g, r]);
+        }
+        out.resize(start + row, 0);
+    }
+    (w, h, out)
 }
 
 impl Wmf {
@@ -138,7 +172,26 @@ impl Wmf {
                     self.items(items);
                     self.record(0x0127, &[(-1i16) as u16]);
                 }
-                Item::Image { .. } => {}
+                // Over the bounds of its parallelogram: metafiles don't turn bitmaps.
+                Item::Image { name, origin, u, v, gray, .. } => {
+                    let Some(p) = self.pictures.get(name).cloned() else { continue };
+                    if p.width == 0 || p.height == 0 || p.rgba.len() < (p.width * p.height * 4) as usize {
+                        continue;
+                    }
+                    let corners = [*origin, *origin + *u, *origin + *u + *v, *origin + *v];
+                    let (min_x, max_x) =
+                        corners.iter().fold((f64::MAX, f64::MIN), |(a, b), c| (a.min(c.x), b.max(c.x)));
+                    let (min_y, max_y) =
+                        corners.iter().fold((f64::MAX, f64::MIN), |(a, b), c| (a.min(c.y), b.max(c.y)));
+                    let (w, h, bits) = dib(&p, *gray);
+                    let (left, top) = (self.x(min_x), self.y(max_y));
+                    let width = (self.x(max_x) as i16).saturating_sub(left as i16) as u16;
+                    let height = (self.y(min_y) as i16).saturating_sub(top as i16) as u16;
+                    // SRCCOPY, RGB colors, the whole source, the destination.
+                    let mut params = vec![0x0020, 0x00CC, 0, h as u16, w as u16, 0, 0, height, width, top, left];
+                    params.extend(bits.chunks(2).map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)])));
+                    self.record(0x0F43, &params);
+                }
             }
         }
     }
@@ -150,7 +203,7 @@ pub fn wmf(sheet: &Sheet) -> Vec<u8> {
     // As fine as the coordinates' 16 bits allow, up to 1440 to the inch.
     let per_inch = (32000.0 / (l.width.max(l.height) / 25.4)).min(1440.0).floor();
     let k = per_inch / 25.4;
-    let mut w = Wmf { records: Vec::new(), largest: 0, k, height: l.height };
+    let mut w = Wmf { records: Vec::new(), largest: 0, k, height: l.height, pictures: sheet.pictures.clone() };
     let (width, height) = ((l.width * k).round() as u16, (l.height * k).round() as u16);
     // Anisotropic mapping over the sheet, so programs can scale it.
     w.record(0x0103, &[8]);
@@ -234,5 +287,31 @@ mod tests {
         // The size in the header is the file's, in words.
         let size = u32::from_le_bytes([data[28], data[29], data[30], data[31]]) as usize;
         assert_eq!(size * 2, data.len() - 22);
+    }
+
+    fn picture_sheet() -> crate::Sheet {
+        let mut doc = Document::new();
+        doc.add(Geometry::Image {
+            adjust: Default::default(),
+            image: "ortho".into(),
+            origin: Point::new(0.0, 0.0),
+            u: Point::new(100.0, 0.0),
+            v: Point::new(0.0, 50.0),
+            clip: Vec::new(),
+        });
+        let picture =
+            std::sync::Arc::new(crate::Picture { width: 2, height: 1, rgba: vec![255, 0, 0, 255, 0, 0, 255, 255] });
+        let settings = PlotSettings { area: PlotArea::Extents, ..PlotSettings::default() };
+        crate::render_with_pictures(&doc, oxidraft_model::MODEL, &settings, &|_| Some(picture.clone())).unwrap()
+    }
+
+    #[test]
+    fn pictures_as_bitmaps() {
+        let data = wmf(&picture_sheet());
+        assert!(functions(&data).contains(&0x0F43), "StretchDIB");
+        // Its bitmap: 2 by 1, 24-bit, red then blue (BGR), the row padded to 8 bytes.
+        let at = data.windows(4).position(|w| w == [40, 0, 0, 0]).unwrap();
+        assert_eq!(&data[at + 4..at + 12], &[2, 0, 0, 0, 1, 0, 0, 0]);
+        assert_eq!(&data[at + 40..at + 48], &[0, 0, 255, 255, 0, 0, 0, 0]);
     }
 }
