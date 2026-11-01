@@ -4013,9 +4013,11 @@ fn spreadsheet(values: &[&str]) -> Vec<u8> {
 /// when the document is saved in its program, the picture follows.
 #[test]
 fn ole_documents_show_their_pictures() {
-    let mut documents = vec![("OLE1.pdf", one_page_pdf(20), one_page_pdf(120))];
-    #[cfg(target_os = "macos")]
-    documents.push(("OLE2.xlsx", spreadsheet(&["Pump", "Valve"]), spreadsheet(&["Pump", "Valve", "Tank", "Filter"])));
+    let documents = [
+        ("OLE1.pdf", one_page_pdf(20), one_page_pdf(120)),
+        #[cfg(target_os = "macos")]
+        ("OLE2.xlsx", spreadsheet(&["Pump", "Valve"]), spreadsheet(&["Pump", "Valve", "Tank", "Filter"])),
+    ];
     let dir = std::env::temp_dir().join(format!("oxidraft-ole-pictures-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     for (name, first, saved) in documents {
