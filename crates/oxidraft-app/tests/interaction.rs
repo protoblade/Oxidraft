@@ -455,6 +455,7 @@ fn double_clicking_a_block_edits_its_attributes() {
         height: 2.0,
         rotation: 0.0,
         attach: Attach::BottomLeft,
+        look: Default::default(),
         invisible: false,
     };
     let block = doc.add(Geometry::Insert {
@@ -2155,6 +2156,7 @@ fn block_attribute_manager_reorders_and_syncs() {
                     height: 2.5,
                     rotation: 0.0,
                     attach: Attach::BottomLeft,
+                    look: Default::default(),
                     invisible: false,
                     constant: false,
                 },

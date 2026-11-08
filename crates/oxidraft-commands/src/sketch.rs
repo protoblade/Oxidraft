@@ -368,6 +368,7 @@ mod tests {
             height: 2.0,
             rotation: 0.0,
             attach: Attach::BottomLeft,
+            look: Default::default(),
             invisible: false,
             constant: false,
         };

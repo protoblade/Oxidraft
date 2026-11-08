@@ -284,6 +284,10 @@ pub enum Geometry {
         height: f64,
         rotation: f64,
         attach: Attach,
+        /// Its text style, and how wide and slanted its characters are
+        /// (its references' attributes start with the same). Boxed, as
+        /// few objects are definitions.
+        look: Box<annotation::TextLook>,
         invisible: bool,
         constant: bool,
     },
@@ -324,13 +328,15 @@ pub struct Attribute {
     pub height: f64,
     pub rotation: f64,
     pub attach: Attach,
+    /// Its text style, and how wide and slanted its characters are.
+    pub look: annotation::TextLook,
     pub invisible: bool,
 }
 
 impl Attribute {
     pub fn text(&self) -> Geometry {
         Geometry::Text {
-            look: Default::default(),
+            look: self.look.clone(),
             position: self.position,
             height: self.height,
             rotation: self.rotation,
@@ -496,9 +502,9 @@ impl Geometry {
             Geometry::JoggedDimension { center, point, center_override, jog, text, scale } => {
                 Some(annotation::jogged_primitives(*center, *point, *center_override, *jog, text.as_deref(), *scale))
             }
-            Geometry::AttributeDefinition { tag, position, height, rotation, attach, .. } => {
+            Geometry::AttributeDefinition { tag, position, height, rotation, attach, look, .. } => {
                 Some(vec![Geometry::Text {
-                    look: Default::default(),
+                    look: (**look).clone(),
                     position: *position,
                     height: *height,
                     rotation: *rotation,
@@ -924,6 +930,7 @@ impl Geometry {
                 height,
                 rotation,
                 attach,
+                look,
                 invisible,
                 constant,
             } => {
@@ -936,6 +943,7 @@ impl Geometry {
                     height: height * length_factor,
                     rotation: Point::ORIGIN.angle_to(turned),
                     attach: *attach,
+                    look: look.clone(),
                     invisible: *invisible,
                     constant: *constant,
                 }

@@ -172,6 +172,7 @@ impl Block {
                     height,
                     rotation,
                     attach,
+                    look,
                     invisible,
                     constant: false,
                     ..
@@ -180,7 +181,7 @@ impl Block {
                     return None;
                 };
                 let text = Geometry::Text {
-                    look: Default::default(),
+                    look: (**look).clone(),
                     position: *position,
                     height: *height,
                     rotation: *rotation,
@@ -200,6 +201,7 @@ impl Block {
                     height,
                     rotation,
                     attach: *attach,
+                    look: (**look).clone(),
                     invisible: *invisible,
                 })
             })
@@ -1683,10 +1685,11 @@ impl Document {
                         height,
                         rotation,
                         attach,
+                        look,
                         invisible: false,
                         ..
                     } => Geometry::Text {
-                        look: Default::default(),
+                        look: (**look).clone(),
                         position: *position,
                         height: *height,
                         rotation: *rotation,
@@ -2901,6 +2904,7 @@ mod tests {
             height: 2.0,
             rotation: 0.0,
             attach: Attach::BottomLeft,
+            look: Default::default(),
             invisible,
         };
         let id = d.add_on_layer(

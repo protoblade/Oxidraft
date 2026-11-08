@@ -3,7 +3,7 @@
 //! definitions.
 
 use oxidraft_geom::Point;
-use oxidraft_model::{Attach, Geometry};
+use oxidraft_model::{Attach, Geometry, TextLook};
 
 use crate::{Command, Ctx, Input, Prompt, Step, Vars};
 
@@ -105,6 +105,8 @@ impl Command for AttDef {
             (Stage::Rotation(p, height), input @ (Input::Value(_) | Input::Enter)) => {
                 let rotation = if let Input::Value(a) = input { a } else { 0.0 };
                 ctx.vars.text_height = height;
+                // In the current text style, as TEXT is.
+                let look = Box::new(TextLook::of(&ctx.doc.current_text_style()));
                 ctx.doc.add(Geometry::AttributeDefinition {
                     tag: self.tag.clone(),
                     prompt: self.prompt.clone(),
@@ -113,6 +115,7 @@ impl Command for AttDef {
                     height,
                     rotation,
                     attach: Attach::BottomLeft,
+                    look,
                     invisible: self.invisible,
                     constant: self.constant,
                 });

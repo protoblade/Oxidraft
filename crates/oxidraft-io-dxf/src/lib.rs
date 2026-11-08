@@ -199,6 +199,17 @@ fn to_text_justification(a: Attach) -> (HorizontalTextJustification, VerticalTex
     (h, v)
 }
 
+/// A single-line text's look (TEXT's, ATTRIB's, ATTDEF's): its style, and
+/// how wide and slanted its characters are.
+fn single_line_look(style: &str, width_factor: f64, oblique: f64) -> oxidraft_model::TextLook {
+    oxidraft_model::TextLook {
+        style: style_from_dxf(style),
+        width_factor: if width_factor > 0.0 { width_factor } else { 1.0 },
+        oblique: oblique_from_dxf(oblique),
+        ..Default::default()
+    }
+}
+
 fn attribute_from_dxf(a: &dxf::entities::Attribute) -> Attribute {
     let (attach, second) = text_justification(a.horizontal_text_justification, a.vertical_text_justification);
     Attribute {
@@ -208,6 +219,7 @@ fn attribute_from_dxf(a: &dxf::entities::Attribute) -> Attribute {
         height: a.text_height,
         rotation: a.rotation,
         attach,
+        look: single_line_look(&a.text_style_name, a.relative_x_scale_factor, a.oblique_angle),
         invisible: a.is_invisible(),
         // Filled in from the file text by `from_drawing_styled`.
         layer: "0".into(),
@@ -226,6 +238,9 @@ fn attribute_to_dxf(a: &Attribute) -> dxf::entities::Attribute {
         rotation: a.rotation,
         horizontal_text_justification,
         vertical_text_justification,
+        relative_x_scale_factor: a.look.width_factor,
+        oblique_angle: a.look.oblique,
+        text_style_name: style_to_dxf(&a.look.style),
         ..Default::default()
     };
     out.set_is_invisible(a.invisible);
@@ -554,6 +569,7 @@ impl Exporter {
                 height,
                 rotation,
                 attach,
+                look,
                 invisible,
                 constant,
             } => {
@@ -568,6 +584,9 @@ impl Exporter {
                     rotation: *rotation,
                     horizontal_text_justification,
                     vertical_text_justification,
+                    relative_x_scale_factor: look.width_factor,
+                    oblique_angle: look.oblique,
+                    text_style_name: style_to_dxf(&look.style),
                     ..Default::default()
                 };
                 a.set_is_invisible(*invisible);
@@ -718,17 +737,23 @@ fn is_single_line(attach: Attach, content: &str) -> bool {
 }
 
 /// The STYLE table and $TEXTSTYLE. A font named without an extension is a
-/// TrueType font's.
+/// TrueType family, which AutoCAD keeps as it names it: no font file, the
+/// family in the style's ACAD xdata.
 fn write_text_styles(drawing: &mut Drawing, doc: &Document) {
     for s in doc.text_styles() {
         let name = style_to_dxf(&s.name);
-        let font = if s.font.contains('.') { s.font.clone() } else { format!("{}.ttf", s.font.to_lowercase()) };
+        let family = (!s.font.contains('.') && !s.font.trim().is_empty()).then(|| s.font.trim().to_string());
         let set = |x: &mut dxf::tables::Style| {
             x.text_height = s.height;
             x.width_factor = s.width_factor;
             x.oblique_angle = s.oblique;
-            x.primary_font_file_name = font.clone();
+            x.primary_font_file_name = if family.is_some() { String::new() } else { s.font.clone() };
             x.big_font_file_name = s.big_font.clone();
+            x.x_data.retain(|d| !d.application_name.eq_ignore_ascii_case("ACAD"));
+            if let Some(family) = &family {
+                let items = vec![dxf::XDataItem::Str(family.clone()), dxf::XDataItem::Long(0)];
+                x.x_data.push(dxf::XData { application_name: "ACAD".into(), items });
+            }
         };
         if let Some(x) = drawing.styles_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
             set(x);
@@ -741,16 +766,33 @@ fn write_text_styles(drawing: &mut Drawing, doc: &Document) {
     drawing.header.text_style = style_to_dxf(&doc.current_text_style().name);
 }
 
+/// The TrueType family a style without a font file names, as AutoCAD
+/// keeps it: its ACAD xdata's first string ("Arial Narrow").
+fn truetype_family(xdata: &[dxf::XData]) -> Option<String> {
+    let acad = xdata.iter().find(|x| x.application_name.eq_ignore_ascii_case("ACAD"))?;
+    acad.items.iter().find_map(|i| match i {
+        dxf::XDataItem::Str(family) if !family.trim().is_empty() => Some(family.trim().to_string()),
+        _ => None,
+    })
+}
+
 fn read_text_styles(doc: &mut Document, drawing: &Drawing) {
+    // The dxf crate adds a STANDARD of its own after the file's styles
+    // when the file's is "Standard": the file's comes first, and holds.
+    let mut seen: Vec<String> = Vec::new();
     for s in drawing.styles() {
         // Unnamed styles are shape files that linetypes use.
         if s.name.trim().is_empty() || s.text_generation_flags & 1 != 0 {
             continue;
         }
+        if seen.iter().any(|n| n.eq_ignore_ascii_case(&s.name)) {
+            continue;
+        }
+        seen.push(s.name.clone());
         let style = oxidraft_model::TextStyle {
             name: style_from_dxf(&s.name),
             font: if s.primary_font_file_name.is_empty() {
-                "arial.ttf".into()
+                truetype_family(&s.x_data).unwrap_or_else(|| "arial.ttf".into())
             } else {
                 s.primary_font_file_name.clone()
             },
@@ -1638,12 +1680,7 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
         EntityType::Text(t) => {
             let (attach, second) = text_justification(t.horizontal_text_justification, t.vertical_text_justification);
             Geometry::Text {
-                look: oxidraft_model::TextLook {
-                    style: style_from_dxf(&t.text_style_name),
-                    width_factor: if t.relative_x_scale_factor > 0.0 { t.relative_x_scale_factor } else { 1.0 },
-                    oblique: oblique_from_dxf(t.oblique_angle),
-                    ..Default::default()
-                },
+                look: single_line_look(&t.text_style_name, t.relative_x_scale_factor, t.oblique_angle),
                 position: from_dxf(if second { &t.second_alignment_point } else { &t.location }),
                 height: t.text_height,
                 rotation: t.rotation,
@@ -1664,6 +1701,7 @@ fn geometry_from_dxf(specific: &EntityType) -> Option<Geometry> {
                 height: a.text_height,
                 rotation: a.rotation,
                 attach,
+                look: Box::new(single_line_look(&a.text_style_name, a.relative_x_scale_factor, a.oblique_angle)),
                 invisible: a.is_invisible(),
                 constant: a.is_constant(),
             }
@@ -3129,6 +3167,7 @@ mod tests {
                 height: 1.5,
                 rotation: 0.0,
                 attach: Attach::MiddleCenter,
+                look: Default::default(),
                 invisible: false,
             }],
             clip: None,

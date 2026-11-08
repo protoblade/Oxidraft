@@ -248,20 +248,30 @@ fn find_in(dir: &Path, name: &str, depth: usize) -> Option<PathBuf> {
 pub fn find(font: &str) -> Option<PathBuf> {
     let font = font.trim();
     let file = Path::new(font).file_name()?.to_string_lossy().into_owned();
-    let lower = file.to_ascii_lowercase();
-    let mut names = vec![file.clone()];
-    if !lower.ends_with(".ttf") && !lower.ends_with(".otf") && !lower.ends_with(".ttc") {
-        names.extend(["ttf", "otf", "ttc"].map(|ext| format!("{file}.{ext}")));
-    }
-    if let Some((_, others)) = ALSO.iter().find(|(n, _)| *n == lower) {
-        names.extend(others.iter().map(|s| s.to_string()));
-    }
     // A full path, as some drawings name it.
     if Path::new(font).is_absolute() && Path::new(font).is_file() {
         return Some(PathBuf::from(font));
     }
     let dirs = font_dirs();
-    names.iter().find_map(|n| dirs.iter().find_map(|d| find_in(d, n, 2)))
+    file_names(&file).iter().find_map(|n| dirs.iter().find_map(|d| find_in(d, n, 2)))
+}
+
+/// The files font `file` may be: itself (with an extension, if it's a
+/// family's name), and what it's called on other systems, by its file name
+/// or by the family one of those files is ("Arial Narrow": arialn.ttf).
+fn file_names(file: &str) -> Vec<String> {
+    let lower = file.to_ascii_lowercase();
+    let mut names = vec![file.to_string()];
+    if !lower.ends_with(".ttf") && !lower.ends_with(".otf") && !lower.ends_with(".ttc") {
+        names.extend(["ttf", "otf", "ttc"].map(|ext| format!("{file}.{ext}")));
+    }
+    let stem = |f: &str| f.rsplit_once('.').map_or(f, |(s, _)| s).to_string();
+    let also = ALSO.iter().find(|(n, others)| *n == lower || others.iter().any(|o| stem(o).eq_ignore_ascii_case(file)));
+    if let Some((windows, others)) = also {
+        names.push(windows.to_string());
+        names.extend(others.iter().map(|s| s.to_string()));
+    }
+    names
 }
 
 /// One font of a TrueType collection as a font file of its own.
@@ -348,6 +358,20 @@ pub fn wrap_lines(content: &str, wrap: f64, width: impl Fn(&str) -> f64) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A style names a font by its file (Windows') or, as AutoCAD keeps
+    /// TrueType styles, by its family; either finds the other's files.
+    #[test]
+    fn fonts_by_file_or_family() {
+        let narrow = file_names("Arial Narrow");
+        for name in ["Arial Narrow.ttf", "arialn.ttf", "LiberationSansNarrow-Regular.ttf"] {
+            assert!(narrow.iter().any(|n| n == name), "{name} in {narrow:?}");
+        }
+        let arial = file_names("Arial");
+        assert!(arial.iter().any(|n| n == "arial.ttf") && arial.iter().any(|n| n == "LiberationSans-Regular.ttf"));
+        assert!(file_names("arialn.ttf").iter().any(|n| n == "Arial Narrow.ttf"));
+        assert_eq!(file_names("Myriad"), ["Myriad", "Myriad.ttf", "Myriad.otf", "Myriad.ttc"]);
+    }
 
     #[test]
     fn metrics_and_wrapping() {

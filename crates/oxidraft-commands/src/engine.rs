@@ -3721,6 +3721,7 @@ mod tests {
             height: 1.0,
             rotation: 0.0,
             attach: Attach::BottomLeft,
+            look: Default::default(),
             invisible,
         };
         d.add(Geometry::Insert {

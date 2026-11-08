@@ -510,6 +510,7 @@ mod tests {
                 height: 2.0,
                 rotation: 0.0,
                 attach: Attach::BottomLeft,
+                look: Default::default(),
                 invisible: false,
             }],
             clip: None,
@@ -555,10 +556,13 @@ mod tests {
 
     /// Attributes centered or right-aligned (as a zoning matrix's, its use
     /// in its circle and its figures against its line) keep their
-    /// alignment and the point they hang from, in DXF and DWG; so do the
-    /// block's attribute definitions.
+    /// alignment, the point they hang from and their text style, in DXF and
+    /// DWG; so do the block's attribute definitions. Styles named by their
+    /// TrueType family (Arial Narrow) keep it, Standard too.
     #[test]
     fn aligned_attributes_survive() {
+        use oxidraft_model::{TextLook, TextStyle};
+        let narrow = TextLook { style: "COTI500".into(), width_factor: 0.8, ..Default::default() };
         let attribute = |tag: &str, value: &str, x, y, attach| Attribute {
             tag: tag.into(),
             value: value.into(),
@@ -568,9 +572,14 @@ mod tests {
             height: 1.6875,
             rotation: 0.0,
             attach,
+            look: narrow.clone(),
             invisible: false,
         };
         let mut doc = Document::new();
+        let family =
+            |name: &str, font: &str| TextStyle { name: name.into(), font: font.into(), ..TextStyle::standard() };
+        doc.set_text_style(family("COTI500", "Arial Narrow")).unwrap();
+        doc.set_text_style(family("Standard", "Arial")).unwrap();
         let definition = Geometry::AttributeDefinition {
             tag: "Z".into(),
             prompt: String::new(),
@@ -579,6 +588,7 @@ mod tests {
             height: 4.725,
             rotation: 0.0,
             attach: Attach::MiddleCenter,
+            look: Box::new(narrow.clone()),
             invisible: false,
             constant: false,
         };
@@ -608,7 +618,7 @@ mod tests {
         let dxf = read_dxf(&write_dxf(&doc).unwrap()).unwrap().document;
         let dwgs = [Version::R2000, Version::R2018].map(|v| read(&write(&doc, v).unwrap()).unwrap().imported.document);
         for (back, how) in [(dxf, "DXF"), (dwgs[0].clone(), "R2000"), (dwgs[1].clone(), "R2018")] {
-            let read: Vec<(String, Point, Attach)> = back
+            let read: Vec<(String, Point, Attach, String, f64)> = back
                 .entities()
                 .find_map(|e| match &e.geometry {
                     Geometry::Insert { attributes, .. } => Some(attributes.clone()),
@@ -616,16 +626,24 @@ mod tests {
                 })
                 .unwrap()
                 .into_iter()
-                .map(|a| (a.tag, a.position, a.attach))
+                .map(|a| (a.tag, a.position, a.attach, a.look.style, a.look.width_factor))
                 .collect();
-            let wanted: Vec<(String, Point, Attach)> =
-                attributes.iter().map(|a| (a.tag.clone(), a.position, a.attach)).collect();
+            let wanted: Vec<(String, Point, Attach, String, f64)> =
+                attributes.iter().map(|a| (a.tag.clone(), a.position, a.attach, "COTI500".into(), 0.8)).collect();
             assert_eq!(read, wanted, "{how}");
             let definition = back.block("MATRIX").unwrap().entities.iter().find_map(|e| match &e.geometry {
-                Geometry::AttributeDefinition { position, attach, .. } => Some((*position, *attach)),
+                Geometry::AttributeDefinition { position, attach, look, .. } => {
+                    Some((*position, *attach, look.style.clone()))
+                }
                 _ => None,
             });
-            assert_eq!(definition, Some((Point::new(0.0, 14.58), Attach::MiddleCenter)), "{how}");
+            assert_eq!(definition, Some((Point::new(0.0, 14.58), Attach::MiddleCenter, "COTI500".into())), "{how}");
+            let font = |name: &str| back.text_style(name).map(|s| s.font.clone());
+            assert_eq!(
+                (font("COTI500"), font("Standard")),
+                (Some("Arial Narrow".into()), Some("Arial".into())),
+                "{how}"
+            );
         }
     }
 

@@ -20,6 +20,7 @@ impl Document {
                 height: 2.5,
                 rotation: 0.0,
                 attach: Attach::MiddleCenter,
+                look: Default::default(),
                 invisible: false,
                 constant: false,
             };
