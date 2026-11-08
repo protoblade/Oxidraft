@@ -553,6 +553,82 @@ mod tests {
         }
     }
 
+    /// Attributes centered or right-aligned (as a zoning matrix's, its use
+    /// in its circle and its figures against its line) keep their
+    /// alignment and the point they hang from, in DXF and DWG; so do the
+    /// block's attribute definitions.
+    #[test]
+    fn aligned_attributes_survive() {
+        let attribute = |tag: &str, value: &str, x, y, attach| Attribute {
+            tag: tag.into(),
+            value: value.into(),
+            layer: "MATRIX".into(),
+            color: Color::ByBlock,
+            position: Point::new(x, y),
+            height: 1.6875,
+            rotation: 0.0,
+            attach,
+            invisible: false,
+        };
+        let mut doc = Document::new();
+        let definition = Geometry::AttributeDefinition {
+            tag: "Z".into(),
+            prompt: String::new(),
+            default: String::new(),
+            position: Point::new(0.0, 14.58),
+            height: 4.725,
+            rotation: 0.0,
+            attach: Attach::MiddleCenter,
+            invisible: false,
+            constant: false,
+        };
+        doc.define_block(Block {
+            name: "MATRIX".into(),
+            base: Point::ORIGIN,
+            entities: vec![
+                BlockEntity::new(
+                    "MATRIX",
+                    Color::ByBlock,
+                    Geometry::Circle { center: Point::new(0.0, 14.58), radius: 6.48 },
+                ),
+                BlockEntity::new("MATRIX", Color::ByBlock, definition),
+            ],
+        });
+        let attributes = vec![
+            attribute("Z", "Жс", 100.05, 207.29, Attach::MiddleCenter),
+            attribute("EH", "3", 99.05, 201.15, Attach::BottomRight),
+            attribute("DENSITY", "60", 100.9, 201.06, Attach::BottomLeft),
+        ];
+        doc.add(Geometry::Insert {
+            block: "MATRIX".into(),
+            placement: Placement { scale: 0.5, ..Placement::at(Point::new(100.0, 200.0)) },
+            attributes: attributes.clone(),
+            clip: None,
+        });
+        let dxf = read_dxf(&write_dxf(&doc).unwrap()).unwrap().document;
+        let dwgs = [Version::R2000, Version::R2018].map(|v| read(&write(&doc, v).unwrap()).unwrap().imported.document);
+        for (back, how) in [(dxf, "DXF"), (dwgs[0].clone(), "R2000"), (dwgs[1].clone(), "R2018")] {
+            let read: Vec<(String, Point, Attach)> = back
+                .entities()
+                .find_map(|e| match &e.geometry {
+                    Geometry::Insert { attributes, .. } => Some(attributes.clone()),
+                    _ => None,
+                })
+                .unwrap()
+                .into_iter()
+                .map(|a| (a.tag, a.position, a.attach))
+                .collect();
+            let wanted: Vec<(String, Point, Attach)> =
+                attributes.iter().map(|a| (a.tag.clone(), a.position, a.attach)).collect();
+            assert_eq!(read, wanted, "{how}");
+            let definition = back.block("MATRIX").unwrap().entities.iter().find_map(|e| match &e.geometry {
+                Geometry::AttributeDefinition { position, attach, .. } => Some((*position, *attach)),
+                _ => None,
+            });
+            assert_eq!(definition, Some((Point::new(0.0, 14.58), Attach::MiddleCenter)), "{how}");
+        }
+    }
+
     #[test]
     fn xrefs_keep_their_path_in_every_version() {
         use oxidraft_model::{Xref, XrefStatus};

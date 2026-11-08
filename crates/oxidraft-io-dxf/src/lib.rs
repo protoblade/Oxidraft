@@ -2367,7 +2367,7 @@ pub fn write_with_handles<W: Write>(doc: &Document, writer: &mut W) -> Result<Ha
             (l.name.clone(), i16::from(l.frozen) | (i16::from(l.locked) << 2) | xref, l.lineweight.to_dxf())
         })
         .collect();
-    let fixed = fix_tables(&fix_attributes(&buf, &styles), &layers);
+    let fixed = fix_tables(&fix_attributes(&attribute_alignment_in_text(&buf), &styles), &layers);
     // The dxf crate can only write ByLayer or ByBlock here.
     let celweight = doc.current_props().lineweight.to_dxf().to_string();
     let fixed = set_header_value(&fixed, "$CELWEIGHT", &celweight);
@@ -2577,6 +2577,39 @@ fn layer_flags(dxf: &[u8]) -> Vec<(String, i16)> {
         }
     }
     out
+}
+
+/// The dxf crate writes an attribute's (and an attribute definition's)
+/// horizontal alignment (72) and alignment point (11, 21, 31) in its
+/// AcDbAttribute part, where AutoCAD keeps them in AcDbText; readers going
+/// by AutoCAD's (acadrust, which drawings are saved through) don't look
+/// for them there, and an aligned attribute came back left-aligned, at 0,0
+/// if it hung from that point. They go back to AcDbText.
+fn attribute_alignment_in_text(dxf: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(dxf);
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let pairs: Vec<&[&str]> = lines.chunks(2).collect();
+    let code = |p: &[&str]| p[0].trim().to_string();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < pairs.len() {
+        let end = (i + 1..pairs.len()).find(|&j| code(pairs[j]) == "0").unwrap_or(pairs.len());
+        let entity = &pairs[i..end];
+        let attribute = entity[0].get(1).is_some_and(|v| matches!(v.trim(), "ATTRIB" | "ATTDEF"));
+        let marker = entity
+            .iter()
+            .position(|p| code(p) == "100" && p.get(1).is_some_and(|v| v.trim().starts_with("AcDbAttribute")));
+        let mut order: Vec<&[&str]> = entity.to_vec();
+        if let Some(m) = marker.filter(|_| attribute) {
+            let in_text = |c: &str| entity[..m].iter().any(|p| code(p) == c);
+            let moves = |p: &&[&str]| matches!(code(p).as_str(), "72" | "11" | "21" | "31") && !in_text(&code(p));
+            let (moved, kept): (Vec<&[&str]>, Vec<&[&str]>) = entity[m + 1..].iter().copied().partition(moves);
+            order = entity[..m].iter().chain(&moved).chain(&entity[m..=m]).chain(&kept).copied().collect();
+        }
+        order.iter().for_each(|p| p.iter().for_each(|l| out.push_str(l)));
+        i = end;
+    }
+    out.into_bytes()
 }
 
 /// Repairs the dxf crate's ATTRIB output: it writes every attribute on
