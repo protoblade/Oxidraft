@@ -349,6 +349,10 @@ impl Drawings {
     pub fn frame(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.closing(&ctx);
+        // Drawings opened with Oxidraft in Finder: a tab each.
+        for path in oxidraft_macos::opened() {
+            self.handle(&ctx, TabRequest::Open(path));
+        }
         let tabs: Vec<(String, bool)> = self.list.iter().map(|d| (d.file_name(), d.is_dirty())).collect();
         let app = &mut self.list[self.active];
         app.tabs = tabs;

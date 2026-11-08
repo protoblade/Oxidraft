@@ -5,6 +5,35 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<!-- DWG and DXF drawings open with it (by extension, as other programs
+	     name their types differently); AutoCAD stays their usual program. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>AutoCAD Drawing</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>dwg</string>
+			</array>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>DXF Drawing</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>dxf</string>
+			</array>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+		</dict>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>Oxidraft</string>
 	<key>CFBundleExecutable</key>

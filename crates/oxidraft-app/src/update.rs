@@ -149,7 +149,39 @@ pub fn install(release: &Release) -> Result<Version, String> {
     let new_exe = extract_binary(&bytes, &dir)?;
     let replaced = self_replace::self_replace(&new_exe).map_err(|e| format!("Could not replace the app: {e}"));
     let _ = std::fs::remove_dir_all(&dir);
+    #[cfg(target_os = "macos")]
+    if replaced.is_ok()
+        && let Some(app) = std::env::current_exe().ok().as_deref().and_then(app_of)
+    {
+        refresh_app(app, &version);
+    }
     replaced.map(|()| version)
+}
+
+/// The macOS app (`….app`) executable `exe` is in, if it's in one.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn app_of(exe: &Path) -> Option<&Path> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let app = contents.parent()?;
+    (macos.file_name()? == "MacOS" && contents.file_name()? == "Contents" && app.extension()? == "app").then_some(app)
+}
+
+/// An app whose binary was replaced made whole again: the new version in
+/// its Info.plist (as Finder shows it), and signed again (ad hoc, as
+/// make_app.sh signs it) over the new binary.
+#[cfg(target_os = "macos")]
+fn refresh_app(app: &Path, version: &Version) {
+    use std::process::{Command, Stdio};
+    let plist = app.join("Contents/Info.plist");
+    for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
+        let _ = Command::new("plutil")
+            .args(["-replace", key, "-string", &version.to_string()])
+            .arg(&plist)
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = Command::new("codesign").args(["--force", "--sign", "-"]).arg(app).stderr(Stdio::null()).status();
 }
 
 /// Starts the (now updated) executable again with the same arguments.
@@ -250,6 +282,42 @@ mod tests {
         assert!(release.version().is_some(), "{}", release.tag_name);
         assert!(!release.assets.is_empty() || release.body.is_some());
         assert_eq!(fetch_latest_from("protoblade/this-repo-does-not-exist-x9"), Ok(None));
+    }
+
+    #[test]
+    fn the_app_an_executable_is_in() {
+        let exe = Path::new("/Applications/Oxidraft.app/Contents/MacOS/oxidraft");
+        assert_eq!(app_of(exe), Some(Path::new("/Applications/Oxidraft.app")));
+        assert_eq!(app_of(Path::new("/usr/local/bin/oxidraft")), None);
+        assert_eq!(app_of(Path::new("/Applications/Oxidraft/Contents/MacOS/oxidraft")), None);
+    }
+
+    /// An app updated in place shows the new version and is signed whole,
+    /// by macOS's own plutil and codesign.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_updated_app_is_made_whole() {
+        use std::process::Command;
+        let app = std::env::temp_dir().join(format!("oxidraft-app-refresh-test-{}/Oxidraft.app", std::process::id()));
+        std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        let plist = include_str!("../../../packaging/macos/Info.plist").replace("@VERSION@", "0.1.0");
+        std::fs::write(app.join("Contents/Info.plist"), plist).unwrap();
+        // A stand-in for the binary the updater put there.
+        std::fs::copy("/usr/bin/true", app.join("Contents/MacOS/oxidraft")).unwrap();
+
+        refresh_app(&app, &Version::new(9, 8, 7));
+        let read = |key: &str| {
+            let out = Command::new("plutil")
+                .args(["-extract", key, "raw"])
+                .arg(app.join("Contents/Info.plist"))
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        assert_eq!((read("CFBundleShortVersionString"), read("CFBundleVersion")), ("9.8.7".into(), "9.8.7".into()));
+        let verified = Command::new("codesign").args(["--verify", "--strict"]).arg(&app).status().unwrap();
+        assert!(verified.success(), "signed whole");
+        let _ = std::fs::remove_dir_all(app.parent().unwrap());
     }
 
     #[test]

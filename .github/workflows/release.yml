@@ -81,6 +81,33 @@ jobs:
           fi
           cat "$name.tar.gz.sha256"
 
+      # macOS users get the app (Oxidraft.app, zipped) besides the .tar.gz
+      # the in-app updater uses; nothing is published unless it's whole and
+      # (where the runner can run it) runs.
+      - name: macOS app
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          version=${TAG#v}
+          arch=x64
+          if [ "${{ matrix.target }}" = aarch64-apple-darwin ]; then arch=arm64; fi
+          packaging/macos/make_app.sh --target ${{ matrix.target }}
+          app="target/${{ matrix.target }}/release/Oxidraft.app"
+          plutil -lint "$app/Contents/Info.plist"
+          codesign --verify --strict --verbose=2 "$app"
+          if [ "$(uname -m)" = "$(lipo -archs "$app/Contents/MacOS/oxidraft")" ]; then
+            got=$("$app/Contents/MacOS/oxidraft" --version)
+            if [ "$got" != "oxidraft $version" ]; then
+              echo "::error::The app reports '$got', expected 'oxidraft $version'"
+              exit 1
+            fi
+          fi
+          zip="Oxidraft-$version-macos-$arch.zip"
+          ditto -c -k --keepParent "$app" "dist/$zip"
+          cd dist
+          shasum -a 256 "$zip" > "$zip.sha256"
+          cat "$zip.sha256"
+
       # Windows users get an installer and a portable zip besides the
       # .tar.gz the in-app updater uses.
       - name: Windows installer and zip

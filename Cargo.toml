@@ -17,6 +17,7 @@ oxidraft-io-dxf = { path = "crates/oxidraft-io-dxf", version = "0.11.1" }
 oxidraft-io-dwg = { path = "crates/oxidraft-io-dwg", version = "0.11.1" }
 oxidraft-plot = { path = "crates/oxidraft-plot", version = "0.11.1" }
 oxidraft-raster = { path = "crates/oxidraft-raster", version = "0.11.1" }
+oxidraft-macos = { path = "crates/oxidraft-macos", version = "0.11.1" }
 cavalier_contours = "0.9"
 dxf = "0.6"
 earcutr = "0.5"

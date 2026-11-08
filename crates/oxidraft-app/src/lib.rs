@@ -110,11 +110,15 @@ pub fn run() -> eframe::Result {
         ..Default::default()
     };
     let file = std::env::args_os().nth(1).map(std::path::PathBuf::from);
+    // Drawings opened with Oxidraft in Finder, at launch or later.
+    oxidraft_macos::listen();
     eframe::run_native(
         "Oxidraft",
         options,
         Box::new(|cc| {
             let mut app = OxidraftApp::new(cc);
+            let ctx = cc.egui_ctx.clone();
+            oxidraft_macos::wake_with(move || ctx.request_repaint());
             // The options chosen last time, kept for next time.
             if let Some(path) = settings::Settings::default_path() {
                 let kept = settings::Settings::load(&path);

@@ -22,6 +22,8 @@ oxidraft-io-dxf.workspace = true
 oxidraft-io-dwg.workspace = true
 oxidraft-plot.workspace = true
 oxidraft-raster.workspace = true
+# The drawings Finder opens with Oxidraft (nothing elsewhere).
+oxidraft-macos.workspace = true
 eframe.workspace = true
 arboard = "3"
 rfd.workspace = true
