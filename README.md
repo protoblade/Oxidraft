@@ -75,12 +75,17 @@ From the [Releases page](https://github.com/protoblade/Oxidraft/releases):
   your user only (no admin rights), adds a Start menu entry and an uninstaller,
   and can make Oxidraft open `.dxf` files. Prefer no installer? Unzip
   `oxidraft-<version>-windows-x64.zip` and run `oxidraft.exe`.
-- **macOS / Linux:** extract `oxidraft-<version>-<target>.tar.gz` and run
-  `oxidraft`.
+- **macOS:** unzip `Oxidraft-<version>-macos-arm64.zip` (Apple silicon) or
+  `Oxidraft-<version>-macos-x64.zip` (Intel) and move `Oxidraft.app` to
+  Applications. Finder then opens DWG and DXF drawings with it (*Open With*,
+  or as their usual program from *Get Info*). The bare program is there too:
+  `oxidraft-<version>-<target>.tar.gz`.
+- **Linux:** extract `oxidraft-<version>-<target>.tar.gz` and run `oxidraft`.
 
 The builds aren't code-signed yet. Windows SmartScreen may warn on first run
-(choose *More info* → *Run anyway*); on macOS a browser download may need
-`xattr -d com.apple.quarantine oxidraft`. After that the app updates itself.
+(choose *More info* → *Run anyway*); on macOS, where they aren't notarized, a
+browser download needs `xattr -dr com.apple.quarantine /Applications/Oxidraft.app`
+(or `xattr -d com.apple.quarantine oxidraft`). After that the app updates itself.
 
 ## Run from source
 
@@ -94,8 +99,9 @@ Open a file directly:
 cargo run --release -p oxidraft-app -- path/to/drawing.dxf
 ```
 
-On macOS, make the app (`Oxidraft.app`, with its icon) and put it in
-Applications, in place of the one there:
+On macOS, make the app (`Oxidraft.app`, with its icon, which Finder opens DWG
+and DXF drawings with) and put it in Applications, in place of the one there
+(`--target <triple>` makes it for another Mac, as the release does):
 
 ```bash
 packaging/macos/make_app.sh --install
@@ -124,7 +130,10 @@ Silicon and Intel), Linux and Windows, and publishes
 in-app updater looks for. The updater only sees releases of a public repository.
 For Windows it also builds the installer ([Inno Setup script](packaging/windows/oxidraft.iss))
 and a zip, and installs, runs and uninstalls the app on the runner before
-anything is published. The app icon comes from `python3 packaging/make_icon.py`.
+anything is published. For macOS it also makes `Oxidraft.app`
+([make_app.sh](packaging/macos/make_app.sh)), zipped per architecture with a
+`.sha256`, checking its Info.plist and signature and running it where the
+runner can. The app icon comes from `python3 packaging/make_icon.py`.
 
 ## Workspace layout
 
