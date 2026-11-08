@@ -4098,3 +4098,151 @@ fn the_ribbon_fits_the_window() {
         assert_eq!(h.state_mut().engine_mut().active_name(), Some("ARC"), "{width}");
     }
 }
+
+/// What Cmd+C put on the clipboard.
+fn copied_text(h: &Harness<'_, OxidraftApp>) -> String {
+    use eframe::egui::OutputCommand;
+    h.output()
+        .platform_output
+        .commands
+        .iter()
+        .find_map(|c| match c {
+            OutputCommand::CopyText(text) => Some(text.clone()),
+            _ => None,
+        })
+        .expect("Cmd+C put the objects on the clipboard")
+}
+
+/// Inserted objects (a picture, as an OLE object shows its document, and
+/// INSERTOBJ's framed file) copy and paste where clicked, in the same
+/// drawing or another, still showing their pictures and opening their files.
+#[test]
+fn inserted_objects_paste_where_clicked() {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 0, 0, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let mut h = app_with_line();
+    {
+        let doc = h.state_mut().document_mut();
+        let picture = doc.embed_file("OLE1.png", png.clone());
+        doc.embed_file("OLE1.xlsx", b"a spreadsheet".to_vec());
+        doc.set_image_def(oxidraft_model::ImageDef {
+            name: "OLE1".into(),
+            path: format!("embedded:{picture}"),
+            page: None,
+            width: 0.0,
+            height: 0.0,
+            status: oxidraft_model::XrefStatus::Loaded,
+        });
+        let id = doc.add(Geometry::Image {
+            image: "OLE1".into(),
+            origin: Point::new(50.0, 20.0),
+            u: Point::new(20.0, 0.0),
+            v: Point::new(0.0, 10.0),
+            clip: Vec::new(),
+            adjust: Default::default(),
+        });
+        let link = oxidraft_model::Hyperlink { url: "embedded:OLE1.xlsx".into(), description: "Document".into() };
+        doc.update(id, |e| e.hyperlink = Some(Box::new(link)));
+    }
+    h.run_steps(3);
+    // Selected by a crossing window, copied.
+    let (a, b) = (screen(&h, 45.0, 15.0), screen(&h, 75.0, 35.0));
+    click(&mut h, b);
+    click(&mut h, a);
+    h.run_steps(2);
+    h.event(Event::Copy);
+    h.run_steps(1);
+    let text = copied_text(&h);
+
+    // Pasted in the same drawing: on the cursor until a click places it.
+    h.event(Event::Paste(text.clone()));
+    h.run_steps(2);
+    let prompt = h.state_mut().engine_mut().current_prompt().map(|p| p.text);
+    assert_eq!(prompt.as_deref(), Some("Specify insertion point"));
+    let target = screen(&h, 20.0, 30.0);
+    click(&mut h, target);
+    h.run_steps(2);
+    let pictures = |h: &mut Harness<'_, OxidraftApp>| -> Vec<(String, Point, Option<String>)> {
+        let doc = h.state_mut().document_mut();
+        doc.entities()
+            .filter_map(|e| match &e.geometry {
+                Geometry::Image { image, origin, .. } => {
+                    Some((image.clone(), *origin, e.hyperlink.as_ref().map(|l| l.url.clone())))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let pasted = pictures(&mut h);
+    assert_eq!(pasted.len(), 2, "the copy, besides the picture");
+    assert!(pasted[1].1.distance(Point::new(20.0, 30.0)) < 0.5, "where clicked: {:?}", pasted[1].1);
+    assert_eq!(
+        (pasted[1].0.as_str(), pasted[1].2.as_deref()),
+        ("OLE1", Some("embedded:OLE1.xlsx")),
+        "its picture, its document"
+    );
+    assert_eq!(h.state_mut().document_mut().image_defs().count(), 1, "the same picture, not another");
+
+    // Pasted in another drawing: the picture and the document come with it.
+    let mut other = app_with_line();
+    other.event(Event::Paste(text));
+    other.run_steps(2);
+    let target = screen(&other, 10.0, 10.0);
+    click(&mut other, target);
+    other.run_steps(1);
+    assert!(other.state().pictures_loading(), "the picture is read as it comes");
+    let pasted = pictures(&mut other);
+    assert_eq!(pasted.len(), 1);
+    assert!(pasted[0].1.distance(Point::new(10.0, 10.0)) < 0.5, "{:?}", pasted[0].1);
+    let doc = other.state_mut().document_mut();
+    let def = doc.image_def("OLE1").expect("the picture's definition").clone();
+    assert_eq!(doc.embedded_file(def.path.strip_prefix("embedded:").unwrap()), Some(png.as_slice()));
+    assert_eq!(doc.embedded_file("OLE1.xlsx"), Some(&b"a spreadsheet"[..]), "the document it opens");
+
+    // INSERTOBJ's framed file: its frame and name still open it.
+    let dir = std::env::temp_dir().join(format!("oxidraft-paste-insertobj-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("notes.txt");
+    std::fs::write(&file, b"Site notes").unwrap();
+    let mut h = app_with_line();
+    h.state_mut().insert_object_file(&file);
+    std::fs::remove_dir_all(&dir).ok();
+    h.run_steps(2);
+    let corner = h.state_mut().document_mut().entities().find_map(|e| match &e.geometry {
+        Geometry::Polyline { vertices, .. } => Some(vertices[0].point),
+        _ => None,
+    });
+    let corner = corner.expect("INSERTOBJ's frame");
+    let (a, b) =
+        (h.state().screen_pos(corner - Point::new(1.0, 1.0)), h.state().screen_pos(corner + Point::new(30.0, 30.0)));
+    click(&mut h, b);
+    click(&mut h, a);
+    h.run_steps(2);
+    h.event(Event::Copy);
+    h.run_steps(1);
+    h.event(Event::Paste(copied_text(&h)));
+    h.run_steps(2);
+    let target = screen(&h, 20.0, 30.0);
+    click(&mut h, target);
+    h.run_steps(2);
+    let doc = h.state_mut().document_mut();
+    let links: Vec<_> = doc.entities().filter_map(|e| e.hyperlink.as_ref().map(|l| l.url.clone())).collect();
+    assert_eq!(links, ["embedded:notes.txt"; 4], "the frames and names, copied and pasted");
+}
+
+/// A clipboard drawing with nothing in it pastes nothing, and doesn't end
+/// up typed at the command line.
+#[test]
+fn an_empty_clipboard_drawing_pastes_nothing() {
+    let mut h = app_with_line();
+    let mut buf = Vec::new();
+    oxidraft_io_dxf::write(&Document::new(), &mut buf).unwrap();
+    h.event(Event::Paste(String::from_utf8(buf).unwrap()));
+    h.run_steps(2);
+    let engine = h.state_mut().engine_mut();
+    assert!(!engine.is_active());
+    let last = engine.history().last().cloned().unwrap_or_default();
+    assert_eq!(last, "Nothing to paste: the clipboard holds no drawing objects.");
+}

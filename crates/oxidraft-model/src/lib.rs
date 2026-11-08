@@ -35,8 +35,8 @@ pub use document::{
     NamedView, Styled, check_name, sanitize_name,
 };
 pub use entity::{
-    Annotative, Attribute, Color, Entity, EntityId, FAR, Geometry, Hyperlink, Placement, Vertex, XClip, constant_width,
-    viewport_corners,
+    Annotative, Attribute, Color, EMBEDDED_PREFIX, Entity, EntityId, FAR, Geometry, Hyperlink, Placement, Vertex,
+    XClip, constant_width, viewport_corners,
 };
 pub use hatch::HatchPattern;
 pub use layout::{MODEL, Paper, Space};

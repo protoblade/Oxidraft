@@ -77,6 +77,8 @@ pub struct OxidraftApp {
     /// and the drawing's revision then: a picture whose layer is turned on
     /// loads.
     pub(crate) shown_image_layers: Option<(u64, std::collections::HashSet<String>)>,
+    /// The drawing's revision when last looked at for pictures new to it.
+    pub(crate) pictures_seen: u64,
     /// Each space's view when it was left: model space and the layouts
     /// keep their own.
     pub(crate) space_views: std::collections::HashMap<oxidraft_model::Space, View>,
@@ -362,6 +364,7 @@ impl OxidraftApp {
             detail_wants: Default::default(),
             detail_generation: 0,
             shown_image_layers: None,
+            pictures_seen: 0,
             space_views: Default::default(),
             active_viewport: None,
             last_viewport: Default::default(),
@@ -1401,6 +1404,7 @@ impl eframe::App for OxidraftApp {
         self.handle_clipboard_keys(&ctx);
         self.receive_pictures(&ctx);
         self.load_images_turned_on();
+        self.load_new_pictures();
         self.image_out_frame(&ctx);
         self.update_title(&ctx);
 

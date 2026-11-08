@@ -955,7 +955,7 @@ fn read_dynamic_blocks(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
 pub const EMBEDDED_RECORD: &str = "OXIDRAFT_EMBEDDED";
 
 /// The hyperlink address of a file embedded in the drawing.
-pub const EMBEDDED_PREFIX: &str = "embedded:";
+pub use oxidraft_model::EMBEDDED_PREFIX;
 
 fn read_embedded(doc: &mut Document, raw: &layout_dxf::RawLayouts) {
     let Some(handle) = raw.dictionaries.values().flatten().find(|(n, _)| n == EMBEDDED_RECORD).map(|(_, h)| *h) else {

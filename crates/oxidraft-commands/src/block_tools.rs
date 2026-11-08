@@ -387,19 +387,23 @@ impl Command for AttEditGlobal {
 /// (A$C followed by hex digits, as AutoCAD names them) in `doc`, and a
 /// clipboard of one reference to it to place.
 pub fn as_block(doc: &mut Document, clip: &Document) -> Document {
-    crate::clipboard::paste_definitions(doc, clip);
+    let renamed = crate::clipboard::paste_definitions(doc, clip);
     let name = (0u32..)
         .map(|i| format!("A$C{:08X}", (clip.len() as u32).wrapping_mul(2_654_435_761).wrapping_add(i)))
         .find(|n| doc.block(n).is_none())
         .unwrap_or_default();
     let entities = clip
         .entities()
-        .map(|e| BlockEntity {
-            layer: e.layer.clone(),
-            color: e.color,
-            linetype: e.linetype.clone(),
-            lineweight: e.lineweight,
-            geometry: e.geometry.clone(),
+        .map(|e| {
+            let mut geometry = e.geometry.clone();
+            renamed.image_of(&mut geometry);
+            BlockEntity {
+                layer: e.layer.clone(),
+                color: e.color,
+                linetype: e.linetype.clone(),
+                lineweight: e.lineweight,
+                geometry,
+            }
         })
         .collect();
     let base = clip.insbase();

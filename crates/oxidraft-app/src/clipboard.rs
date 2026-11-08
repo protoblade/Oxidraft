@@ -1,5 +1,7 @@
 //! Copy and paste through the system clipboard. Copied objects go there as
-//! DXF text, so they paste into another Oxidraft window too.
+//! DXF text, so they paste into another Oxidraft window too: written and
+//! read as a drawing is saved and opened, so they keep what it keeps (the
+//! files embedded in it that they show or open, among others).
 
 use eframe::egui::{self, Event, Key, Modifiers};
 use oxidraft_model::Document;
@@ -17,7 +19,7 @@ fn clip_from(text: &str) -> Option<Document> {
     if !looks_like_dxf(text) {
         return None;
     }
-    let doc = oxidraft_io_dxf::read(&mut text.as_bytes()).ok()?.document;
+    let doc = oxidraft_io_dwg::read_dxf(text.as_bytes()).ok()?.document;
     let empty = doc.entities().next().is_none();
     (!empty).then_some(doc)
 }
@@ -26,10 +28,7 @@ impl OxidraftApp {
     /// Puts what a command just copied on the clipboard.
     pub(crate) fn publish_copied(&mut self, ctx: &egui::Context) {
         let Some(clip) = self.engine.take_copied() else { return };
-        let mut buf = Vec::new();
-        if oxidraft_io_dxf::write(&clip, &mut buf).is_err() {
-            return;
-        }
+        let Ok(buf) = oxidraft_io_dwg::write_dxf(&clip) else { return };
         let text = String::from_utf8_lossy(&buf).into_owned();
         ctx.copy_text(text.clone());
         self.clipboard = Some(text);
@@ -62,6 +61,7 @@ impl OxidraftApp {
         }
         let typing = !self.command_text.is_empty();
         let copy_base = ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::C));
+        // Pasted drawing objects (none, if the drawing has none).
         let (mut copy, mut cut, mut pasted) = (false, false, None);
         let shift = ctx.input(|i| i.modifiers.shift);
         ctx.input_mut(|i| {
@@ -74,13 +74,10 @@ impl OxidraftApp {
                     cut = true;
                     false
                 }
-                Event::Paste(text) => match clip_from(text) {
-                    Some(clip) => {
-                        pasted = Some(clip);
-                        false
-                    }
-                    None => true,
-                },
+                Event::Paste(text) if looks_like_dxf(text) => {
+                    pasted = Some(clip_from(text));
+                    false
+                }
                 _ => true,
             });
         });
@@ -92,8 +89,9 @@ impl OxidraftApp {
             self.run("CUTCLIP");
         }
         match pasted {
-            Some(clip) if shift => self.engine.paste_block(clip, &mut self.doc),
-            Some(clip) => self.engine.paste(clip, false, &mut self.doc),
+            Some(Some(clip)) if shift => self.engine.paste_block(clip, &mut self.doc),
+            Some(Some(clip)) => self.engine.paste(clip, false, &mut self.doc),
+            Some(None) => self.engine.log("Nothing to paste: the clipboard holds no drawing objects."),
             None => {}
         }
     }

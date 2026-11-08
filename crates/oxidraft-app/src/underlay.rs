@@ -414,6 +414,28 @@ impl OxidraftApp {
         }
     }
 
+    /// Pictures new to the drawing (pasted from another), read as they
+    /// come: loaded by their definitions, and not read yet.
+    pub(crate) fn load_new_pictures(&mut self) {
+        let revision = self.doc.revision();
+        if self.pictures_seen == revision {
+            return;
+        }
+        self.pictures_seen = revision;
+        let new: Vec<ImageDef> = self
+            .doc
+            .image_defs()
+            .filter(|d| d.status == XrefStatus::Loaded && !self.rasters.contains_key(&key(&d.name)))
+            .cloned()
+            .collect();
+        if new.iter().any(|d| d.path.starts_with(oxidraft_io_dxf::EMBEDDED_PREFIX)) {
+            crate::xref::copy_out_embedded(&self.doc);
+        }
+        for def in new {
+            self.request_picture(&def);
+        }
+    }
+
     /// The palette's Load: reads the file and shows the picture. Returns
     /// false if the file isn't found (the image is then marked Not Found).
     pub fn load_image(&mut self, name: &str) -> bool {

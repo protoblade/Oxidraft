@@ -1547,6 +1547,11 @@ impl Annotative {
     }
 }
 
+/// The hyperlink address of a file embedded in the drawing (INSERTOBJ's,
+/// an OLE object's document), before its name; a picture of one is at it
+/// too.
+pub const EMBEDDED_PREFIX: &str = "embedded:";
+
 /// A hyperlink on an object: where it goes, and what it's called.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Hyperlink {
