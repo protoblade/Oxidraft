@@ -94,6 +94,13 @@ Open a file directly:
 cargo run --release -p oxidraft-app -- path/to/drawing.dxf
 ```
 
+On macOS, make the app (`Oxidraft.app`, with its icon) and put it in
+Applications, in place of the one there:
+
+```bash
+packaging/macos/make_app.sh --install
+```
+
 Make a sample drawing to play with:
 
 ```bash

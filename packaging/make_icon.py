@@ -1,6 +1,7 @@
 """Draws the Oxidraft icon and writes assets/icon.png and assets/icon.ico.
 
-Standard library only: python3 packaging/make_icon.py
+Standard library only: python3 packaging/make_icon.py (also writes
+assets/icon.icns, for the macOS app).
 The design: a CAD crosshair with a pickbox on a dark rounded square, in the
 app's rust orange.
 """
@@ -36,8 +37,13 @@ def color_at(x, y):
     return BG
 
 
-def render(size, samples=4):
-    """RGBA rows, antialiased by supersampling."""
+def render(size, samples=4, inset=0.0):
+    """RGBA rows, antialiased by supersampling; the icon `inset` (a fraction
+    of the size) in from each side."""
+
+    def at(x, y):
+        return color_at((x - inset) / (1 - 2 * inset), (y - inset) / (1 - 2 * inset))
+
     rows = []
     for py in range(size):
         row = bytearray()
@@ -45,7 +51,7 @@ def render(size, samples=4):
             acc = [0, 0, 0, 0]
             for sy in range(samples):
                 for sx in range(samples):
-                    col = color_at((px + (sx + 0.5) / samples) / size, (py + (sy + 0.5) / samples) / size)
+                    col = at((px + (sx + 0.5) / samples) / size, (py + (sy + 0.5) / samples) / size)
                     if col:
                         acc[0] += col[0]
                         acc[1] += col[1]
@@ -58,8 +64,8 @@ def render(size, samples=4):
     return rows
 
 
-def png(size):
-    rows = render(size)
+def png(size, samples=4, inset=0.0):
+    rows = render(size, samples, inset)
     raw = b"".join(b"\0" + r for r in rows)
 
     def chunk(kind, data):
@@ -79,9 +85,24 @@ def ico(sizes):
     return out + b"".join(images)
 
 
+def icns():
+    """The macOS icon: the design on Apple's grid (824 of 1024 across, a
+    margin about it, as the Dock's other icons have), at each size macOS
+    looks for."""
+    inset = 100 / 1024
+    images = {s: png(s, 4 if s <= 256 else 2, inset) for s in (16, 32, 64, 128, 256, 512, 1024)}
+    kinds = [
+        (b"icp4", 16), (b"ic11", 32), (b"icp5", 32), (b"ic12", 64), (b"ic07", 128),
+        (b"ic13", 256), (b"ic08", 256), (b"ic14", 512), (b"ic09", 512), (b"ic10", 1024),
+    ]
+    body = b"".join(k + struct.pack(">I", 8 + len(images[s])) + images[s] for k, s in kinds)
+    return b"icns" + struct.pack(">I", 8 + len(body)) + body
+
+
 if __name__ == "__main__":
     assets = Path(__file__).resolve().parent.parent / "assets"
     assets.mkdir(exist_ok=True)
     (assets / "icon.png").write_bytes(png(256))
     (assets / "icon.ico").write_bytes(ico([16, 24, 32, 48, 64, 256]))
-    print("wrote", assets / "icon.png", "and", assets / "icon.ico")
+    (assets / "icon.icns").write_bytes(icns())
+    print("wrote", assets / "icon.png", assets / "icon.ico", "and", assets / "icon.icns")
