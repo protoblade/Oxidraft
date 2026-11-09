@@ -832,6 +832,8 @@ impl OxidraftApp {
         let view = self.world_rect(rect);
         // Dash patterns in screen pixels by linetype name, looked up once a frame.
         let mut patterns: HashMap<String, Option<Vec<f64>>> = HashMap::new();
+        // Complex linetypes, for their shapes and texts.
+        let mut complex: HashMap<String, Option<oxidraft_model::Linetype>> = HashMap::new();
         let px_per_unit = self.doc.ltscale() * self.sheet_scale.unwrap_or(self.view.scale);
         let refedit = self.doc.refedit();
         // Annotative objects: at a viewport's scale through it, 1:1 on a
@@ -914,6 +916,14 @@ impl OxidraftApp {
                 } else {
                     self.draw_dashed(painter, rect, g, Stroke::new(width, color), pattern.as_deref());
                 }
+                if pattern.is_some()
+                    && let Some(lt) = complex
+                        .entry(s.linetype.clone())
+                        .or_insert_with(|| self.doc.linetype(&s.linetype).filter(|l| !l.embedded.is_empty()))
+                {
+                    let scale = px_per_unit / self.view.scale;
+                    self.draw_embedded(painter, rect, g, Stroke::new(width, color), lt, scale);
+                }
             }
             if let Some(frame) = self.doc.clip_frame(&e.geometry) {
                 let color = theme::aci(self.doc.layer(&e.layer).map_or(7, |l| l.color));
@@ -939,6 +949,64 @@ impl OxidraftApp {
                 painter.circle_filled(to_pos(&dot), (stroke.width / 2.0).max(0.8), stroke.color);
             } else {
                 painter.add(Shape::line(run.iter().map(to_pos).collect(), stroke));
+            }
+        }
+    }
+
+    /// A complex linetype's shapes and texts along a curve, `scale`
+    /// drawing units to its pattern's one; where the curve draws without
+    /// dashes, none.
+    fn draw_embedded(
+        &self,
+        painter: &Painter,
+        rect: Rect,
+        g: &Geometry,
+        stroke: Stroke,
+        lt: &oxidraft_model::Linetype,
+        scale: f64,
+    ) {
+        use oxidraft_model::EmbeddedContent;
+        let wide = matches!(g, Geometry::Polyline { vertices, .. }
+            if vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0));
+        if wide || g.segments().is_empty() {
+            return;
+        }
+        let path: Vec<Point> = self.screen_path(rect, g).into_iter().map(|p| self.view.to_world(rect, p)).collect();
+        for (e, at, along) in linetype::embedded_along(&path, lt, scale) {
+            let (angle, turned) = e.direction(along);
+            match &e.content {
+                EmbeddedContent::Shape { number, file } => {
+                    let Some(shape) = oxidraft_plot::shx::shape(file, *number) else { continue };
+                    let size = e.scale * scale;
+                    // Turned around its middle.
+                    let middle = if turned { shape.middle() * (2.0 * size) } else { Point::ORIGIN };
+                    for s in &shape.strokes {
+                        let place = |p: &Point| at + (*p * size - middle).rotated_about(Point::ORIGIN, angle);
+                        let pts: Vec<Pos2> = s.iter().map(|p| self.view.to_screen(rect, place(p))).collect();
+                        painter.add(Shape::line(pts, stroke));
+                    }
+                }
+                EmbeddedContent::Text { text, style } => {
+                    let found = self.doc.text_style(style);
+                    let style_height = found.map_or(0.0, |s| s.height);
+                    let height = e.scale * scale * if style_height > 0.0 { style_height } else { 1.0 };
+                    let look = found.map(oxidraft_model::TextLook::of).unwrap_or_default();
+                    let text = Geometry::Text {
+                        position: at,
+                        height,
+                        rotation: angle,
+                        width: 0.0,
+                        // Turned around, its top right corner is where its start was.
+                        attach: if turned {
+                            oxidraft_model::Attach::TopRight
+                        } else {
+                            oxidraft_model::Attach::BottomLeft
+                        },
+                        content: text.clone(),
+                        look,
+                    };
+                    self.draw_text(painter, rect, &text, stroke);
+                }
             }
         }
     }

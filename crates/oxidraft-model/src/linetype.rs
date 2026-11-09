@@ -17,18 +17,76 @@ pub fn is_by_block(name: &str) -> bool {
 }
 
 /// A named dash pattern.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Linetype {
     pub name: String,
     pub description: String,
     /// Dash (positive), gap (negative) and dot (zero) lengths at LTSCALE 1,
     /// repeated along the curve. Empty for Continuous.
     pub pattern: Vec<f64>,
+    /// The shapes and texts a complex linetype draws besides its dashes.
+    pub embedded: Vec<Embedded>,
+}
+
+/// A shape or a text a complex linetype draws where one of its pattern's
+/// elements ends (a `[...]` after that element in a .lin file).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Embedded {
+    /// The element of the pattern it follows.
+    pub element: usize,
+    pub content: EmbeddedContent,
+    /// S=: a shape's size; a text's height (times its style's, if that has
+    /// one).
+    pub scale: f64,
+    /// R=, A= or U=, in degrees.
+    pub rotation: f64,
+    pub turn: EmbeddedTurn,
+    /// X= along the line and Y= across it, at LTSCALE 1.
+    pub offset: Point,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum EmbeddedContent {
+    /// Shape `number` of shape file `file` (ltypeshp.shx, as AutoCAD keeps
+    /// the file's name).
+    Shape { number: u16, file: String },
+    /// `text` in text style `style`.
+    Text { text: String, style: String },
+}
+
+/// What an embedded shape's or text's rotation is measured from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmbeddedTurn {
+    /// R=: the line's direction.
+    #[default]
+    Relative,
+    /// A=: the X axis.
+    Absolute,
+    /// U=: the line's direction, turned around where it would read upside
+    /// down.
+    Upright,
+}
+
+impl Embedded {
+    /// The direction (degrees) it's drawn in where the line runs at `along`,
+    /// and whether it's turned around to stay upright: then it turns about
+    /// its middle, keeping its place.
+    pub fn direction(&self, along: f64) -> (f64, bool) {
+        match self.turn {
+            EmbeddedTurn::Absolute => (self.rotation, false),
+            EmbeddedTurn::Relative => (along + self.rotation, false),
+            EmbeddedTurn::Upright => {
+                let a = (along + self.rotation).rem_euclid(360.0);
+                let down = a > 90.0 + EPSILON && a <= 270.0 + EPSILON;
+                if down { (a - 180.0, true) } else { (a, false) }
+            }
+        }
+    }
 }
 
 impl Linetype {
     pub fn new(name: &str, description: &str, pattern: &[f64]) -> Self {
-        Self { name: name.into(), description: description.into(), pattern: pattern.to_vec() }
+        Self { name: name.into(), description: description.into(), pattern: pattern.to_vec(), embedded: Vec::new() }
     }
 
     pub fn continuous() -> Self {
@@ -41,8 +99,70 @@ impl Linetype {
     }
 
     pub fn is_continuous(&self) -> bool {
-        self.pattern.iter().all(|&d| d > 0.0) || self.length() <= EPSILON
+        (self.pattern.iter().all(|&d| d > 0.0) && self.embedded.is_empty()) || self.length() <= EPSILON
     }
+
+    /// The text styles its texts are in.
+    pub fn text_styles(&self) -> impl Iterator<Item = &str> {
+        self.embedded.iter().filter_map(|e| match &e.content {
+            EmbeddedContent::Text { style, .. } => Some(style.as_str()),
+            EmbeddedContent::Shape { .. } => None,
+        })
+    }
+}
+
+/// Where along `path` the shapes and texts of `lt` (scaled by `scale`)
+/// fall: each one's base point, after its offset, and the direction
+/// (degrees) the path runs there.
+pub fn embedded_along<'a>(path: &[Point], lt: &'a Linetype, scale: f64) -> Vec<(&'a Embedded, Point, f64)> {
+    let total = lt.length() * scale;
+    if path.len() < 2 || total <= EPSILON || lt.embedded.is_empty() {
+        return Vec::new();
+    }
+    // Where each element ends in one repeat of the pattern.
+    let ends: Vec<f64> = lt
+        .pattern
+        .iter()
+        .scan(0.0, |at, d| {
+            *at += d.abs() * scale;
+            Some(*at)
+        })
+        .collect();
+    let length: f64 = path.windows(2).map(|w| w[0].distance(w[1])).sum();
+    // Too many to draw: none, as AutoCAD draws a line too dense to see.
+    if length / total > 10_000.0 {
+        return Vec::new();
+    }
+    let mut stops: Vec<(f64, &Embedded)> = Vec::new();
+    let mut start = 0.0;
+    while start < length + EPSILON {
+        for e in &lt.embedded {
+            if let Some(end) = ends.get(e.element) {
+                let at = start + end;
+                if at <= length + EPSILON {
+                    stops.push((at, e));
+                }
+            }
+        }
+        start += total;
+    }
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out = Vec::with_capacity(stops.len());
+    let (mut seg, mut walked) = (0, 0.0);
+    for (at, e) in stops {
+        // The piece of the path `at` is on (the last one, past its end).
+        while seg + 2 < path.len() && walked + path[seg].distance(path[seg + 1]) < at {
+            walked += path[seg].distance(path[seg + 1]);
+            seg += 1;
+        }
+        let (a, b) = (path[seg], path[seg + 1]);
+        let piece = a.distance(b);
+        let p = if piece > EPSILON { a.lerp(b, ((at - walked) / piece).min(1.0)) } else { a };
+        let along = (b.y - a.y).atan2(b.x - a.x).to_degrees();
+        let shift = (e.offset * scale).rotated_about(Point::ORIGIN, along);
+        out.push((e, p + shift, along));
+    }
+    out
 }
 
 /// The common linetypes of AutoCAD's acadiso.lin, in millimeters. Drawings
@@ -237,6 +357,34 @@ mod tests {
         let dots = dashes(&path[..2], &[0.0, -2.5], 1.0);
         assert_eq!(dots.len(), 5);
         assert!(dots.iter().all(|d| d.len() == 1));
+    }
+
+    #[test]
+    fn shapes_and_texts_fall_where_their_elements_end() {
+        let gas = Embedded {
+            element: 1,
+            content: EmbeddedContent::Text { text: "GAS".into(), style: "Standard".into() },
+            scale: 1.0,
+            rotation: 0.0,
+            turn: EmbeddedTurn::Upright,
+            offset: Point::new(-1.0, 0.5),
+        };
+        let lt = Linetype { embedded: vec![gas], ..Linetype::new("GAS", "", &[4.0, -2.0, -2.0]) };
+        assert!(!lt.is_continuous());
+        // Along a line running left: 6 and 14 from its start, then 1 back
+        // and 0.5 to its left.
+        let path = [Point::new(20.0, 0.0), Point::new(0.0, 0.0)];
+        let found = embedded_along(&path, &lt, 1.0);
+        assert_eq!(found.len(), 2);
+        assert!(found[0].1.approx_eq(Point::new(15.0, -0.5)) && found[1].1.approx_eq(Point::new(7.0, -0.5)));
+        // Upright, it's turned around to read left to right.
+        let (angle, turned) = found[0].0.direction(found[0].2);
+        assert!(angle.abs() < 1e-9 && turned, "{angle}");
+        // Twice as big: the second would be past the end.
+        assert_eq!(embedded_along(&path, &lt, 2.0).len(), 1);
+        // A pattern of dashes alone, with something on it, isn't continuous.
+        let ticks = Linetype { embedded: lt.embedded.clone(), ..Linetype::new("TICKS", "", &[1.0, 1.0]) };
+        assert!(!ticks.is_continuous() && Linetype::new("SOLID", "", &[1.0]).is_continuous());
     }
 
     #[test]

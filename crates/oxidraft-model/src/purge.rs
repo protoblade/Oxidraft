@@ -211,7 +211,7 @@ mod tests {
         d.add_layer(Layer::new("Used", 1));
         d.add_layer(Layer::new("Idle", 2));
         d.add_layer(Layer::new("InBlock", 3));
-        d.define_linetype(Linetype { name: "DOTTY".into(), description: String::new(), pattern: vec![0.0, -1.0] });
+        d.define_linetype(Linetype::new("DOTTY", "", &[0.0, -1.0]));
         let line = Geometry::Line { start: Point::ORIGIN, end: Point::new(1.0, 0.0) };
         d.add_on_layer(line.clone(), "Used", Color::ByLayer);
         d.define_block(Block {

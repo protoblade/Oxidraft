@@ -935,6 +935,82 @@ mod tests {
     }
 
     #[test]
+    fn complex_linetypes_keep_their_shapes_and_texts() {
+        use oxidraft_model::{Embedded, EmbeddedContent, EmbeddedTurn, Linetype, annotation::TextStyle};
+        let mut doc = Document::new();
+        let labels = TextStyle { name: "Labels".into(), font: "romans.shx".into(), ..TextStyle::standard() };
+        doc.set_text_style(labels).unwrap();
+        // A shape after a dash, from AutoCAD's ltypeshp.shx, below the line.
+        let wall = Linetype {
+            embedded: vec![Embedded {
+                element: 0,
+                content: EmbeddedContent::Shape { number: 130, file: "ltypeshp.shx".into() },
+                scale: 0.4,
+                rotation: 0.0,
+                turn: EmbeddedTurn::Relative,
+                offset: Point::new(0.0, -0.4),
+            }],
+            ..Linetype::new("Ln101_Подпорна стена", "Подпорна стена", &[0.75, 0.75])
+        };
+        // Two shapes from a shape file of the drawing's own, turned around.
+        let half = |element, y| Embedded {
+            element,
+            content: EmbeddedContent::Shape { number: 1, file: "G:\\LINEtypes\\HalfMF.shx".into() },
+            scale: 1.0,
+            rotation: 180.0,
+            turn: EmbeddedTurn::Relative,
+            offset: Point::new(0.0, y),
+        };
+        let fence = Linetype {
+            embedded: vec![half(0, 0.003362), half(1, 0.001977)],
+            ..Linetype::new("HALF_MF_LEFY", "half massive left", &[5.5, 10.0, 4.5])
+        };
+        // A text in a gap, level whichever way the line runs.
+        let gas = Linetype {
+            embedded: vec![Embedded {
+                element: 1,
+                content: EmbeddedContent::Text { text: "GAS".into(), style: "Labels".into() },
+                scale: 2.5,
+                rotation: 0.0,
+                turn: EmbeddedTurn::Absolute,
+                offset: Point::new(-2.5, -1.25),
+            }],
+            ..Linetype::new("GAS_LINE", "Gas line ----GAS----GAS----", &[12.7, -5.08, -6.35])
+        };
+        for (i, lt) in [&wall, &fence, &gas].into_iter().enumerate() {
+            doc.define_linetype(lt.clone());
+            let y = 10.0 * i as f64;
+            let line = doc.add(Geometry::Line { start: Point::new(0.0, y), end: Point::new(100.0, y) });
+            doc.update(line, |e| e.linetype = lt.name.clone());
+        }
+        let check = |back: &Document, how: &str| {
+            for lt in [&wall, &fence, &gas] {
+                assert_eq!(back.linetype(&lt.name).as_ref(), Some(lt), "{how}");
+            }
+            // The text's style is in use: PURGE leaves it.
+            assert!(back.text_style_in_use("Labels"), "{how}");
+        };
+        let mut ours = Vec::new();
+        oxidraft_io_dxf::write(&doc, &mut ours).unwrap();
+        check(&oxidraft_io_dxf::read(&mut ours.as_slice()).unwrap().document, "Oxidraft's DXF");
+        let dxf = write_dxf(&doc).unwrap();
+        check(&read_dxf(&dxf).unwrap().document, "DXF");
+        // AutoCAD keeps each shape file as an unnamed STYLE of flag 1.
+        let cad = DxfReader::from_reader(Cursor::new(dxf)).and_then(|r| r.read()).unwrap();
+        let mut files: Vec<&str> = cad
+            .text_styles
+            .iter()
+            .filter(|s| s.is_shape_file && s.name.is_empty())
+            .map(|s| s.font_file.as_str())
+            .collect();
+        files.sort_unstable();
+        assert_eq!(files, ["G:\\LINEtypes\\HalfMF.shx", "ltypeshp.shx"]);
+        for version in [Version::R2000, Version::R2018] {
+            check(&read(&write(&doc, version).unwrap()).unwrap().imported.document, &format!("{version:?}"));
+        }
+    }
+
+    #[test]
     fn mtext_columns_and_line_spacing_survive() {
         use oxidraft_model::annotation::{Columns, TextLook};
         let mut doc = Document::new();

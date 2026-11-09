@@ -236,24 +236,91 @@ impl<'a> Plotter<'a> {
     /// plot scale; too fine to see, solid. Through a viewport they're as
     /// long as on the sheet (PSLTSCALE 1), whatever its scale.
     fn dashed(&mut self, points: Vec<Point>, closed: bool, s: &Styled, width: f64, color: Rgb) {
-        let pattern = self.doc.linetype(&s.linetype).filter(|l| !l.is_continuous()).map(|l| {
-            let k = self.doc.ltscale() * self.layout.scale;
-            (l.length() * k, l.pattern.iter().map(|d| d * k).collect::<Vec<f64>>())
-        });
-        let paths = match pattern {
-            Some((length, pattern)) if length >= 0.5 => {
-                let mut points = points;
-                if closed && let Some(&first) = points.first() {
-                    points.push(first);
-                }
-                linetype::dashes(&points, &pattern, 1.0)
-                    .into_iter()
-                    .map(|run| Path { points: if run.len() == 1 { vec![run[0], run[0]] } else { run }, closed: false })
-                    .collect()
-            }
-            _ => vec![Path { points, closed }],
+        let k = self.doc.ltscale() * self.layout.scale;
+        let lt = self.doc.linetype(&s.linetype).filter(|l| !l.is_continuous() && l.length() * k >= 0.5);
+        let Some(lt) = lt else {
+            return self.push_stroke(vec![Path { points, closed }], width, color, false);
         };
+        let mut points = points;
+        if closed && let Some(&first) = points.first() {
+            points.push(first);
+        }
+        let pattern: Vec<f64> = lt.pattern.iter().map(|d| d * k).collect();
+        let paths = linetype::dashes(&points, &pattern, 1.0)
+            .into_iter()
+            .map(|run| Path { points: if run.len() == 1 { vec![run[0], run[0]] } else { run }, closed: false })
+            .collect();
         self.push_stroke(paths, width, color, false);
+        self.embedded(&points, &lt, k, width, color);
+    }
+
+    /// A complex linetype's shapes and texts along a path on the sheet,
+    /// its pattern `k` millimeters to the unit: shapes, and text in SHX
+    /// fonts, as strokes in the object's pen.
+    fn embedded(&mut self, points: &[Point], lt: &oxidraft_model::Linetype, k: f64, width: f64, color: Rgb) {
+        use oxidraft_model::{Attach, EmbeddedContent, TextLook};
+        for (e, at, along) in linetype::embedded_along(points, lt, k) {
+            let (angle, turned) = e.direction(along);
+            match &e.content {
+                EmbeddedContent::Shape { number, file } => {
+                    let Some(shape) = crate::shx::shape(file, *number) else { continue };
+                    let size = e.scale * k;
+                    // Turned around its middle.
+                    let middle = if turned { shape.middle() * (2.0 * size) } else { Point::ORIGIN };
+                    let place = |p: &Point| at + (*p * size - middle).rotated_about(Point::ORIGIN, angle);
+                    let paths = shape
+                        .strokes
+                        .iter()
+                        .map(|s| Path { points: s.iter().map(place).collect(), closed: false })
+                        .collect();
+                    self.push_stroke(paths, width, color, false);
+                }
+                EmbeddedContent::Text { text, style } => {
+                    let style = self.doc.text_style(style);
+                    let height = e.scale * k * style.map_or(1.0, |s| if s.height > 0.0 { s.height } else { 1.0 });
+                    let look = style.map(TextLook::of).unwrap_or_default();
+                    // Turned around, its top right corner is where its start was.
+                    let attach = if turned { Attach::TopRight } else { Attach::BottomLeft };
+                    let g = Geometry::Text {
+                        position: at,
+                        height,
+                        rotation: angle,
+                        width: 0.0,
+                        attach,
+                        content: text.clone(),
+                        look,
+                    };
+                    let font = style.map(|s| s.font.clone()).unwrap_or_default();
+                    if let Some(shx) = crate::shx::shx_font(&font) {
+                        let big = style.and_then(|s| crate::shx::shx_font(&s.big_font));
+                        let paths = crate::shx::text_strokes(shx, big, &g)
+                            .into_iter()
+                            .map(|points| Path { points, closed: false })
+                            .collect();
+                        self.push_stroke(paths, width, color, false);
+                    } else if !text.trim().is_empty() {
+                        let Geometry::Text { look, .. } = g else { continue };
+                        let wf = if look.width_factor > 0.0 { look.width_factor } else { 1.0 };
+                        let size = height / 0.7;
+                        let shift = if turned {
+                            Point::new(font::typeface(&font).width(text) * wf * size, height)
+                        } else {
+                            Point::ORIGIN
+                        };
+                        self.items.push(Item::Text {
+                            at: at - shift.rotated_about(Point::ORIGIN, angle),
+                            rotation: angle,
+                            size,
+                            text: text.clone(),
+                            color,
+                            width_factor: wf,
+                            oblique: look.oblique,
+                            font,
+                        });
+                    }
+                }
+            }
+        }
     }
 
     fn styled(&mut self, s: &Styled) {
@@ -731,6 +798,82 @@ mod tests {
         let Item::Text { at, size, .. } = texts[1] else { panic!() };
         assert!(at.approx_eq(Point::new(15.0, 25.0)) && (size - 5.0).abs() < 1e-9);
         assert!(matches!(sheet.items.last(), Some(Item::Stroke { width: 2.0, wide: true, .. })));
+    }
+
+    #[test]
+    fn complex_linetypes_plot_their_shapes_and_texts() {
+        use oxidraft_model::{Embedded, EmbeddedContent, EmbeddedTurn, Linetype, TextStyle};
+        let mut doc = Document::new();
+        let labels = TextStyle { name: "Labels".into(), font: "arial.ttf".into(), ..TextStyle::standard() };
+        doc.set_text_style(labels).unwrap();
+        // GAS where a gap ends, level, a little back and down.
+        let gas = Linetype {
+            embedded: vec![Embedded {
+                element: 1,
+                content: EmbeddedContent::Text { text: "GAS".into(), style: "Labels".into() },
+                scale: 2.5,
+                rotation: 0.0,
+                turn: EmbeddedTurn::Absolute,
+                offset: Point::new(-2.5, -1.25),
+            }],
+            ..Linetype::new("GAS_LINE", "", &[12.7, -5.08, -6.35])
+        };
+        // A tick 1 up and 1 down from a shape file of its own, halfway.
+        let dir = std::env::temp_dir().join(format!("oxidraft-ltype-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("plot_tick_test.shx");
+        let tick = [b"TICK\0".as_slice(), &[0x14, 2, 0x1C, 1, 0x1C, 0]].concat();
+        let mut data = b"AutoCAD-86 shapes 1.0\r\n\x1A".to_vec();
+        for v in [1u16, 1, 1, 1, tick.len() as u16] {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        data.extend_from_slice(&tick);
+        std::fs::write(&file, data).unwrap();
+        let ticks = Linetype {
+            embedded: vec![Embedded {
+                element: 0,
+                content: EmbeddedContent::Shape { number: 1, file: file.to_string_lossy().into_owned() },
+                scale: 2.0,
+                rotation: 0.0,
+                turn: EmbeddedTurn::Relative,
+                offset: Point::ORIGIN,
+            }],
+            ..Linetype::new("TICKS", "", &[5.0, 5.0])
+        };
+        for (lt, y) in [(&gas, 0.0), (&ticks, 20.0)] {
+            doc.define_linetype(lt.clone());
+            let id = doc.add(Geometry::Line { start: Point::new(0.0, y), end: Point::new(50.0, y) });
+            doc.update(id, |e| e.linetype = lt.name.clone());
+        }
+        let sheet = render(&doc, MODEL, &settings(Aabb::from_points(Point::ORIGIN, Point::new(60.0, 60.0)))).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        // The pattern is 24.13 long: GAS at 17.78 and 41.91, the paper 5 in.
+        let texts: Vec<(String, Point, f64)> = sheet
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Text { text, at, size, .. } => Some((text.clone(), *at, *size)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert!(texts[0].1.approx_eq(Point::new(5.0 + 15.28, 5.0 - 1.25)), "{texts:?}");
+        assert!(texts[1].1.approx_eq(Point::new(5.0 + 39.41, 5.0 - 1.25)), "{texts:?}");
+        assert!(texts.iter().all(|t| t.0 == "GAS" && (t.2 - 2.5 / 0.7).abs() < 1e-9));
+        // Ticks 2 up and 2 down where each 5 long dash ends: at 5, 15, … 45.
+        let ticks: Vec<Point> = sheet
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Stroke { paths, .. } => Some(paths),
+                _ => None,
+            })
+            .flatten()
+            .filter(|p| p.points.len() == 2 && (p.points[0].x - p.points[1].x).abs() < 1e-9)
+            .map(|p| p.points[1])
+            .collect();
+        assert_eq!(ticks.len(), 10, "{ticks:?}");
+        assert!(ticks[0].approx_eq(Point::new(10.0, 27.0)) && ticks[1].approx_eq(Point::new(10.0, 23.0)), "{ticks:?}");
     }
 
     #[test]

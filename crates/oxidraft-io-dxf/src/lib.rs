@@ -26,6 +26,7 @@ mod dim_xdata;
 mod hatch_dxf;
 mod layout_dxf;
 mod leader_xdata;
+mod ltype_dxf;
 mod table_xdata;
 mod underlay_dxf;
 
@@ -1323,14 +1324,13 @@ fn build(doc: &Document) -> Built {
         .chain(doc.layers().iter().map(|l| l.linetype.clone()))
         .chain(doc.all_entities().map(|e| e.linetype.clone()))
         .chain(doc.blocks().flat_map(|b| b.entities.iter().map(|e| e.linetype.clone())));
-    let mut defined: Vec<String> = Vec::new();
+    let mut defined: Vec<Linetype> = Vec::new();
     // What came from xrefs is read from them again, so it isn't saved.
     for name in used.filter(|n| !is_dependent(n)) {
         let Some(lt) = doc.linetype(&name) else { continue };
-        if lt.pattern.is_empty() || defined.iter().any(|d| d.eq_ignore_ascii_case(&lt.name)) {
+        if lt.pattern.is_empty() || defined.iter().any(|d| d.name.eq_ignore_ascii_case(&lt.name)) {
             continue;
         }
-        defined.push(lt.name.clone());
         drawing.add_line_type(dxf::tables::LineType {
             name: lt.name.clone(),
             description: lt.description.clone(),
@@ -1340,7 +1340,10 @@ fn build(doc: &Document) -> Built {
             dash_dot_space_lengths: lt.pattern.clone(),
             ..Default::default()
         });
+        defined.push(lt);
     }
+    // The shape files of their shapes.
+    ltype_dxf::add_shape_styles(&mut drawing, &defined);
     // An attached drawing's layers are kept, marked as coming from it, so
     // turning them off or freezing them here lasts (AutoCAD's VISRETAIN).
     let from_xref = |name: &str| name.split_once('|').is_some_and(|(x, _)| doc.xref(x).is_some());
@@ -1874,6 +1877,8 @@ struct Raw {
     clips: HashMap<u64, oxidraft_model::XClip>,
     /// Layouts' page setups, and viewports.
     layouts: layout_dxf::RawLayouts,
+    /// Complex linetypes' shapes and texts, by linetype name in capitals.
+    linetypes: HashMap<String, Vec<oxidraft_model::Embedded>>,
 }
 
 /// WIPEOUT boundaries as the file has them, to put right what the dxf
@@ -1909,10 +1914,12 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
     for lt in drawing.line_types() {
         let special = ["BYLAYER", "BYBLOCK", "CONTINUOUS"].iter().any(|n| lt.name.eq_ignore_ascii_case(n));
         if !special && !lt.dash_dot_space_lengths.is_empty() {
+            let embedded = raw.linetypes.get(&lt.name.to_ascii_uppercase()).cloned().unwrap_or_default();
             doc.define_linetype(Linetype {
                 name: lt.name.clone(),
                 description: lt.description.clone(),
                 pattern: lt.dash_dot_space_lengths.clone(),
+                embedded: embedded.into_iter().filter(|e| e.element < lt.dash_dot_space_lengths.len()).collect(),
             });
         }
     }
@@ -2406,6 +2413,7 @@ pub fn write_with_handles<W: Write>(doc: &Document, writer: &mut W) -> Result<Ha
         })
         .collect();
     let fixed = fix_tables(&fix_attributes(&attribute_alignment_in_text(&buf), &styles), &layers);
+    let fixed = ltype_dxf::write_elements(&fixed, &doc.linetypes());
     // The dxf crate can only write ByLayer or ByBlock here.
     let celweight = doc.current_props().lineweight.to_dxf().to_string();
     let fixed = set_header_value(&fixed, "$CELWEIGHT", &celweight);
@@ -2554,8 +2562,8 @@ fn eol(line: &str) -> &'static str {
 }
 
 /// Fills in table data the dxf crate can't write: each layer's flags
-/// (frozen 1, locked 4) and lineweight, from `(name, flags, lineweight)`;
-/// and a type (74, simple) after each linetype dash length, as AutoCAD writes them.
+/// (frozen 1, locked 4) and lineweight, from `(name, flags, lineweight)`
+/// ([`ltype_dxf::write_elements`] writes the linetypes' element types).
 fn fix_tables(dxf: &[u8], layers: &[(String, i16, i16)]) -> Vec<u8> {
     let text = String::from_utf8_lossy(dxf);
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
@@ -2577,11 +2585,6 @@ fn fix_tables(dxf: &[u8], layers: &[(String, i16, i16)]) -> Vec<u8> {
             }
             ("LAYER", "370", Some(l)) => {
                 out.push_str(&format!("{}{}{end}", pair[0], l.2));
-                continue;
-            }
-            ("LTYPE", "49", _) => {
-                pair.iter().for_each(|l| out.push_str(l));
-                out.push_str(&format!(" 74{end}0{end}"));
                 continue;
             }
             _ => {}
@@ -2703,6 +2706,7 @@ pub fn read<R: BufRead>(reader: &mut R) -> Result<Imported, Error> {
         hatches: hatch_dxf::read_hatches(&bytes),
         clips: clip_dxf::read_clips(&bytes),
         layouts: layout_dxf::read(&bytes),
+        linetypes: ltype_dxf::read_elements(&bytes),
     };
     Ok(from_drawing_styled(&drawing, raw))
 }

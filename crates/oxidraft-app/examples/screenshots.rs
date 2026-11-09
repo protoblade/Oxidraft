@@ -256,6 +256,7 @@ fn main() {
             name: "Полумасивна ограда обща за двата имота".into(),
             description: String::new(),
             pattern: vec![2.0, -1.0],
+            ..Default::default()
         });
         for name in
             ["CAD_BORDER_Half_Mass_Fence_common", "CAD_BORDER_Massive_Fence_L_R", "CarevaLivada_VARBANOVO1_modifiedG"]

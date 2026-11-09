@@ -806,6 +806,8 @@ impl Document {
         let uses = |g: &Geometry| matches!(g, Geometry::Text { look, .. } if look.style.eq_ignore_ascii_case(name));
         self.entities.values().any(|e| uses(&e.geometry))
             || self.blocks.values().any(|b| b.entities.iter().any(|be| uses(&be.geometry)))
+            // A complex linetype's texts, too.
+            || self.linetypes.values().any(|l| l.text_styles().any(|s| s.eq_ignore_ascii_case(name)))
     }
 
     /// Deletes a text style nothing uses. Standard and the current one stay.

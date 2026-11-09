@@ -17,6 +17,18 @@ pub struct Glyph {
     pub advance: f64,
 }
 
+impl Glyph {
+    /// The middle of its strokes' extents.
+    pub fn middle(&self) -> Point {
+        let mut points = self.strokes.iter().flatten();
+        let Some(&first) = points.next() else { return Point::ORIGIN };
+        let (lo, hi) = points.fold((first, first), |(lo, hi), p| {
+            (Point::new(lo.x.min(p.x), lo.y.min(p.y)), Point::new(hi.x.max(p.x), hi.y.max(p.y)))
+        });
+        (lo + hi) * 0.5
+    }
+}
+
 pub struct ShxFont {
     /// How high capitals stand, in shape units: the scale of the font.
     above: f64,
@@ -153,6 +165,13 @@ impl Pen {
 impl ShxFont {
     /// Reads an SHX file's bytes.
     pub fn parse(data: &[u8]) -> Option<ShxFont> {
+        Self::read(data, true)
+    }
+
+    /// Reads an SHX font's bytes, or (not `font`) a shape file's, which
+    /// complex linetypes draw shapes from: one without a font's own shape
+    /// (0, how high capitals stand) is in its shapes' own units.
+    fn read(data: &[u8], font: bool) -> Option<ShxFont> {
         let head_end = data.iter().position(|b| *b == 0x1A)?;
         let head = String::from_utf8_lossy(&data[..head_end]).to_ascii_lowercase();
         let at = head_end + 1;
@@ -202,8 +221,11 @@ impl ShxFont {
             return None;
         }
         // The font's own shape: its name, then how high capitals stand.
-        let info = after_name(shapes.get(&0)?);
-        let above = f64::from(*info.first()?);
+        let above = match shapes.get(&0).and_then(|info| after_name(info).first()) {
+            Some(&above) => f64::from(above),
+            None if !font => 1.0,
+            None => return None,
+        };
         let encodings = if ranges.is_empty() { Vec::new() } else { big_encodings(&ranges, "") };
         (above > 0.0).then(|| ShxFont { above, unicode, shapes, glyphs: Mutex::default(), ranges, encodings })
     }
@@ -328,6 +350,26 @@ impl ShxFont {
             _ => return None,
         };
         self.shapes.contains_key(&special).then_some(special)
+    }
+
+    /// Shape `number`'s strokes in the file's own units (vector lengths),
+    /// whatever its font's size; `None` if the file hasn't it.
+    pub fn shape(&self, number: u16) -> Option<Glyph> {
+        let number = u32::from(number);
+        if number == 0 || !self.shapes.contains_key(&number) {
+            return None;
+        }
+        let mut pen = Pen {
+            at: Point::ORIGIN,
+            down: true,
+            scale: 1.0,
+            stack: Vec::new(),
+            strokes: Vec::new(),
+            current: Vec::new(),
+        };
+        self.run(number, &mut pen, 0);
+        pen.lift();
+        Some(Glyph { strokes: pen.strokes, advance: pen.at.x })
     }
 
     /// Character `c`'s strokes (a '?' for one the font lacks).
@@ -493,6 +535,50 @@ pub fn shx_font(font: &str) -> Option<&'static ShxFont> {
     loaded
 }
 
+/// Shape files read so far, by name (lower case).
+static SHAPE_FILES: LazyLock<Mutex<HashMap<String, Option<&'static ShxFont>>>> = LazyLock::new(Default::default);
+
+/// A shape drawn, by its file and number (`None`: not there).
+type Drawn = HashMap<(String, u16), Option<Arc<Glyph>>>;
+
+/// Shapes drawn so far.
+static SHAPES: LazyLock<Mutex<Drawn>> = LazyLock::new(Default::default);
+
+/// Shape `number` of shape file `file` (as a complex linetype names it,
+/// maybe with the folder it was in on another computer), in the file's own
+/// units; `None` when the file isn't found or hasn't that shape.
+pub fn shape(file: &str, number: u16) -> Option<Arc<Glyph>> {
+    let name = file.trim().rsplit(['\\', '/']).next()?.to_ascii_lowercase();
+    if name.is_empty() {
+        return None;
+    }
+    let name = if name.contains('.') { name } else { format!("{name}.shx") };
+    let key = (name.clone(), number);
+    if let Some(found) = SHAPES.lock().ok().and_then(|s| s.get(&key).cloned()) {
+        return found;
+    }
+    let cached = SHAPE_FILES.lock().ok().and_then(|f| f.get(&name).copied());
+    let shapes = cached.unwrap_or_else(|| {
+        // Where the drawing had it, then where fonts are.
+        let path = Some(std::path::PathBuf::from(file.trim()))
+            .filter(|p| p.is_absolute() && p.is_file())
+            .or_else(|| crate::font::find(&name));
+        let loaded = path
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|data| ShxFont::read(&data, false))
+            .map(|shapes| &*Box::leak(Box::new(shapes)));
+        if let Ok(mut files) = SHAPE_FILES.lock() {
+            files.insert(name, loaded);
+        }
+        loaded
+    });
+    let glyph = shapes.and_then(|s| s.shape(number)).map(Arc::new);
+    if let Ok(mut all) = SHAPES.lock() {
+        all.insert(key, glyph.clone());
+    }
+    glyph
+}
+
 /// The code pages a big font's two-byte codes may be in, likeliest
 /// first: from its file name when it's one of AutoCAD's (extfont and
 /// bigfont Japanese, gbcbig Simplified Chinese, chineset Traditional,
@@ -542,6 +628,17 @@ pub(crate) fn forget_all() {
     if let Ok(mut found) = FOUND.lock() {
         found.clear();
     }
+    forget_shapes(false);
+}
+
+/// Forgets shape files (only those not found, with `missing`).
+fn forget_shapes(missing: bool) {
+    if let Ok(mut files) = SHAPE_FILES.lock() {
+        files.retain(|_, f| missing && f.is_some());
+    }
+    if let Ok(mut shapes) = SHAPES.lock() {
+        shapes.retain(|_, s| missing && s.is_some());
+    }
 }
 
 /// Forgets fonts not found, to look for them again (a new folder to look in).
@@ -549,6 +646,7 @@ pub(crate) fn forget_missing() {
     if let Ok(mut found) = FOUND.lock() {
         found.retain(|_, f| f.is_some());
     }
+    forget_shapes(true);
 }
 
 #[cfg(test)]
@@ -660,6 +758,30 @@ mod tests {
         assert!(font.glyph('Z').strokes.is_empty());
         assert_eq!(font.line("AB").len(), 3);
         assert!((font.width("AA") - 2.8).abs() < 1e-9);
+    }
+
+    /// A shape file for linetypes, which has no font shape (0): ltypeshp's
+    /// TRACK1, a tick 1 up and 1 down, in its own units.
+    #[test]
+    fn shape_files_draw_shapes_in_their_own_units() {
+        let track = [b"TRACK1\0".as_slice(), &[0x14, 2, 0x1C, 1, 0x1C, 0]].concat();
+        let mut data = b"AutoCAD-86 shapes 1.0\r\n\x1A".to_vec();
+        for v in [130u16, 130, 1, 130, track.len() as u16] {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        data.extend_from_slice(&track);
+        assert!(ShxFont::parse(&data).is_none(), "not a font");
+        let shapes = ShxFont::read(&data, false).unwrap();
+        let tick = shapes.shape(130).unwrap();
+        // Up, back with the pen up, then down.
+        assert_eq!(tick.strokes.len(), 2, "{tick:?}");
+        assert!(tick.strokes[0][1].approx_eq(Point::new(0.0, 1.0)), "{tick:?}");
+        assert!(tick.strokes[1][1].approx_eq(Point::new(0.0, -1.0)), "{tick:?}");
+        assert!(shapes.shape(131).is_none());
+        // AutoCAD's, where it's installed, named as on another computer.
+        if let Some(found) = shape("C:\\Users\\someone\\Support\\ltypeshp.shx", 130) {
+            assert_eq!(found.strokes, tick.strokes);
+        }
     }
 
     /// AutoCAD's own fonts, where AutoCAD is installed: text in them is
