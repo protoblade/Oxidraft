@@ -17,11 +17,13 @@ pub use ole::bmp_from_dib;
 
 mod annotative;
 mod arrays;
+mod dictionaries;
 mod dimassoc;
 mod dimbreaks;
 mod dynblocks;
 mod fields;
 mod groups;
+mod images;
 mod inspection;
 mod layouts;
 mod mleaders;
@@ -332,6 +334,7 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
         }
     }
     layouts::finish(&mut cad, doc);
+    images::finish(&mut cad);
     if native_objects() {
         annotative::write(&mut cad, doc, &handles);
         dimbreaks::write(&mut cad, doc, &handles);
@@ -385,6 +388,16 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
     // DWG keeps CELTYPE as its linetype's handle; acadrust reads only the name.
     if let Some(lt) = cad.line_types.get(&cad.header.current_linetype_name) {
         cad.header.current_linetype_handle = lt.handle;
+    }
+    dictionaries::finish(&mut cad);
+    // Defpoints never plots, which AutoCAD requires of it.
+    if let Some(l) = cad.layers.get_mut("Defpoints") {
+        l.is_plottable = false;
+    }
+    // AutoCAD's GUIDs are in braces, in capitals; the DXF writer's aren't.
+    for guid in [&mut cad.header.fingerprint_guid, &mut cad.header.version_guid] {
+        let bare = guid.trim().trim_start_matches('{').trim_end_matches('}').to_ascii_uppercase();
+        *guid = if bare.is_empty() { bare } else { format!("{{{bare}}}") };
     }
     Ok(cad)
 }
@@ -615,7 +628,13 @@ mod tests {
             attributes: attributes.clone(),
             clip: None,
         });
-        let dxf = read_dxf(&write_dxf(&doc).unwrap()).unwrap().document;
+        let text = write_dxf(&doc).unwrap();
+        // Each style has its font family once, as AutoCAD writes it.
+        for style in dxf_objects(&text, "STYLE") {
+            let apps = style.iter().filter(|(c, v)| *c == 1001 && v == "ACAD").count();
+            assert!(apps <= 1, "{style:?}");
+        }
+        let dxf = read_dxf(&text).unwrap().document;
         let dwgs = [Version::R2000, Version::R2018].map(|v| read(&write(&doc, v).unwrap()).unwrap().imported.document);
         for (back, how) in [(dxf, "DXF"), (dwgs[0].clone(), "R2000"), (dwgs[1].clone(), "R2018")] {
             let read: Vec<(String, Point, Attach, String, f64)> = back
@@ -1356,6 +1375,173 @@ mod tests {
             assert_eq!(more, &[Point::new(20.0, 0.0)], "{how}: the second leader line");
             let height = oxidraft_model::annotation::DEFAULT_LEADER_STYLE.text_height * scale;
             assert!((height - 5.0).abs() < 1e-9, "{how}: {height}");
+        }
+    }
+
+    /// An object's group codes and values, as DXF text has them.
+    type Groups = Vec<(i32, String)>;
+
+    /// The objects of `kind` in DXF text.
+    fn dxf_objects(dxf: &[u8], kind: &str) -> Vec<Groups> {
+        let text = String::from_utf8_lossy(dxf);
+        let mut lines = text.lines();
+        let (mut out, mut current): (Vec<Groups>, Option<Groups>) = (Vec::new(), None);
+        while let (Some(code), Some(value)) = (lines.next(), lines.next()) {
+            let (code, value) = (code.trim().parse::<i32>().unwrap(), value.trim().to_string());
+            if code == 0 {
+                out.extend(current.take());
+                if value == kind {
+                    current = Some(Vec::new());
+                }
+            } else if let Some(c) = current.as_mut() {
+                c.push((code, value));
+            }
+        }
+        out.extend(current);
+        out
+    }
+
+    #[test]
+    fn saved_drawings_have_what_autocad_requires() {
+        let mut plain = survey();
+        plain.add_layer(Layer::new("Defpoints", 7));
+        // AutoCAD 2000's DXF, and 2010's (for a table style of its own),
+        // with a picture.
+        let mut newer = survey();
+        let table = oxidraft_model::table::TableStyle { text_height: 3.0, margin: 1.0 };
+        newer.set_annotation_styles(oxidraft_model::annotation::DEFAULT_LEADER_STYLE, table);
+        newer.set_image_def(oxidraft_model::ImageDef {
+            name: "ortho".into(),
+            path: "ortho.tif".into(),
+            page: None,
+            width: 40.0,
+            height: 20.0,
+            status: oxidraft_model::XrefStatus::Loaded,
+        });
+        newer.add(Geometry::Image {
+            image: "ortho".into(),
+            origin: Point::ORIGIN,
+            u: Point::new(4.0, 0.0),
+            v: Point::new(0.0, 2.0),
+            clip: Vec::new(),
+            adjust: Default::default(),
+        });
+        for (doc, version) in [(&plain, "AC1015"), (&newer, "AC1024")] {
+            let dxf = write_dxf(doc).unwrap();
+            assert!(String::from_utf8_lossy(&dxf).contains(&format!("\n{version}")), "{version}");
+            let get = |o: &[(i32, String)], code: i32| o.iter().find(|(c, _)| *c == code).map(|(_, v)| v.clone());
+            // The root dictionary names AutoCAD's own dictionaries.
+            let dictionaries = dxf_objects(&dxf, "DICTIONARY");
+            let root = dictionaries.iter().find(|d| get(d, 330).as_deref() == Some("0")).unwrap();
+            let names: Vec<&str> = root.iter().filter(|(c, _)| *c == 3).map(|(_, v)| v.as_str()).collect();
+            for name in [
+                "ACAD_GROUP",
+                "ACAD_LAYOUT",
+                "ACAD_MLINESTYLE",
+                "ACAD_PLOTSETTINGS",
+                "ACAD_PLOTSTYLENAME",
+                "ACAD_MATERIAL",
+                "ACAD_COLOR",
+            ] {
+                assert!(names.contains(&name), "{version}: {name} in {names:?}");
+            }
+            assert_eq!(dxf_objects(&dxf, "MLINESTYLE").len(), 1, "{version}: the Standard MLINESTYLE");
+            // Every layer points at the Normal plot style.
+            let normal = dxf_objects(&dxf, "ACDBDICTIONARYWDFLT")
+                .first()
+                .and_then(|d| get(d, 340))
+                .unwrap_or_else(|| panic!("{version}: no plot style dictionary"));
+            assert!(dxf_objects(&dxf, "ACDBPLACEHOLDER").iter().any(|p| get(p, 5) == Some(normal.clone())));
+            let layers = dxf_objects(&dxf, "LAYER");
+            assert!(layers.len() >= 2, "{version}");
+            for layer in &layers {
+                assert_eq!(get(layer, 390), Some(normal.clone()), "{version}: {layer:?}");
+                // Defpoints never plots (AutoCAD requires it).
+                if get(layer, 2).as_deref() == Some("Defpoints") {
+                    assert_eq!(get(layer, 290).as_deref(), Some("0"), "{version}: {layer:?}");
+                }
+            }
+            // GUIDs as AutoCAD writes them.
+            let text = String::from_utf8_lossy(&dxf);
+            let guid = text.split("$FINGERPRINTGUID").nth(1).and_then(|t| t.lines().nth(2)).unwrap().trim().to_string();
+            assert!(guid.starts_with('{') && guid.ends_with('}') && guid == guid.to_uppercase(), "{version}: {guid}");
+            // And it all reads back.
+            let back = read_dxf(&dxf).unwrap().document;
+            assert_eq!(back.entities().count(), doc.entities().count(), "{version}");
+        }
+        for version in [Version::R2000, Version::R2018] {
+            let back = read(&write(&newer, version).unwrap()).unwrap().imported.document;
+            assert_eq!(back.entities().count(), newer.entities().count(), "{version:?}");
+        }
+    }
+
+    #[test]
+    fn pictures_go_out_as_autocad_writes_them() {
+        let mut doc = Document::new();
+        doc.set_image_def(oxidraft_model::ImageDef {
+            name: "ortho".into(),
+            path: "ortho.tif".into(),
+            page: None,
+            width: 400.0,
+            height: 200.0,
+            status: oxidraft_model::XrefStatus::Loaded,
+        });
+        let picture = |clip: Vec<Point>| Geometry::Image {
+            image: "ortho".into(),
+            origin: Point::new(0.0, 0.0),
+            u: Point::new(40.0, 0.0),
+            v: Point::new(0.0, 20.0),
+            clip,
+            adjust: Default::default(),
+        };
+        doc.add(picture(Vec::new()));
+        let triangle = vec![Point::new(5.0, 5.0), Point::new(30.0, 5.0), Point::new(10.0, 15.0)];
+        doc.add(picture(triangle.clone()));
+        let dxf = write_dxf(&doc).unwrap();
+        let handle = |o: &[(i32, String)], code: i32| o.iter().find(|(c, _)| *c == code).map(|(_, v)| v.clone());
+        let images = dxf_objects(&dxf, "IMAGE");
+        let reactors = dxf_objects(&dxf, "IMAGEDEF_REACTOR");
+        assert_eq!((images.len(), reactors.len()), (2, 2));
+        for image in &images {
+            // Each its own reactor, which points back at it.
+            let me = handle(image, 5).unwrap();
+            let reactor = handle(image, 360).expect("an IMAGE points at its IMAGEDEF_REACTOR");
+            let r = reactors.iter().find(|r| handle(r, 5).as_ref() == Some(&reactor)).unwrap();
+            assert!(r.iter().filter(|(c, _)| *c == 330).all(|(_, v)| *v == me), "{r:?}");
+        }
+        // The unclipped picture's boundary is the whole of it, as AutoCAD's are.
+        let boundary = |image: &[(i32, String)]| -> (String, Vec<f64>) {
+            let at = image.iter().position(|(c, _)| *c == 71).unwrap();
+            let corners = image[at..].iter().filter(|(c, _)| [14, 24].contains(c)).map(|(_, v)| v.parse().unwrap());
+            (image[at].1.clone(), corners.collect())
+        };
+        assert_eq!(boundary(&images[0]), ("1".into(), vec![-0.5, -0.5, 399.5, 199.5]));
+        let (kind, points) = boundary(&images[1]);
+        assert_eq!((kind.as_str(), points.len()), ("2", 8), "the triangle, closed");
+        // The definition lists both reactors and has a pixel size.
+        let def = &dxf_objects(&dxf, "IMAGEDEF")[0];
+        for r in &reactors {
+            assert!(def.contains(&(330, handle(r, 5).unwrap())), "{def:?}");
+        }
+        assert_eq!((handle(def, 11), handle(def, 21)), (Some("1.0".into()), Some("1.0".into())), "{def:?}");
+        assert_eq!(dxf_objects(&dxf, "RASTERVARIABLES").len(), 1);
+        // And they read back as they were.
+        let back = read_dxf(&dxf).unwrap().document;
+        let clips: Vec<Vec<Point>> = back
+            .entities()
+            .map(|e| match &e.geometry {
+                Geometry::Image { clip, .. } => clip.clone(),
+                g => panic!("{g:?}"),
+            })
+            .collect();
+        assert!(clips[0].is_empty(), "{:?}", clips[0]);
+        assert_eq!(clips[1].len(), 3, "{:?}", clips[1]);
+        for (a, b) in clips[1].iter().zip(&triangle) {
+            assert!(a.distance(*b) < 1e-6, "{a:?} {b:?}");
+        }
+        for version in [Version::R2018, Version::R2000] {
+            let back = read(&write(&doc, version).unwrap()).unwrap().imported.document;
+            assert_eq!(back.entities().count(), 2, "{version:?}");
         }
     }
 

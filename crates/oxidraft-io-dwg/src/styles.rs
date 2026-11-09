@@ -171,6 +171,13 @@ pub(crate) const VIEW_INFO: &str = "ADSK_XREC_VTRVIEWINFO";
 
 pub(crate) fn finish(cad: &mut CadDocument, doc: &Document, version: DxfVersion) {
     cad.header.limit_check = doc.limits_check();
+    // A TrueType family's ACAD extended data is written from the style's
+    // font; the copy read in with it would make it twice.
+    for s in cad.text_styles.iter().filter(|s| !s.true_type_font.trim().is_empty()) {
+        if let Some(data) = cad.object_xdata.get_mut(&s.handle) {
+            data.remove_record("ACAD");
+        }
+    }
     // Views on layouts: paper space views.
     for v in doc.views().iter().filter(|v| v.space != oxidraft_model::MODEL) {
         if let Some(view) = cad.views.get_mut(&v.name) {
@@ -227,9 +234,10 @@ pub(crate) fn finish(cad: &mut CadDocument, doc: &Document, version: DxfVersion)
             s.title_row_style.text_height = t.text_height * 1.4;
         }
     }
-    // Image and wipeout frames (AutoCAD's default, 1, needs nothing).
+    // Image and wipeout frames (AutoCAD's default, 1, needs nothing), and
+    // a drawing with pictures keeps their RASTERVARIABLES, as AutoCAD's do.
     let image = i16::from(doc.picture_frame(false));
-    if image != 1 {
+    if image != 1 || doc.image_defs().any(|d| d.page.is_none()) {
         let h = named_object(cad, "ACAD_IMAGE_VARS", |h, owner| {
             ObjectType::RasterVariables(RasterVariables { handle: h, owner, ..RasterVariables::new() })
         });
