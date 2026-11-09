@@ -237,8 +237,9 @@ impl OxidraftApp {
             );
         }
         self.request_details();
+        // What the command drags: block references drawn with their contents.
         if let Some(c) = &cursor {
-            for g in self.engine.preview(c.point) {
+            for g in self.engine.preview(c.point).iter().flat_map(|g| self.doc.expanded_geometry(g)) {
                 self.draw_geometry(&model, rect, &g, Stroke::new(1.0, theme::preview()));
             }
         }

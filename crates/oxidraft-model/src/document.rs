@@ -1756,6 +1756,18 @@ impl Document {
         out
     }
 
+    /// What `g` draws as on its own, as a command's preview shows it:
+    /// block references (with their attributes), dimensions, leaders and
+    /// tables taken apart into curves and text.
+    pub fn expanded_geometry(&self, g: &Geometry) -> Vec<Geometry> {
+        let mut out = Vec::new();
+        let style = (Color::ByLayer, linetype::BYLAYER, Lineweight::ByLayer);
+        // On no layer: what's on layer 0 inside a block shows even when
+        // layer 0 is off, as it takes the (shown) reference's layer.
+        self.expand_into(g, "", style, &Inherited::default(), 0, &mut out);
+        out.into_iter().map(|s| s.geometry).collect()
+    }
+
     /// The frame drawn around a clipped reference (XCLIPFRAME 2: on screen
     /// and pickable, but not plotted), while its clipping is on.
     pub fn clip_frame(&self, g: &Geometry) -> Option<Geometry> {
@@ -2848,6 +2860,39 @@ mod tests {
         assert!(d.delete_layer("Empty").is_ok());
         assert!(d.layer("Empty").is_none());
         assert_eq!(d.unused_layer_name(), "Layer1");
+    }
+
+    #[test]
+    fn dragged_block_references_preview_as_their_contents() {
+        let mut d = Document::new();
+        let mut hidden = Layer::new("Hidden", 1);
+        hidden.on = false;
+        d.add_layer(hidden);
+        d.define_block(Block {
+            name: "DOOR".into(),
+            base: Point::ORIGIN,
+            entities: vec![
+                BlockEntity::new("0", Color::ByLayer, line(1.0)),
+                BlockEntity::new("Hidden", Color::ByLayer, line(2.0)),
+            ],
+        });
+        let insert = Geometry::Insert {
+            block: "DOOR".into(),
+            placement: Placement::at(Point::new(10.0, 0.0)),
+            attributes: Vec::new(),
+            clip: None,
+        };
+        // Where MOVE drags it, 5 to the right.
+        let dragged = insert.translated(Point::new(5.0, 0.0));
+        let expected = vec![Geometry::Line { start: Point::new(16.0, 0.0), end: Point::new(16.0, 1.0) }];
+        assert_eq!(d.expanded_geometry(&dragged), expected, "its contents, without what's on an off layer");
+        // Layer 0 off: the reference's contents on it take the reference's layer, still shown.
+        let mut zero = d.layer("0").unwrap().clone();
+        zero.on = false;
+        d.update_layer(zero);
+        assert_eq!(d.expanded_geometry(&dragged), expected);
+        // Anything else is itself.
+        assert_eq!(d.expanded_geometry(&line(3.0)), vec![line(3.0)]);
     }
 
     #[test]
