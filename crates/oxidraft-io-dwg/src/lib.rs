@@ -333,6 +333,7 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
             a.handle = h;
         }
     }
+    unclash_attributes(&mut cad);
     layouts::finish(&mut cad, doc);
     images::finish(&mut cad);
     if native_objects() {
@@ -400,6 +401,48 @@ fn cad(doc: &Document, version: DxfVersion) -> Result<CadDocument, Error> {
         *guid = if bare.is_empty() { bare } else { format!("{{{bare}}}") };
     }
     Ok(cad)
+}
+
+/// acadrust gives what it adds itself (*Model_Space's BLOCK and ENDBLK,
+/// which the file hasn't) handles that the file may have given attributes:
+/// it doesn't look inside INSERTs, where attributes and their SEQEND are.
+/// Those (a reference's in a block, written first, have low handles) get
+/// new ones; otherwise the DWG keeps only one of each pair.
+fn unclash_attributes(cad: &mut CadDocument) {
+    use acadrust::tables::{Table, TableEntry};
+    fn entries<T: TableEntry>(t: &Table<T>) -> impl Iterator<Item = u64> + '_ {
+        std::iter::once(t.handle().value()).chain(t.iter().map(|e| e.handle().value()))
+    }
+    let mut used: std::collections::HashSet<u64> = cad.entities().map(|e| e.common().handle.value()).collect();
+    for r in cad.block_records.iter() {
+        used.extend([r.block_entity_handle, r.block_end_handle].map(|h| h.value()));
+    }
+    used.extend(cad.objects.keys().map(|h| h.value()));
+    used.extend(entries(&cad.layers).chain(entries(&cad.line_types)).chain(entries(&cad.text_styles)));
+    used.extend(entries(&cad.block_records).chain(entries(&cad.dim_styles)).chain(entries(&cad.app_ids)));
+    used.extend(entries(&cad.views).chain(entries(&cad.vports)).chain(entries(&cad.ucss)));
+    used.extend(entries(&cad.vx_table));
+    used.remove(&0);
+    // (INSERT, attribute index or the SEQEND) of each clash.
+    let mut clashes: Vec<(acadrust::types::Handle, Option<usize>)> = Vec::new();
+    for e in cad.entities() {
+        let acadrust::EntityType::Insert(i) = e else { continue };
+        let owned = i.attributes.iter().map(|a| a.common.handle).enumerate().map(|(n, h)| (Some(n), h));
+        for (which, h) in owned.chain(i.seqend_handle.map(|h| (None, h))) {
+            if !h.is_null() && !used.insert(h.value()) {
+                clashes.push((e.common().handle, which));
+            }
+        }
+    }
+    for (insert, which) in clashes {
+        let h = cad.allocate_handle();
+        if let Some(acadrust::EntityType::Insert(i)) = cad.get_entity_mut(insert) {
+            match which {
+                Some(n) => i.attributes[n].common.handle = h,
+                None => i.seqend_handle = Some(h),
+            }
+        }
+    }
 }
 
 /// The drawing as a DWG file of `version`.
@@ -663,6 +706,119 @@ mod tests {
                 (Some("Arial Narrow".into()), Some("Arial".into())),
                 "{how}"
             );
+        }
+    }
+
+    /// A block holding an attributed reference (a zoning matrix pasted as
+    /// a block, as AutoCAD's copy and paste makes) keeps that reference's
+    /// attributes: tag, value, point, alignment, text style, layer and
+    /// color, in DXF and DWG; and the outer block's references show them.
+    #[test]
+    fn attributes_of_references_in_blocks_survive() {
+        use oxidraft_model::{TextLook, TextStyle};
+        let narrow = TextLook { style: "COTI500".into(), width_factor: 0.8, ..Default::default() };
+        let attribute = |tag: &str, value: &str, x, y, attach, color| Attribute {
+            tag: tag.into(),
+            value: value.into(),
+            layer: "MATRIX".into(),
+            color,
+            position: Point::new(x, y),
+            height: 1.6875,
+            rotation: 0.0,
+            attach,
+            look: narrow.clone(),
+            invisible: false,
+        };
+        let mut doc = Document::new();
+        doc.add_layer(Layer::new("MATRIX", 7));
+        doc.add_layer(Layer::new("NEW_MATRIX", 7));
+        let style = TextStyle { name: "COTI500".into(), font: "Arial Narrow".into(), ..TextStyle::standard() };
+        doc.set_text_style(style).unwrap();
+        let circle = Geometry::Circle { center: Point::new(0.0, 14.58), radius: 6.48 };
+        doc.define_block(Block {
+            name: "MATRIX".into(),
+            base: Point::ORIGIN,
+            entities: vec![BlockEntity::new("MATRIX", Color::ByBlock, circle)],
+        });
+        let attributes = vec![
+            attribute("Z", "Ц", 7.431, 15.464, Attach::MiddleCenter, Color::ByBlock),
+            attribute("EH", "15.00", 6.4286, 9.2451, Attach::BottomRight, Color::ByBlock),
+            attribute("DENSITY", "80", 8.2848, 9.1625, Attach::BottomLeft, Color::Index(1)),
+        ];
+        let nested = Geometry::Insert {
+            block: "MATRIX".into(),
+            placement: Placement { scale: 0.5, ..Placement::at(Point::new(7.3789, 8.1)) },
+            attributes: attributes.clone(),
+            clip: None,
+        };
+        doc.define_block(Block {
+            name: "A$Cb8de5794".into(),
+            base: Point::ORIGIN,
+            entities: vec![BlockEntity::new("NEW_MATRIX", Color::ByLayer, nested)],
+        });
+        doc.add(Geometry::Insert {
+            block: "A$Cb8de5794".into(),
+            placement: Placement::at(Point::new(100.0, 200.0)),
+            attributes: Vec::new(),
+            clip: None,
+        });
+        let text = write_dxf(&doc).unwrap();
+        // The INSERT says it has attributes; they and their SEQEND have
+        // handles of their own.
+        let insert = dxf_objects(&text, "INSERT").into_iter().find(|i| i.contains(&(2, "MATRIX".into()))).unwrap();
+        assert!(insert.contains(&(66, "1".into())), "{insert:?}");
+        let handles: Vec<String> = ["ATTRIB", "SEQEND"]
+            .iter()
+            .flat_map(|k| dxf_objects(&text, k))
+            .map(|o| o.iter().find(|(c, _)| *c == 5).map(|(_, v)| v.clone()).unwrap_or_default())
+            .collect();
+        assert_eq!(handles.len(), 4, "{handles:?}");
+        assert!(handles.iter().all(|h| !h.is_empty() && h != "0"), "{handles:?}");
+        // No other object has one of them (acadrust's *Model_Space BLOCK
+        // took an attribute's).
+        let lines: Vec<String> = String::from_utf8_lossy(&text).lines().map(|l| l.trim().to_string()).collect();
+        let mut all: Vec<&str> =
+            lines.chunks(2).filter(|p| p.len() == 2 && p[0] == "5").map(|p| p[1].as_str()).collect();
+        let count = all.len();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len(), count, "a handle given twice");
+        let dxf = read_dxf(&text).unwrap().document;
+        let dwgs = [Version::R2000, Version::R2018].map(|v| read(&write(&doc, v).unwrap()).unwrap().imported.document);
+        type Seen = (String, String, Point, Attach, String, f64, String, Color);
+        let seen = |a: &Attribute| -> Seen {
+            let p = Point::new((a.position.x * 1e4).round() / 1e4, (a.position.y * 1e4).round() / 1e4);
+            let look = (a.look.style.clone(), a.look.width_factor);
+            (a.tag.clone(), a.value.clone(), p, a.attach, look.0, look.1, a.layer.clone(), a.color)
+        };
+        let wanted: Vec<Seen> = attributes.iter().map(seen).collect();
+        for (back, how) in [(dxf, "DXF"), (dwgs[0].clone(), "R2000"), (dwgs[1].clone(), "R2018")] {
+            let block = back.block("A$Cb8de5794").unwrap();
+            let read: Vec<Seen> = block
+                .entities
+                .iter()
+                .find_map(|e| match &e.geometry {
+                    Geometry::Insert { attributes, .. } => Some(attributes.iter().map(seen).collect()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            assert_eq!(read, wanted, "{how}");
+            // The outer reference draws them, where they are in the block.
+            let outer = back.entities().find(|e| matches!(e.geometry, Geometry::Insert { .. })).unwrap();
+            let shown: Vec<(String, Point)> = back
+                .expanded(outer)
+                .into_iter()
+                .filter_map(|g| match g {
+                    Geometry::Text { content, position, .. } => Some((content, position)),
+                    _ => None,
+                })
+                .collect();
+            let placed: Vec<(String, Point)> =
+                attributes.iter().map(|a| (a.value.clone(), a.position + Point::new(100.0, 200.0))).collect();
+            assert_eq!(shown.len(), placed.len(), "{how}: {shown:?}");
+            for ((value, at), (want, want_at)) in shown.iter().zip(&placed) {
+                assert!(value == want && at.distance(*want_at) < 1e-6, "{how}: {shown:?}");
+            }
         }
     }
 

@@ -4961,6 +4961,60 @@ mod tests {
         assert_eq!(lines(&d).len(), 4);
     }
 
+    /// Exploding a block that holds an attributed reference leaves that
+    /// reference, its attributes placed as the outer one placed them.
+    #[test]
+    fn explode_keeps_the_attributes_of_nested_references() {
+        use oxidraft_model::{Attach, Attribute, Block, BlockEntity, Color, Geometry, Placement};
+        let (mut e, mut d) = (engine(), Document::new());
+        let circle = Geometry::Circle { center: Point::new(0.0, 14.58), radius: 6.48 };
+        d.define_block(Block {
+            name: "MATRIX".into(),
+            base: Point::ORIGIN,
+            entities: vec![BlockEntity::new("0", Color::ByBlock, circle)],
+        });
+        let attribute = Attribute {
+            tag: "Z".into(),
+            value: "Ц".into(),
+            layer: "0".into(),
+            color: Color::ByBlock,
+            position: Point::new(7.431, 15.464),
+            height: 1.6875,
+            rotation: 0.0,
+            attach: Attach::MiddleCenter,
+            look: Default::default(),
+            invisible: false,
+        };
+        let nested = Geometry::Insert {
+            block: "MATRIX".into(),
+            placement: Placement { scale: 0.5, ..Placement::at(Point::new(7.3789, 8.1)) },
+            attributes: vec![attribute],
+            clip: None,
+        };
+        d.define_block(Block {
+            name: "A$C1".into(),
+            base: Point::ORIGIN,
+            entities: vec![BlockEntity::new("0", Color::ByLayer, nested)],
+        });
+        d.add(Geometry::Insert {
+            block: "A$C1".into(),
+            placement: Placement::at(Point::new(100.0, 200.0)),
+            attributes: Vec::new(),
+            clip: None,
+        });
+        type_all(&mut e, &mut d, &["explode", "all", ""]);
+        let left: Vec<(String, Vec<(String, Point)>)> = d
+            .entities()
+            .filter_map(|x| match &x.geometry {
+                Geometry::Insert { block, attributes, .. } => {
+                    Some((block.clone(), attributes.iter().map(|a| (a.value.clone(), a.position)).collect()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(left, vec![("MATRIX".to_string(), vec![("Ц".to_string(), Point::new(107.431, 215.464))])]);
+    }
+
     #[test]
     fn matchprop_copies_layer_and_color() {
         let (mut e, mut d) = (engine(), Document::new());

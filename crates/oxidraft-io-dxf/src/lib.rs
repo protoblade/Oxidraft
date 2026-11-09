@@ -1393,6 +1393,9 @@ fn build(doc: &Document) -> Built {
     // Clipped references in blocks: (block, index), for their filters once
     // they have handles.
     let mut block_clips: Vec<(String, usize, &Geometry)> = Vec::new();
+    // The styles of the ATTRIBs in the BLOCKS section, which come first in
+    // the file, then of those in ENTITIES.
+    let (mut styles, mut block_styles) = (Vec::new(), Vec::new());
     for b in doc.blocks().filter(|b| !is_dependent(&b.name)) {
         // An attached drawing is saved as its path; its contents stay in its own file.
         if let Some(x) = doc.xref(&b.name) {
@@ -1409,7 +1412,9 @@ fn build(doc: &Document) -> Built {
         }
         let mut entities = Vec::new();
         for be in &b.entities {
-            for de in ex.entity(&be.geometry, &be.layer, be.color, &be.linetype, be.lineweight) {
+            for mut de in ex.entity(&be.geometry, &be.layer, be.color, &be.linetype, be.lineweight) {
+                // A reference in a block keeps its attributes too.
+                add_attributes(&mut drawing, &mut de, &be.geometry, &mut block_styles);
                 if is_clipped(&de, &be.geometry) {
                     block_clips.push((b.name.clone(), entities.len(), &be.geometry));
                 }
@@ -1423,7 +1428,6 @@ fn build(doc: &Document) -> Built {
     // Objects are written in draw order, which is the order AutoCAD draws
     // them in when there's no SORTENTSTABLE.
     let mut entities: Vec<(DxfEntity, &Geometry, EntityId)> = Vec::new();
-    let (mut styles, mut block_styles) = (Vec::new(), Vec::new());
     // Where objects in *Paper_SpaceN blocks went: (block, index, object).
     let mut in_blocks: Vec<(String, usize, EntityId)> = Vec::new();
     for e in doc.space_in_draw_order(MODEL) {
@@ -1869,7 +1873,7 @@ pub fn from_drawing(drawing: &Drawing) -> Imported {
 #[derive(Default)]
 struct Raw {
     /// Each ATTRIB's (layer, color), in file order.
-    attributes: Option<Vec<(String, Color)>>,
+    attributes: Option<AttributeStyles>,
     /// Each layer's flags (group 70).
     layer_flags: Vec<(String, i16)>,
     hatches: Vec<hatch_dxf::RawHatch>,
@@ -2045,8 +2049,19 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         let n = n.to_ascii_lowercase();
         n.starts_with("*model_space") || n.starts_with("*paper_space")
     };
+    let (block_styles, styles) = match raw.attributes {
+        Some(AttributeStyles { blocks, entities }) => (Some(blocks), Some(entities)),
+        None => (None, None),
+    };
+    // The references in blocks have their attributes' layers and colors,
+    // block by block, object by object.
+    let block_styles = block_styles.as_deref().and_then(|s| styles_by_block(drawing, s));
+    let block_style = |block: usize, entity: usize| block_styles.as_ref().map(|s| s[block][entity]);
     let mut block_handles = HashMap::new();
-    for b in drawing.blocks().filter(|b| !is_space(&b.name)) {
+    for (bi, b) in drawing.blocks().enumerate() {
+        if is_space(&b.name) {
+            continue;
+        }
         // Attached drawings keep their path; whoever opens this reads them.
         // The blocks they bring along come from them too.
         if b.is_xref() || b.is_xref_overlay() {
@@ -2064,13 +2079,13 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
             continue;
         }
         let mut entities = Vec::new();
-        for e in &b.entities {
+        for (ei, e) in b.entities.iter().enumerate() {
             if is_template(&e.specific) {
                 continue;
             }
             match geometry_from_dxf(&e.specific) {
                 Some(mut geometry) => {
-                    style_attributes(&mut geometry, None, &e.common.layer);
+                    style_attributes(&mut geometry, block_style(bi, ei), &e.common.layer);
                     attach_clip(&mut geometry, e, &raw.clips);
                     block_handles.insert(e.common.handle.0, (b.name.clone(), entities.len()));
                     entities.push(BlockEntity {
@@ -2096,12 +2111,6 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         }
         doc.define_block(Block { name: b.name.clone(), base: from_dxf(&b.base_point), entities });
     }
-    // ATTRIBs follow their INSERT in the file, so the styles line up with
-    // the references' attributes in order, if the counts agree.
-    let attribute_count = |e: &DxfEntity| match &e.specific {
-        EntityType::Insert(i) => i.attributes().count(),
-        _ => 0,
-    };
     let pictures = underlay_dxf::Definitions::read(drawing);
     // Draw order: by SORTENTSTABLE where it says, else by handle (else, in
     // files without handles, by place in the file).
@@ -2114,8 +2123,10 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         }
     }
     let mut placed: Vec<(u64, f64, EntityId)> = Vec::new();
+    // ATTRIBs follow their INSERT in the file, so the styles line up with
+    // the references' attributes in order, if the counts agree.
     let total: usize = drawing.entities().map(attribute_count).sum();
-    let styles = raw.attributes.filter(|s| s.len() == total);
+    let styles = styles.filter(|s| s.len() == total);
     let mut wipeouts = RawWipeouts { all: &raw.layouts.wipeouts, next: 0 };
     let mut next = 0;
     for (position, e) in drawing.entities().enumerate() {
@@ -2183,11 +2194,17 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
         doc.set_space(MODEL);
     }
     // The other layouts' objects, in their *Paper_SpaceN blocks.
-    for b in drawing.blocks().filter(|b| b.name.to_ascii_lowercase().starts_with("*paper_space")) {
+    for (bi, b) in drawing.blocks().enumerate() {
+        if !b.name.to_ascii_lowercase().starts_with("*paper_space") {
+            continue;
+        }
         let Some(space) = space_of_record(&b.name) else { continue };
         doc.set_space(space);
-        for e in b.entities.iter().filter(|e| !is_template(&e.specific)) {
-            if raw.layouts.boundaries.contains(&e.common.handle.0) || leader_xdata::is_part(&e.common.x_data) {
+        for (ei, e) in b.entities.iter().enumerate() {
+            if is_template(&e.specific)
+                || raw.layouts.boundaries.contains(&e.common.handle.0)
+                || leader_xdata::is_part(&e.common.x_data)
+            {
                 continue;
             }
             let picture = match &e.specific {
@@ -2197,7 +2214,7 @@ fn from_drawing_styled(drawing: &Drawing, raw: Raw) -> Imported {
             match picture.or_else(|| geometry_from_dxf(&e.specific)) {
                 Some(mut g) => {
                     wipeouts.mend(&mut g, e.common.handle.0);
-                    style_attributes(&mut g, None, &e.common.layer);
+                    style_attributes(&mut g, block_style(bi, ei), &e.common.layer);
                     attach_clip(&mut g, e, &raw.clips);
                     if let Geometry::Dimension { extra, .. } = &mut g {
                         dim_xdata::read(&e.common.x_data, doc.dim_style(), extra);
@@ -2356,30 +2373,48 @@ fn color_to_raw(c: Color) -> i16 {
     }
 }
 
-/// Each ATTRIB's layer (code 8) and color (code 62) in the ENTITIES section,
-/// in file order. The dxf crate doesn't keep them, so they're read from the
-/// text; `None` for binary DXF.
-fn attribute_styles(dxf: &[u8]) -> Option<Vec<(String, Color)>> {
+/// An ATTRIB's layer and color.
+type AttributeStyle = (String, Color);
+
+/// Each ATTRIB's (layer, color), in file order: in the BLOCKS section (the
+/// references' in blocks), and in ENTITIES.
+#[derive(Default)]
+struct AttributeStyles {
+    blocks: Vec<AttributeStyle>,
+    entities: Vec<AttributeStyle>,
+}
+
+/// Each ATTRIB's layer (code 8) and color (code 62) in the BLOCKS and
+/// ENTITIES sections, in file order. The dxf crate doesn't keep them, so
+/// they're read from the text; `None` for binary DXF.
+fn attribute_styles(dxf: &[u8]) -> Option<AttributeStyles> {
     if dxf.starts_with(b"AutoCAD Binary DXF") {
         return None;
     }
     let text = String::from_utf8_lossy(dxf);
     let lines: Vec<&str> = text.lines().collect();
-    let mut out = Vec::new();
-    let (mut section_name_next, mut in_entities) = (false, false);
+    let mut out = AttributeStyles::default();
+    let mut section_name_next = false;
+    let mut section: Option<&mut Vec<AttributeStyle>> = None;
     let mut current: Option<(String, Color)> = None;
     for pair in lines.chunks(2) {
         let (code, value) = (pair[0].trim(), pair.get(1).map_or("", |v| v.trim()));
         if code == "0" {
-            out.extend(current.take());
+            if let (Some(found), Some(s)) = (current.take(), section.as_mut()) {
+                s.push(found);
+            }
             match value {
                 "SECTION" => section_name_next = true,
-                "ENDSEC" => in_entities = false,
-                "ATTRIB" if in_entities => current = Some(("0".into(), Color::ByLayer)),
+                "ENDSEC" => section = None,
+                "ATTRIB" if section.is_some() => current = Some(("0".into(), Color::ByLayer)),
                 _ => {}
             }
         } else if section_name_next && code == "2" {
-            in_entities = value == "ENTITIES";
+            section = match value {
+                "BLOCKS" => Some(&mut out.blocks),
+                "ENTITIES" => Some(&mut out.entities),
+                _ => None,
+            };
             section_name_next = false;
         } else if let Some((layer, color)) = &mut current {
             match code {
@@ -2389,8 +2424,33 @@ fn attribute_styles(dxf: &[u8]) -> Option<Vec<(String, Color)>> {
             }
         }
     }
-    out.extend(current);
+    if let (Some(found), Some(s)) = (current, section) {
+        s.push(found);
+    }
     Some(out)
+}
+
+/// How many attributes an object has (an INSERT's).
+fn attribute_count(e: &DxfEntity) -> usize {
+    match &e.specific {
+        EntityType::Insert(i) => i.attributes().count(),
+        _ => 0,
+    }
+}
+
+/// The BLOCKS section's ATTRIB styles, block by block and object by object
+/// as the drawing has them, if they're there for every attribute.
+fn styles_by_block<'a>(drawing: &Drawing, styles: &'a [AttributeStyle]) -> Option<Vec<Vec<&'a [AttributeStyle]>>> {
+    let counts: Vec<Vec<usize>> = drawing.blocks().map(|b| b.entities.iter().map(attribute_count).collect()).collect();
+    if counts.iter().flatten().sum::<usize>() != styles.len() {
+        return None;
+    }
+    let mut next = 0;
+    let mut slice = |n: usize| {
+        next += n;
+        &styles[next - n..next]
+    };
+    Some(counts.into_iter().map(|block| block.into_iter().map(&mut slice).collect()).collect())
 }
 
 pub fn write<W: Write>(doc: &Document, writer: &mut W) -> Result<(), Error> {
@@ -2489,8 +2549,8 @@ fn xdata_before_attributes(dxf: &[u8]) -> Vec<u8> {
 }
 
 /// Handles the dxf crate leaves out or repeats, which AutoCAD may refuse:
-/// each table its own, and each block's ENDBLK one other than its
-/// BLOCK's; past the others, with $HANDSEED after them.
+/// each table its own, each block's ENDBLK one other than its BLOCK's, and
+/// each SEQEND one; past the others, with $HANDSEED after them.
 fn fix_handles(dxf: &[u8]) -> Vec<u8> {
     let text = String::from_utf8_lossy(dxf);
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
@@ -2507,7 +2567,9 @@ fn fix_handles(dxf: &[u8]) -> Vec<u8> {
             kind = value.trim();
         }
         match handle_at(i) {
-            Some(h) if !seen.insert(h) && kind == "ENDBLK" => {
+            // A SEQEND in a block (ending a reference's attributes): the
+            // dxf crate gives it a handle only in ENTITIES.
+            Some(h) if (!seen.insert(h) && kind == "ENDBLK") || (h == 0 && kind == "SEQEND") => {
                 out.push_str(code);
                 out.push_str(&format!("{next:X}{}", eol(value)));
                 seen.insert(next);
