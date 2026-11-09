@@ -2926,7 +2926,7 @@ dependencies = [
 
 [[package]]
 name = "oxidraft-app"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "arboard",
  "base64",
@@ -2960,7 +2960,7 @@ dependencies = [
 
 [[package]]
 name = "oxidraft-commands"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "oxidraft-geom",
  "oxidraft-model",
@@ -2968,14 +2968,14 @@ dependencies = [
 
 [[package]]
 name = "oxidraft-geom"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "cavalier_contours",
 ]
 
 [[package]]
 name = "oxidraft-io-dwg"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "acadrust",
  "oxidraft-geom",
@@ -2985,7 +2985,7 @@ dependencies = [
 
 [[package]]
 name = "oxidraft-io-dxf"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "dxf",
  "oxidraft-geom",
@@ -2994,7 +2994,7 @@ dependencies = [
 
 [[package]]
 name = "oxidraft-macos"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "block2 0.6.2",
  "objc2 0.6.5",
@@ -3004,7 +3004,7 @@ dependencies = [
 
 [[package]]
 name = "oxidraft-model"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "earcutr",
  "oxidraft-geom",
@@ -3012,7 +3012,7 @@ dependencies = [
 
 [[package]]
 name = "oxidraft-plot"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "crc32fast",
  "encoding_rs",
@@ -3027,7 +3027,7 @@ dependencies = [
 
 [[package]]
 name = "oxidraft-raster"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "hayro",
  "image",
