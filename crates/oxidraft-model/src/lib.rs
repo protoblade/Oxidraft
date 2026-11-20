@@ -22,6 +22,7 @@ mod palette;
 mod purge;
 mod refedit;
 pub mod snap;
+mod spatial;
 pub mod table;
 pub mod ucs;
 mod underlay;
@@ -32,7 +33,7 @@ pub use annotation::{Attach, TextLook, TextStyle};
 pub use clip::clip_to_convex;
 pub use document::{
     AttributeDisplay, Block, BlockEntity, CurrentProps, Document, DrawingProperties, Group, Layer, LayerState,
-    NamedView, Styled, check_name, sanitize_name,
+    NamedView, Styled, StyledRef, check_name, sanitize_name,
 };
 pub use entity::{
     Annotative, Attribute, Color, EMBEDDED_PREFIX, Entity, EntityId, FAR, Geometry, Hyperlink, Placement, Vertex,

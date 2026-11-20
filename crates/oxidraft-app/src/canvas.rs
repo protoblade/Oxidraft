@@ -810,7 +810,8 @@ impl OxidraftApp {
         space: Space,
         frozen: &[String],
     ) {
-        let selected = if self.capturing_image() { Vec::new() } else { self.engine.highlighted() };
+        let selected: std::collections::HashSet<_> =
+            if self.capturing_image() { Default::default() } else { self.engine.highlighted().into_iter().collect() };
         // Rollover highlighting: the object under the pickbox gets thicker, and
         // so does everything a selection window in progress would select
         // (AutoCAD's selection preview).
@@ -830,6 +831,7 @@ impl OxidraftApp {
         };
         // The object pointed at in the Selection list.
         hovered.extend(self.cycling.as_ref().and_then(|c| c.hovered));
+        let hovered: std::collections::HashSet<_> = hovered.into_iter().collect();
         let view = self.world_rect(rect);
         // Dash patterns in screen pixels by linetype name, looked up once a frame.
         let mut patterns: HashMap<String, Option<Vec<f64>>> = HashMap::new();
@@ -844,25 +846,34 @@ impl OxidraftApp {
             _ if space != MODEL => Some(1.0),
             _ => None,
         };
-        // Traces in front: the drawing, then the tracing paper, then them.
-        let ordered = self.doc.space_in_draw_order(space);
-        let (mut ordered, traces): (Vec<_>, Vec<_>) = if self.trace_front {
-            ordered.into_iter().partition(|e| !crate::traces::is_trace_layer(&e.layer))
-        } else {
-            (ordered, Vec::new())
-        };
+        // What may show in the view, in draw order, without going through
+        // the rest of the drawing. Traces in front: the drawing, then the
+        // tracing paper, then them.
+        let ordered = self.doc.space_near(space, &view);
+        let trace = |e: &oxidraft_model::Entity| crate::traces::is_trace_layer(&e.layer);
+        let (mut ordered, traces): (Vec<_>, Vec<_>) =
+            if self.trace_front { ordered.into_iter().partition(|e| !trace(e)) } else { (ordered, Vec::new()) };
         let paper_at = ordered.len();
-        let paper =
-            !self.capturing_image() && self.trace_paper > 0 && traces.iter().any(|e| self.shows_layer(&e.layer));
+        // The paper's there while there are traces, in the view or not.
+        let paper = !self.capturing_image()
+            && self.trace_front
+            && self.trace_paper > 0
+            && self.doc.layers().iter().any(|l| crate::traces::is_trace_layer(&l.name) && self.shows_layer(&l.name))
+            && self.doc.all_entities().any(|e| e.space == space && trace(e) && self.shows_layer(&e.layer));
         ordered.extend(traces);
-        for (i, e) in ordered.into_iter().enumerate() {
+        for (i, e) in ordered.into_iter().map(Some).chain([None]).enumerate() {
             if i == paper_at && paper {
                 let alpha = (f32::from(self.trace_paper) / 100.0 * 200.0) as u8;
                 painter.rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha));
             }
+            let Some(e) = e else { break };
+            // An annotative object is where this scale shows it.
+            let annotative = e.annotative.is_some();
             let Some(e) = self.doc.shown_at(e, anno) else { continue };
             let e = e.as_ref();
-            if !self.shows_layer(&e.layer) || !self.doc.object_shown(e) || !on_screen(&self.doc.entity_bounds(e), &view)
+            if !self.shows_layer(&e.layer)
+                || !self.doc.object_shown(e)
+                || (annotative && !on_screen(&self.doc.entity_bounds(e), &view))
             {
                 continue;
             }
@@ -887,13 +898,17 @@ impl OxidraftApp {
                 compared.map(|c| if c.only_here.contains(&e.id) { crate::compare::HERE } else { crate::compare::BOTH });
             // TRANSPARENCY: see-through by its own or its layer's.
             let opacity = 1.0 - f32::from(self.doc.transparency_of(e)) / 100.0;
-            for s in self.doc.expanded_styled(e) {
+            // A plain object as it is; the rest taken apart.
+            let plain = self.doc.plain_styled(e);
+            let expanded = if plain.is_none() { self.doc.expanded_styled(e) } else { Vec::new() };
+            let (is_selected, is_hovered) = (selected.contains(&e.id), hovered.contains(&e.id));
+            for s in plain.into_iter().chain(expanded.iter().map(oxidraft_model::StyledRef::from)) {
                 let mut color = compare_color.unwrap_or_else(|| theme::aci(s.color));
                 if opacity < 1.0 {
                     color = color.gamma_multiply(opacity);
                 }
                 // Locked layers draw faded (AutoCAD's LAYLOCKFADECTL).
-                if self.doc.layer(&s.layer).is_some_and(|l| l.locked) {
+                if self.doc.layer(s.layer).is_some_and(|l| l.locked) {
                     color = color.gamma_multiply(0.45);
                 }
                 if xref {
@@ -902,25 +917,28 @@ impl OxidraftApp {
                 if faded {
                     color = color.gamma_multiply(0.5);
                 }
-                let pattern = patterns.entry(s.linetype.clone()).or_insert_with(|| {
-                    let lt = self.doc.linetype(&s.linetype).filter(|l| !l.is_continuous())?;
+                if !patterns.contains_key(s.linetype) {
+                    let lt = self.doc.linetype(s.linetype).filter(|l| !l.is_continuous());
                     // Too fine to see at this zoom: draw it solid, as AutoCAD does.
-                    (lt.length() * px_per_unit >= 3.0).then(|| lt.pattern.iter().map(|d| d * px_per_unit).collect())
-                });
+                    let dashes = lt.filter(|lt| lt.length() * px_per_unit >= 3.0);
+                    let dashes = dashes.map(|lt| lt.pattern.iter().map(|d| d * px_per_unit).collect());
+                    patterns.insert(s.linetype.to_string(), dashes);
+                }
+                let pattern = &patterns[s.linetype];
                 let width = if self.show_lineweights { lineweight_px(s.lineweight) } else { 1.0 };
-                let g = &s.geometry;
-                if selected.contains(&e.id) {
+                let g = s.geometry;
+                if is_selected {
                     self.draw_geometry(painter, rect, g, Stroke::new(width + 4.0, theme::selection_glow()));
                     self.draw_dashed(painter, rect, g, Stroke::new(width, color), pattern.as_deref());
-                } else if hovered.contains(&e.id) {
+                } else if is_hovered {
                     self.draw_dashed(painter, rect, g, Stroke::new(width.max(2.5), color), pattern.as_deref());
                 } else {
                     self.draw_dashed(painter, rect, g, Stroke::new(width, color), pattern.as_deref());
                 }
                 if pattern.is_some()
                     && let Some(lt) = complex
-                        .entry(s.linetype.clone())
-                        .or_insert_with(|| self.doc.linetype(&s.linetype).filter(|l| !l.embedded.is_empty()))
+                        .entry(s.linetype.to_string())
+                        .or_insert_with(|| self.doc.linetype(s.linetype).filter(|l| !l.embedded.is_empty()))
                 {
                     let scale = px_per_unit / self.view.scale;
                     self.draw_embedded(painter, rect, g, Stroke::new(width, color), lt, scale);
@@ -928,7 +946,7 @@ impl OxidraftApp {
             }
             if let Some(frame) = self.doc.clip_frame(&e.geometry) {
                 let color = theme::aci(self.doc.layer(&e.layer).map_or(7, |l| l.color));
-                let width = if selected.contains(&e.id) || hovered.contains(&e.id) { 2.5 } else { 1.0 };
+                let width = if is_selected || is_hovered { 2.5 } else { 1.0 };
                 self.draw_geometry(painter, rect, &frame, Stroke::new(width, color));
             }
         }

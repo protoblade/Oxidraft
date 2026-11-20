@@ -93,6 +93,19 @@ fn midway(g: &Geometry) -> Option<Point> {
 }
 
 /// Snap candidates an entity offers on its own.
+/// The current space's objects that may reach `area`, in the order
+/// [`Document::entities`] gives them (so ties go as they always have).
+fn near(doc: &Document, area: Aabb) -> Vec<&Entity> {
+    let mut found = doc.near(&area);
+    found.sort_unstable_by_key(|e| e.id);
+    found
+}
+
+/// The square `r` around `p`.
+fn around(p: Point, r: f64) -> Aabb {
+    Aabb::from_points(Point::new(p.x - r, p.y - r), Point::new(p.x + r, p.y + r))
+}
+
 fn candidates(g: &Geometry, out: &mut Vec<Snap>) {
     let mut add = |point: Point, kind: SnapKind| out.push(Snap { point, kind });
     match g {
@@ -202,8 +215,8 @@ fn touched_candidates(g: &Geometry, cursor: Point, from: Option<Point>, out: &mu
 fn collect(doc: &Document, cursor: Point, tolerance: f64, kinds: &[SnapKind], from: Option<Point>) -> Vec<Snap> {
     let mut all = Vec::new();
     // Only curves passing near the cursor can produce an intersection there.
-    let mut near: Vec<Geometry> = Vec::new();
-    for e in doc.entities().filter(|e| doc.object_shown(e)) {
+    let mut close: Vec<Geometry> = Vec::new();
+    for e in near(doc, around(cursor, tolerance)).into_iter().filter(|e| doc.object_shown(e)) {
         match &e.geometry {
             Geometry::Insert { placement, .. } => {
                 all.push(Snap { point: placement.position, kind: SnapKind::Insertion })
@@ -214,13 +227,13 @@ fn collect(doc: &Document, cursor: Point, tolerance: f64, kinds: &[SnapKind], fr
         for g in doc.expanded(e) {
             candidates(&g, &mut all);
             if g.distance_to(cursor) <= tolerance {
-                near.push(g);
+                close.push(g);
             }
         }
     }
     all.retain(|s| s.point.distance(cursor) <= tolerance);
-    for (i, a) in near.iter().enumerate() {
-        for b in &near[i + 1..] {
+    for (i, a) in close.iter().enumerate() {
+        for b in &close[i + 1..] {
             all.extend(
                 intersections(a, b)
                     .into_iter()
@@ -230,7 +243,7 @@ fn collect(doc: &Document, cursor: Point, tolerance: f64, kinds: &[SnapKind], fr
         }
     }
     if kinds.iter().any(|k| k.on_touched_object()) {
-        for g in &near {
+        for g in &close {
             touched_candidates(g, cursor, from, &mut all);
         }
     }
@@ -276,8 +289,8 @@ pub fn find_override_snap(
     from: Option<Point>,
 ) -> Option<Snap> {
     let mut all = Vec::new();
-    let mut near: Vec<Geometry> = Vec::new();
-    for e in doc.entities().filter(|e| doc.object_shown(e)) {
+    let mut close: Vec<Geometry> = Vec::new();
+    for e in near(doc, around(cursor, tolerance)).into_iter().filter(|e| doc.object_shown(e)) {
         let touched = doc.entity_distance(e, cursor) <= tolerance;
         if touched {
             match &e.geometry {
@@ -291,11 +304,11 @@ pub fn find_override_snap(
         for g in doc.expanded(e).into_iter().filter(|g| g.distance_to(cursor) <= tolerance) {
             candidates(&g, &mut all);
             touched_candidates(&g, cursor, from, &mut all);
-            near.push(g);
+            close.push(g);
         }
     }
-    for (i, a) in near.iter().enumerate() {
-        for b in &near[i + 1..] {
+    for (i, a) in close.iter().enumerate() {
+        for b in &close[i + 1..] {
             all.extend(intersections(a, b).into_iter().map(|point| Snap { point, kind: SnapKind::Intersection }));
         }
     }
@@ -311,7 +324,8 @@ pub fn find_override_snap(
 pub fn window_select(doc: &Document, first: Point, second: Point) -> Vec<EntityId> {
     let b = Aabb::from_points(first, second);
     let crossing = second.x < first.x;
-    doc.entities()
+    near(doc, b)
+        .into_iter()
         .filter(|e| doc.is_selectable(e))
         .filter(|e| if crossing { doc.entity_touches(e, &b) } else { b.contains_aabb(&doc.entity_bounds(e)) })
         .map(|e| e.id)
@@ -351,7 +365,8 @@ pub fn polygon_select(doc: &Document, ring: &[Point], crossing: bool) -> Vec<Ent
     let overlaps = |b: &Aabb| {
         b.max.x >= bounds.min.x && b.min.x <= bounds.max.x && b.max.y >= bounds.min.y && b.min.y <= bounds.max.y
     };
-    doc.entities()
+    near(doc, bounds)
+        .into_iter()
         .filter(|e| doc.is_selectable(e))
         .filter(|e| {
             let b = doc.entity_bounds(e);
@@ -381,7 +396,8 @@ pub fn fence_select(doc: &Document, path: &[Point]) -> Vec<EntityId> {
         b.max.x >= bounds.min.x && b.min.x <= bounds.max.x && b.max.y >= bounds.min.y && b.min.y <= bounds.max.y
     };
     let fence: Vec<oxidraft_geom::Segment> = path.windows(2).map(|w| oxidraft_geom::Segment::new(w[0], w[1])).collect();
-    doc.entities()
+    near(doc, bounds)
+        .into_iter()
         .filter(|e| doc.is_selectable(e) && overlaps(&doc.entity_bounds(e)))
         .filter(|e| {
             let parts: Vec<Geometry> = doc.expanded(e).into_iter().chain(doc.clip_frame(&e.geometry)).collect();
@@ -400,15 +416,15 @@ pub fn fence_select(doc: &Document, path: &[Point]) -> Vec<EntityId> {
 /// nearest one (within `slack`): overlapping objects, to choose between.
 /// The one drawn on top comes first.
 pub fn pick_overlapping(doc: &Document, p: Point, tolerance: f64, slack: f64) -> Vec<EntityId> {
-    let near: Vec<(f64, &Entity)> = doc
-        .entities_in_draw_order()
+    let close: Vec<(f64, &Entity)> = doc
+        .near(&around(p, tolerance))
         .into_iter()
         .filter(|e| doc.is_selectable(e))
         .map(|e| (doc.entity_distance(e, p), e))
         .filter(|(d, _)| *d <= tolerance)
         .collect();
-    let nearest = near.iter().map(|(d, _)| *d).fold(f64::INFINITY, f64::min);
-    let mut ids: Vec<EntityId> = near.iter().filter(|(d, _)| *d <= nearest + slack).map(|(_, e)| e.id).collect();
+    let nearest = close.iter().map(|(d, _)| *d).fold(f64::INFINITY, f64::min);
+    let mut ids: Vec<EntityId> = close.iter().filter(|(d, _)| *d <= nearest + slack).map(|(_, e)| e.id).collect();
     ids.reverse();
     if ids.is_empty() {
         ids.extend(pick(doc, p, tolerance));
@@ -431,15 +447,17 @@ pub fn pick_locked(doc: &Document, p: Point, tolerance: f64) -> Option<EntityId>
 
 /// Like [`pick`], among the objects `ok` allows.
 pub fn pick_where(doc: &Document, p: Point, tolerance: f64, ok: impl Fn(&Entity) -> bool) -> Option<EntityId> {
-    let editable = || doc.entities().filter(|e| ok(e));
-    editable()
+    let area = around(p, tolerance);
+    near(doc, area)
+        .into_iter()
+        .filter(|e| ok(e))
         .map(|e| (doc.entity_distance(e, p), e.id))
         .filter(|(d, _)| *d <= tolerance)
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, id)| id)
         .or_else(|| {
             // Clicking inside a hatched area picks it; the one drawn on top.
-            doc.entities_in_draw_order()
+            doc.near(&area)
                 .into_iter()
                 .filter(|e| ok(e))
                 .rfind(|e| {

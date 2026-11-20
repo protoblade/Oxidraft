@@ -116,6 +116,23 @@ pub struct Styled {
     pub lineweight: Lineweight,
 }
 
+/// A [`Styled`] borrowing what it's made of, as the canvas draws it each
+/// frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StyledRef<'a> {
+    pub geometry: &'a Geometry,
+    pub color: u8,
+    pub layer: &'a str,
+    pub linetype: &'a str,
+    pub lineweight: Lineweight,
+}
+
+impl<'a> From<&'a Styled> for StyledRef<'a> {
+    fn from(s: &'a Styled) -> Self {
+        Self { geometry: &s.geometry, color: s.color, layer: &s.layer, linetype: &s.linetype, lineweight: s.lineweight }
+    }
+}
+
 /// What ByBlock means inside a block reference: the reference's own
 /// resolved color, linetype and lineweight.
 #[derive(Clone)]
@@ -344,6 +361,8 @@ pub struct Document {
     undo_stack: Vec<Transaction>,
     redo_stack: Vec<Transaction>,
     pub(crate) revision: u64,
+    /// Where each space's objects are, at the current revision.
+    spatial: crate::spatial::SpatialCache,
     /// Linetypes the drawing defines, by upper-case name, besides the standard ones.
     linetypes: BTreeMap<String, Linetype>,
     /// LTSCALE: global scale of linetype patterns.
@@ -511,6 +530,7 @@ impl Document {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             revision: 0,
+            spatial: Default::default(),
             linetypes: BTreeMap::new(),
             ltscale: 1.0,
             pdmode: 0,
@@ -581,6 +601,28 @@ impl Document {
             all.sort_by(|a, b| self.draw_key(a.id).total_cmp(&self.draw_key(b.id)));
         }
         all
+    }
+
+    /// The objects of `space` that may reach `area`, in draw order: those
+    /// whose bounds (block contents, arc centers, a reference's insertion
+    /// point) reach it, and annotative objects, XLINEs and rays wherever
+    /// they are.
+    /// What's looked at under the cursor or drawn in a view, without going
+    /// through the rest of a big drawing.
+    pub fn space_near(&self, space: crate::layout::Space, area: &Aabb) -> Vec<&Entity> {
+        let index = self.spatial.get(self.revision, space, || {
+            let items = self.space_in_draw_order(space).into_iter();
+            crate::spatial::SpatialIndex::build(
+                items.map(|e| (e.id, crate::spatial::findable_bounds(self, e))).collect(),
+            )
+        });
+        index.query(area).into_iter().filter_map(|id| self.entity(id)).collect()
+    }
+
+    /// The current space's objects that may reach `area`, in draw order
+    /// (see [`Document::space_near`]).
+    pub fn near(&self, area: &Aabb) -> Vec<&Entity> {
+        self.space_near(self.space, area)
     }
 
     // ---- layouts ----------------------------------------------------------------
@@ -1612,6 +1654,52 @@ impl Document {
         let style = (e.color, e.linetype.as_str(), e.lineweight);
         self.expand_into(&e.geometry, &e.layer, style, &Inherited::default(), 0, &mut out);
         out
+    }
+
+    /// How a plain object draws, borrowing its geometry: the one piece
+    /// [`Document::expanded_styled`] makes of it, without copying it. None
+    /// for what that takes apart (block references, dimensions, leaders,
+    /// tables) or changes (text, for its fields).
+    pub fn plain_styled<'a>(&'a self, e: &'a Entity) -> Option<StyledRef<'a>> {
+        let plain = matches!(
+            e.geometry,
+            Geometry::Line { .. }
+                | Geometry::Circle { .. }
+                | Geometry::Arc { .. }
+                | Geometry::Polyline { .. }
+                | Geometry::Hatch { .. }
+                | Geometry::Ellipse(_)
+                | Geometry::Spline(_)
+                | Geometry::Xline { .. }
+                | Geometry::Ray { .. }
+                | Geometry::Point { .. }
+                | Geometry::Image { .. }
+                | Geometry::Wipeout { .. }
+        );
+        if !plain {
+            return None;
+        }
+        // As `resolve` has it outside any block reference.
+        let by_block = Inherited::default();
+        let layer = self.layer(&e.layer);
+        let color = match e.color {
+            Color::Index(i) => i,
+            Color::ByLayer => layer.map_or(7, |l| l.color),
+            Color::ByBlock => by_block.color,
+        };
+        let linetype = if linetype::is_by_layer(&e.linetype) {
+            layer.map_or(CONTINUOUS, |l| l.linetype.as_str())
+        } else if linetype::is_by_block(&e.linetype) {
+            CONTINUOUS
+        } else {
+            e.linetype.as_str()
+        };
+        let lineweight = match e.lineweight {
+            Lineweight::ByLayer => layer.map_or(Lineweight::Default, |l| l.lineweight),
+            Lineweight::ByBlock => by_block.lineweight,
+            lw => lw,
+        };
+        Some(StyledRef { geometry: &e.geometry, color, layer: &e.layer, linetype, lineweight })
     }
 
     /// The entity's curves in world coordinates (block references expanded).
@@ -2893,6 +2981,103 @@ mod tests {
         assert_eq!(d.expanded_geometry(&dragged), expected);
         // Anything else is itself.
         assert_eq!(d.expanded_geometry(&line(3.0)), vec![line(3.0)]);
+    }
+
+    #[test]
+    fn objects_near_an_area_are_those_reaching_it_in_draw_order() {
+        let mut d = Document::new();
+        // 60 by 100 short lines a unit apart, some brought to the front.
+        let ids: Vec<EntityId> = (0..6000)
+            .map(|n| {
+                let (x, y) = (f64::from(n % 60), f64::from(n / 60));
+                d.add(Geometry::Line { start: Point::new(x, y), end: Point::new(x + 0.5, y) })
+            })
+            .collect();
+        d.bring_to_front(&[ids[10], ids[3000], ids[5]]);
+        let brute = |d: &Document, area: &Aabb| -> Vec<EntityId> {
+            let reaches = |b: Aabb| {
+                b.max.x >= area.min.x && b.min.x <= area.max.x && b.max.y >= area.min.y && b.min.y <= area.max.y
+            };
+            d.space_in_draw_order(crate::layout::MODEL)
+                .into_iter()
+                .filter(|e| reaches(d.entity_bounds(e)))
+                .map(|e| e.id)
+                .collect()
+        };
+        // Most of the drawing, part of it, a little of it.
+        for area in [
+            Aabb::from_points(Point::new(-1.0, -1.0), Point::new(100.0, 100.0)),
+            Aabb::from_points(Point::new(-1.0, 10.0), Point::new(100.0, 99.0)),
+            Aabb::from_points(Point::new(4.2, 0.0), Point::new(10.0, 3.0)),
+        ] {
+            let near: Vec<EntityId> = d.near(&area).iter().map(|e| e.id).collect();
+            assert_eq!(near, brute(&d, &area));
+        }
+        // An edit is seen at once.
+        d.remove(ids[0]);
+        let moved = d.add(Geometry::Line { start: Point::new(500.0, 500.0), end: Point::new(501.0, 500.0) });
+        let far = Aabb::from_points(Point::new(499.0, 499.0), Point::new(502.0, 502.0));
+        assert_eq!(d.near(&far).iter().map(|e| e.id).collect::<Vec<_>>(), vec![moved]);
+        assert!(d.near(&Aabb::from_points(Point::new(-0.1, -0.1), Point::new(0.1, 0.1))).is_empty());
+    }
+
+    #[test]
+    fn plain_objects_draw_as_their_one_expanded_piece() {
+        let mut d = Document::new();
+        let mut walls = Layer::new("Walls", 3);
+        walls.linetype = "DASHED".into();
+        walls.lineweight = Lineweight::Hundredths(50);
+        d.add_layer(walls);
+        let plain = [
+            line(1.0),
+            Geometry::Circle { center: Point::ORIGIN, radius: 2.0 },
+            Geometry::Polyline {
+                vertices: vec![Vertex::at(Point::ORIGIN), Vertex::new(Point::new(1.0, 0.0), 0.5)],
+                closed: false,
+            },
+            Geometry::Point { position: Point::new(4.0, 4.0) },
+        ];
+        let colors = [Color::ByLayer, Color::ByBlock, Color::Index(5)];
+        let linetypes = [linetype::BYLAYER, "ByBlock", "HIDDEN", CONTINUOUS];
+        let weights = [Lineweight::ByLayer, Lineweight::ByBlock, Lineweight::Hundredths(30)];
+        let id = d.add(line(0.0));
+        let base = d.entity(id).unwrap().clone();
+        for (i, g) in plain.iter().enumerate() {
+            for (layer, color, lt, lw) in ["Walls", "0", "Missing"]
+                .iter()
+                .flat_map(|l| colors.iter().map(move |c| (*l, *c)))
+                .flat_map(|(l, c)| linetypes.iter().map(move |t| (l, c, *t)))
+                .flat_map(|(l, c, t)| weights.iter().map(move |w| (l, c, t, *w)))
+            {
+                let e = Entity {
+                    layer: layer.into(),
+                    color,
+                    linetype: lt.into(),
+                    lineweight: lw,
+                    geometry: g.clone(),
+                    ..base.clone()
+                };
+                let expanded = d.expanded_styled(&e);
+                assert_eq!(expanded.len(), 1);
+                assert_eq!(
+                    d.plain_styled(&e),
+                    Some(StyledRef::from(&expanded[0])),
+                    "{i} on {layer} {color:?} {lt} {lw:?}"
+                );
+            }
+        }
+        // What's taken apart or changed isn't plain.
+        let text = Geometry::Text {
+            position: Point::ORIGIN,
+            height: 1.0,
+            rotation: 0.0,
+            width: 0.0,
+            attach: crate::Attach::BottomLeft,
+            content: "%<\\AcVar Filename>%".into(),
+            look: Default::default(),
+        };
+        let id = d.add(text);
+        assert!(d.plain_styled(d.entity(id).unwrap()).is_none());
     }
 
     #[test]
