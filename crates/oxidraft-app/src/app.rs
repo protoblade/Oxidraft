@@ -254,7 +254,8 @@ pub struct OxidraftApp {
     /// The last plot's settings, which the next one starts from.
     pub(crate) plot_settings: oxidraft_plot::PlotSettings,
     /// The DXF text last copied here, for PASTECLIP when the system clipboard can't be read.
-    pub(crate) clipboard: Option<String>,
+    /// Shared with the other file tabs, so copying it is cheap.
+    pub(crate) clipboard: Option<std::sync::Arc<str>>,
     /// Earlier views, for ZOOM Previous.
     pub(crate) view_history: Vec<View>,
     /// Real-time PAN or ZOOM: the left mouse button moves the view.

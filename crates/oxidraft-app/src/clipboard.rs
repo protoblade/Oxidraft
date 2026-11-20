@@ -31,7 +31,7 @@ impl OxidraftApp {
         let Ok(buf) = oxidraft_io_dwg::write_dxf(&clip) else { return };
         let text = String::from_utf8_lossy(&buf).into_owned();
         ctx.copy_text(text.clone());
-        self.clipboard = Some(text);
+        self.clipboard = Some(text.into());
     }
 
     /// Typed PASTECLIP or PASTEORIG: from the system clipboard, or else what
@@ -39,7 +39,7 @@ impl OxidraftApp {
     /// PASTEBLOCK (Cmd+Shift+V): the clipboard as a block reference.
     pub(crate) fn paste_block_command(&mut self) {
         let system = arboard::Clipboard::new().and_then(|mut c| c.get_text()).ok().filter(|t| looks_like_dxf(t));
-        match system.or_else(|| self.clipboard.clone()).as_deref().and_then(clip_from) {
+        match system.as_deref().or(self.clipboard.as_deref()).and_then(clip_from) {
             Some(clip) => self.engine.paste_block(clip, &mut self.doc),
             None => self.engine.log("Nothing to paste: the clipboard holds no drawing objects."),
         }
@@ -47,7 +47,7 @@ impl OxidraftApp {
 
     pub(crate) fn paste_command(&mut self, original: bool) {
         let system = arboard::Clipboard::new().and_then(|mut c| c.get_text()).ok().filter(|t| looks_like_dxf(t));
-        match system.or_else(|| self.clipboard.clone()).as_deref().and_then(clip_from) {
+        match system.as_deref().or(self.clipboard.as_deref()).and_then(clip_from) {
             Some(clip) => self.engine.paste(clip, original, &mut self.doc),
             None => self.engine.log("Nothing to paste: the clipboard holds no drawing objects."),
         }

@@ -43,6 +43,8 @@ pub enum TabRequest {
 pub struct Drawings {
     list: Vec<OxidraftApp>,
     active: usize,
+    /// Clipboard fallback shared by drawings in file tabs.
+    clipboard: Option<std::sync::Arc<str>>,
     /// The drawings laid out side by side (SYSWINDOWS), each in its slot.
     arranged: Option<Arranged>,
 }
@@ -80,7 +82,8 @@ impl OxidraftApp {
 
 impl Drawings {
     pub fn new(first: OxidraftApp) -> Self {
-        Self { list: vec![first], active: 0, arranged: None }
+        let clipboard = first.clipboard.clone();
+        Self { list: vec![first], active: 0, clipboard, arranged: None }
     }
 
     pub fn current(&mut self) -> &mut OxidraftApp {
@@ -308,6 +311,7 @@ impl Drawings {
         let mut requests = Vec::new();
         for (i, rect) in slots.into_iter().filter(|(i, _)| *i != self.active) {
             let Some(app) = self.list.get_mut(i) else { continue };
+            app.clipboard = self.clipboard.clone();
             app.tabs = tabs.clone();
             app.tab = i;
             let builder = egui::ViewportBuilder::default()
@@ -319,6 +323,7 @@ impl Drawings {
                 eframe::App::ui(app, ui, frame);
                 ui.ctx().input(|i| i.viewport().close_requested())
             });
+            self.clipboard = app.clipboard.clone();
             if close {
                 closed.push(i);
             }
@@ -355,9 +360,11 @@ impl Drawings {
         }
         let tabs: Vec<(String, bool)> = self.list.iter().map(|d| (d.file_name(), d.is_dirty())).collect();
         let app = &mut self.list[self.active];
+        app.clipboard = self.clipboard.clone();
         app.tabs = tabs;
         app.tab = self.active;
         eframe::App::ui(app, ui, frame);
+        self.clipboard = app.clipboard.clone();
         if let Some(request) = self.list[self.active].tab_request.take() {
             self.handle(&ctx, request);
         }
