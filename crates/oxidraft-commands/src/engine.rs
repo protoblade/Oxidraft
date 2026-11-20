@@ -2667,7 +2667,7 @@ impl Engine {
 
     /// Grips to draw: those of selected objects while no command runs.
     pub fn grips(&self, doc: &Document) -> Vec<Point> {
-        if self.active.is_some() {
+        if self.active.is_some() || !self.shows_grips() {
             return Vec::new();
         }
         self.selection
@@ -2684,6 +2684,12 @@ impl Engine {
                 }
             })
             .collect()
+    }
+
+    /// GRIPOBJLIMIT: with more objects selected than it allows, they show
+    /// no grips (and none can be clicked), as in AutoCAD.
+    pub fn shows_grips(&self) -> bool {
+        self.vars.grip_obj_limit == 0 || self.selection.len() <= usize::from(self.vars.grip_obj_limit)
     }
 
     // ---- drafting settings ----------------------------------------------------
@@ -3123,6 +3129,9 @@ impl Engine {
     /// (an array's count, spacing and fill grips lay it out again instead).
     fn start_grip_edit(&mut self, p: Point, doc: &mut Document, tolerance: f64) -> bool {
         use oxidraft_model::assoc_array::ArrayGrip;
+        if !self.shows_grips() {
+            return false;
+        }
         let array_grip = self.selection.iter().find_map(|&id| {
             let grips = doc.array_grips(id);
             grips
@@ -5208,6 +5217,26 @@ mod tests {
         assert_eq!(e.selection().len(), 2, "selection survives grip editing");
         type_all(&mut e, &mut d, &["u"]);
         assert_eq!(lines(&d)[0].1, Point::new(10.0, 0.0));
+    }
+
+    #[test]
+    fn grips_hide_past_gripobjlimit() {
+        let (mut e, mut d) = (engine(), Document::new());
+        assert_eq!(e.vars.grip_obj_limit, 100, "AutoCAD's");
+        type_all(&mut e, &mut d, &["l", "0,0", "10,0", "10,10", ""]);
+        click(&mut e, &mut d, 5.0, 0.0);
+        click(&mut e, &mut d, 10.0, 5.0);
+        assert_eq!(e.grips(&d).len(), 6);
+        e.vars.grip_obj_limit = 2;
+        assert_eq!(e.grips(&d).len(), 6, "as many selected as allowed");
+        e.vars.grip_obj_limit = 1;
+        assert!(e.grips(&d).is_empty(), "two selected, one allowed");
+        // No grip at the corner to click: it picks there instead.
+        click(&mut e, &mut d, 10.0, 0.0);
+        assert_eq!(e.active_name(), None);
+        assert_eq!(e.selection().len(), 2);
+        e.vars.grip_obj_limit = 0;
+        assert_eq!(e.grips(&d).len(), 6, "0 shows them always");
     }
 
     #[test]

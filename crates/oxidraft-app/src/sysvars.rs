@@ -282,6 +282,11 @@ fn vars() -> Vec<Var> {
             a.grid = true;
             Ok(())
         }),
+        var!("GRIPOBJLIMIT", |a| a.engine.vars.grip_obj_limit.to_string(), |a, v| {
+            let limit = parse_int(v, 0, 32767)? as u16;
+            a.keep_settings(crate::settings::Settings { grip_obj_limit: Some(limit), ..a.settings.clone() });
+            Ok(())
+        }),
         var!("IMAGEFRAME", |a| a.doc.picture_frame(false).to_string(), |a, v| {
             a.doc.set_picture_frame(false, parse_int(v, 0, 2)? as u8);
             Ok(())
@@ -511,5 +516,17 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(names, sorted);
+    }
+
+    #[test]
+    fn gripobjlimit_starts_at_autocads_and_is_kept() {
+        let mut a = OxidraftApp::blank();
+        assert_eq!(a.get_var("GRIPOBJLIMIT").as_deref(), Some("100"));
+        a.try_set_var("gripobjlimit", "5").unwrap();
+        assert_eq!(a.engine.vars.grip_obj_limit, 5);
+        assert_eq!(a.settings.grip_obj_limit, Some(5), "kept for next time");
+        assert!(a.try_set_var("GRIPOBJLIMIT", "40000").is_err());
+        assert!(a.try_set_var("GRIPOBJLIMIT", "-1").is_err());
+        assert_eq!(a.get_var("GRIPOBJLIMIT").as_deref(), Some("5"));
     }
 }

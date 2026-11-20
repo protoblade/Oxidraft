@@ -376,6 +376,9 @@ pub struct Vars {
     /// PICKSTYLE: picking one object of a group picks the group
     /// (Ctrl+Shift+A turns it off and on).
     pub group_select: bool,
+    /// GRIPOBJLIMIT: grips show only while no more objects than this are
+    /// selected (0: always).
+    pub grip_obj_limit: u16,
 }
 
 impl Default for Vars {
@@ -425,6 +428,7 @@ impl Default for Vars {
             ucs_icon: true,
             nav_bar: true,
             group_select: true,
+            grip_obj_limit: 100,
         }
     }
 }

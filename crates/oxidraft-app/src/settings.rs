@@ -58,6 +58,8 @@ pub struct Settings {
     /// packages) and associative arrays saved in AutoCAD's own form too
     /// (NATIVESAVE), untested in AutoCAD itself: off unless chosen.
     pub native_save: bool,
+    /// GRIPOBJLIMIT, once changed from AutoCAD's 100.
+    pub grip_obj_limit: Option<u16>,
     /// Where SHARE puts what it shares (a folder, or an http(s) folder
     /// that takes PUT, as WebDAV does), and the address it's seen at
     /// (the same, if empty): SHARE then gives a link.
@@ -153,6 +155,7 @@ impl OxidraftApp {
     pub(crate) fn keep_settings(&mut self, settings: Settings) {
         oxidraft_io_dwg::set_native_objects(settings.native_save);
         self.engine.vars.color_theme = u8::from(settings.color_theme == ColorTheme::Light);
+        self.engine.vars.grip_obj_limit = settings.grip_obj_limit.unwrap_or(100);
         self.engine.aliases = settings.aliases.clone();
         if settings.papers != self.settings.papers {
             oxidraft_plot::set_custom_papers(&settings.papers);
@@ -295,6 +298,7 @@ mod tests {
             toolbars: vec!["Draw".into()],
             toolbar_places: vec![("Draw".into(), crate::menubar::ToolbarPlace::Float(10.0, 20.0))],
             native_save: true,
+            grip_obj_limit: Some(5),
             share_location: "https://dav.example.com/shared".into(),
             share_link: "https://example.com/shared".into(),
             menus: vec![crate::menubar::CustomMenu {
