@@ -16,6 +16,12 @@ pub struct OxidraftApp {
     pub(crate) doc: Document,
     /// The objects as last drawn, kept while only the cursor moves.
     pub(crate) pictures: std::cell::RefCell<crate::picture::Pictures>,
+    /// A drawing being read in the background, and whether reading one
+    /// failed (its tab then goes).
+    pub(crate) opening: Option<Opening>,
+    pub(crate) open_failed: bool,
+    /// The named view to go to once the drawing being read is in.
+    pub(crate) view_once_open: Option<String>,
     /// What a command drags whole, drawn once and moved.
     pub(crate) drag_picture: std::cell::RefCell<crate::picture::DragPicture>,
     pub(crate) engine: Engine,
@@ -336,6 +342,9 @@ impl OxidraftApp {
         Self {
             doc: Document::new(),
             pictures: Default::default(),
+            opening: None,
+            open_failed: false,
+            view_once_open: None,
             drag_picture: Default::default(),
             engine,
             view: View::default(),
@@ -608,6 +617,7 @@ impl OxidraftApp {
     pub(crate) fn file_name(&self) -> String {
         self.path
             .as_ref()
+            .or(self.opening.as_ref().map(|o| &o.path))
             .and_then(|p| p.file_name())
             .map_or_else(|| format!("Drawing{}.dxf", self.untitled.max(1)), |n| n.to_string_lossy().into_owned())
     }
@@ -656,12 +666,62 @@ impl OxidraftApp {
 
     /// Opens a DWG or DXF file (by its extension).
     pub fn open_path(&mut self, path: PathBuf) {
-        let dwg = oxidraft_io_dwg::is_dwg(&path);
-        let loaded = if dwg {
-            oxidraft_io_dwg::load_file(&path).map(|o| (o.imported, Some(o.version)))
-        } else {
-            oxidraft_io_dwg::load_dxf(&path).map(|i| (i, None))
+        let loaded = read_drawing(&path);
+        self.opened(path, loaded);
+    }
+
+    /// Opens `path` as [`OxidraftApp::open_path`] does, read in the
+    /// background: the window keeps answering while a big drawing is
+    /// read, a note over it saying so.
+    pub fn open_in_background(&mut self, ctx: &egui::Context, path: PathBuf) {
+        let (send, done) = std::sync::mpsc::channel();
+        let (ctx, read) = (ctx.clone(), path.clone());
+        std::thread::spawn(move || {
+            let _ = send.send(read_drawing(&read));
+            ctx.request_repaint();
+        });
+        self.opening = Some(Opening { path, done });
+    }
+
+    /// The path of the drawing being read in the background, if one is.
+    pub fn opening(&self) -> Option<&std::path::Path> {
+        self.opening.as_ref().map(|o| o.path.as_path())
+    }
+
+    /// The drawing read in the background, taken in once it's read; till
+    /// then, a note over the window that it's being read, and nothing
+    /// else to click.
+    fn receive_opened(&mut self, ctx: &egui::Context) {
+        let Some(o) = &self.opening else { return };
+        let loaded = match o.done.try_recv() {
+            Ok(loaded) => loaded,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("it could not be read".to_string()),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                let name = o.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                egui::Modal::new(egui::Id::unique("opening")).show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(format!("Opening {name}…"));
+                    });
+                });
+                return;
+            }
         };
+        let path = self.opening.take().map(|o| o.path).unwrap_or_default();
+        self.opened(path.clone(), loaded);
+        if self.path.as_deref() != Some(path.as_path()) {
+            self.open_failed = true;
+        } else if let Some(view) = self.view_once_open.take() {
+            self.go_to_view(&view);
+        }
+    }
+
+    /// Takes in a drawing read from `path`, or says why it couldn't be.
+    fn opened(
+        &mut self,
+        path: PathBuf,
+        loaded: Result<(oxidraft_io_dxf::Imported, Option<oxidraft_io_dwg::Version>), String>,
+    ) {
         match loaded {
             Ok((imported, version)) => {
                 self.set_document(imported.document);
@@ -1389,9 +1449,27 @@ impl OxidraftApp {
     }
 }
 
+/// A DWG or DXF file read (by its extension), and its DWG version.
+fn read_drawing(
+    path: &std::path::Path,
+) -> Result<(oxidraft_io_dxf::Imported, Option<oxidraft_io_dwg::Version>), String> {
+    if oxidraft_io_dwg::is_dwg(path) {
+        oxidraft_io_dwg::load_file(path).map(|o| (o.imported, Some(o.version)))
+    } else {
+        oxidraft_io_dwg::load_dxf(path).map(|i| (i, None))
+    }
+}
+
+/// A drawing being read in the background ([`OxidraftApp::open_in_background`]).
+pub(crate) struct Opening {
+    path: PathBuf,
+    done: std::sync::mpsc::Receiver<Result<(oxidraft_io_dxf::Imported, Option<oxidraft_io_dwg::Version>), String>>,
+}
+
 impl eframe::App for OxidraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.receive_opened(&ctx);
         self.take_handwriting(&ctx);
         self.take_share(&ctx);
         self.take_embedded_edits(&ctx);

@@ -76,7 +76,7 @@ impl OxidraftApp {
     /// An empty drawing with no file, nothing changed: what a new window
     /// starts with, which an opened drawing takes the place of.
     fn is_pristine(&self) -> bool {
-        self.path.is_none() && !self.is_dirty() && self.doc.is_empty()
+        self.path.is_none() && self.opening().is_none() && !self.is_dirty() && self.doc.is_empty()
     }
 }
 
@@ -157,19 +157,16 @@ impl Drawings {
                 self.switch(ctx, self.list.len() - 1);
             }
             TabRequest::Open(path) => {
-                // Already open: that tab.
-                if let Some(i) = self.list.iter().position(|d| d.path.as_deref() == Some(path.as_path())) {
+                // Already open (or being read): that tab.
+                let open =
+                    |d: &OxidraftApp| d.path.as_deref() == Some(path.as_path()) || d.opening() == Some(path.as_path());
+                if let Some(i) = self.list.iter().position(open) {
                     self.switch(ctx, i);
                     return;
                 }
+                // Read in the background, in a tab of its own.
                 let mut app = self.blank_like(ctx);
-                app.open_path(path.clone());
-                if app.path.as_deref() != Some(path.as_path()) {
-                    // It couldn't be read: say so where you are.
-                    let why = app.engine.history().last().cloned().unwrap_or_default();
-                    self.list[self.active].engine.log(why);
-                    return;
-                }
+                app.open_in_background(ctx, path);
                 // An untouched empty drawing makes way for it.
                 if self.list[self.active].is_pristine() {
                     self.list[self.active] = app;
@@ -225,6 +222,8 @@ impl Drawings {
                 let app = &mut self.list[self.active];
                 if app.path.as_deref() == Some(path.as_path()) {
                     app.go_to_view(&view);
+                } else if app.opening() == Some(path.as_path()) {
+                    app.view_once_open = Some(view);
                 }
             }
             TabRequest::Arrange(a) => self.arrange(ctx, a),
@@ -365,6 +364,13 @@ impl Drawings {
         app.tab = self.active;
         eframe::App::ui(app, ui, frame);
         self.clipboard = app.clipboard.clone();
+        // A drawing that couldn't be read: its tab goes, and where you are
+        // says why.
+        if std::mem::take(&mut self.list[self.active].open_failed) && self.list.len() > 1 {
+            let why = self.list[self.active].engine.history().last().cloned().unwrap_or_default();
+            self.handle(&ctx, TabRequest::Close(self.active));
+            self.list[self.active].engine.log(why);
+        }
         if let Some(request) = self.list[self.active].tab_request.take() {
             self.handle(&ctx, request);
         }

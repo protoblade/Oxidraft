@@ -4308,3 +4308,58 @@ fn the_object_under_the_cursor_is_highlighted_over_the_kept_drawing() {
     h.run_steps(1);
     assert_eq!(painted_vertices(&h), plain, "and not once the cursor leaves it");
 }
+
+#[test]
+fn drawings_opened_in_tabs_are_read_in_the_background() {
+    use oxidraft_app::Drawings;
+    let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(0.25).build_eframe(|cc| {
+        let mut app = OxidraftApp::new(cc);
+        let mut doc = Document::new();
+        doc.add(Geometry::Line { start: Point::new(0.0, 0.0), end: Point::new(100.0, 0.0) });
+        app.set_document(doc);
+        Drawings::new(app)
+    });
+    h.run_steps(3);
+    let dir = std::env::temp_dir().join(format!("oxidraft-background-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("big.dxf");
+    let mut big = Document::new();
+    for i in 0..2000 {
+        big.add(Geometry::Line { start: Point::new(f64::from(i), 0.0), end: Point::new(f64::from(i), 10.0) });
+    }
+    oxidraft_io_dxf::save_file(&big, &file).unwrap();
+    let ctx = h.ctx.clone();
+    h.state_mut().handle(&ctx, oxidraft_app::drawings::TabRequest::Open(file.clone()));
+    // Its tab is there at once, named for it, while it's read.
+    assert_eq!(h.state().names(), ["Drawing1.dxf", "big.dxf"]);
+    assert_eq!(h.state().active(), 1);
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.state_mut().current().opening().is_none() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(h.state_mut().current().opening().is_none(), "read");
+    assert_eq!(h.state_mut().current().document_mut().len(), 2000);
+    // Opened again: the same tab.
+    h.state_mut().handle(&ctx, oxidraft_app::drawings::TabRequest::Switch(0));
+    h.state_mut().handle(&ctx, oxidraft_app::drawings::TabRequest::Open(file.clone()));
+    assert_eq!(h.state().active(), 1);
+    // One that can't be read: its tab goes, and the drawing you were in says why.
+    let broken = dir.join("broken.dxf");
+    std::fs::write(&broken, "not a drawing").unwrap();
+    h.state_mut().handle(&ctx, oxidraft_app::drawings::TabRequest::Open(broken));
+    assert_eq!(h.state().names().len(), 3);
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.state().names().len() == 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().names(), ["Drawing1.dxf", "big.dxf"]);
+    let said = h.state_mut().current().engine_mut().history().last().cloned().unwrap_or_default();
+    assert!(said.starts_with("Could not open"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

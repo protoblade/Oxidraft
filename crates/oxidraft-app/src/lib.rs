@@ -127,7 +127,7 @@ pub fn run() -> eframe::Result {
                 app.apply_settings(&cc.egui_ctx, kept);
             }
             if let Some(path) = file {
-                app.open_path(path);
+                app.open_in_background(&cc.egui_ctx, path);
             }
             if std::env::var_os(update::DISABLE_ENV).is_none() {
                 app.updater.check(&cc.egui_ctx, false);
