@@ -26,9 +26,14 @@ impl OxidraftApp {
     /// True if objects on `layer` draw: it's on and thawed, or picked in
     /// LAYWALK while that's open.
     pub fn shows_layer(&self, layer: &str) -> bool {
+        self.shows_layer_on(layer, self.doc.layer(layer))
+    }
+
+    /// [`OxidraftApp::shows_layer`] with the layer `name` already looked up.
+    pub(crate) fn shows_layer_on(&self, name: &str, layer: Option<&oxidraft_model::Layer>) -> bool {
         match &self.layer_walk {
-            Some(w) if self.doc.layer(layer).is_some() => w.shows(layer),
-            _ => self.doc.is_shown(layer),
+            Some(w) if layer.is_some() => w.shows(name),
+            _ => layer.is_none_or(oxidraft_model::Layer::is_shown),
         }
     }
 

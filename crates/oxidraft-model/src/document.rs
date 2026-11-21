@@ -936,8 +936,16 @@ impl Document {
     /// (ByBlock: opaque at the top level).
     pub fn transparency_of(&self, e: &Entity) -> u8 {
         match e.transparency {
+            crate::linetype::Transparency::ByLayer => self.transparency_on(e, self.layer(&e.layer)),
+            _ => self.transparency_on(e, None),
+        }
+    }
+
+    /// [`Document::transparency_of`] with the object's layer already looked up.
+    pub fn transparency_on(&self, e: &Entity, layer: Option<&Layer>) -> u8 {
+        match e.transparency {
             crate::linetype::Transparency::Percent(p) => p.min(90),
-            crate::linetype::Transparency::ByLayer => self.layer(&e.layer).map_or(0, |l| l.transparency.min(90)),
+            crate::linetype::Transparency::ByLayer => layer.map_or(0, |l| l.transparency.min(90)),
             crate::linetype::Transparency::ByBlock => 0,
         }
     }
@@ -1247,7 +1255,12 @@ impl Document {
 
     /// True if `e` is drawn: its layer shows and it isn't hidden.
     pub fn object_shown(&self, e: &Entity) -> bool {
-        self.is_shown(&e.layer) && !self.hidden_objects.contains(&e.id)
+        self.object_shown_on(e, self.layer(&e.layer))
+    }
+
+    /// [`Document::object_shown`] with the object's layer already looked up.
+    pub fn object_shown_on(&self, e: &Entity, layer: Option<&Layer>) -> bool {
+        layer.is_none_or(Layer::is_shown) && (self.hidden_objects.is_empty() || !self.hidden_objects.contains(&e.id))
     }
 
     /// HIDEOBJECTS: hides `ids` for now (not saved or undone).
@@ -1661,6 +1674,11 @@ impl Document {
     /// for what that takes apart (block references, dimensions, leaders,
     /// tables) or changes (text, for its fields).
     pub fn plain_styled<'a>(&'a self, e: &'a Entity) -> Option<StyledRef<'a>> {
+        self.plain_styled_on(e, self.layer(&e.layer))
+    }
+
+    /// [`Document::plain_styled`] with the object's layer already looked up.
+    pub fn plain_styled_on<'a>(&'a self, e: &'a Entity, layer: Option<&'a Layer>) -> Option<StyledRef<'a>> {
         let plain = matches!(
             e.geometry,
             Geometry::Line { .. }
@@ -1681,7 +1699,6 @@ impl Document {
         }
         // As `resolve` has it outside any block reference.
         let by_block = Inherited::default();
-        let layer = self.layer(&e.layer);
         let color = match e.color {
             Color::Index(i) => i,
             Color::ByLayer => layer.map_or(7, |l| l.color),

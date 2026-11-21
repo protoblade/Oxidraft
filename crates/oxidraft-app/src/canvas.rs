@@ -861,6 +861,8 @@ impl OxidraftApp {
             && self.doc.layers().iter().any(|l| crate::traces::is_trace_layer(&l.name) && self.shows_layer(&l.name))
             && self.doc.all_entities().any(|e| e.space == space && trace(e) && self.shows_layer(&e.layer));
         ordered.extend(traces);
+        // Objects come in runs on the same layer: each looked up once a run.
+        let (mut layers, mut piece_layers) = (LayerMemo::new(&self.doc), LayerMemo::new(&self.doc));
         for (i, e) in ordered.into_iter().map(Some).chain([None]).enumerate() {
             if i == paper_at && paper {
                 let alpha = (f32::from(self.trace_paper) / 100.0 * 200.0) as u8;
@@ -871,13 +873,14 @@ impl OxidraftApp {
             let annotative = e.annotative.is_some();
             let Some(e) = self.doc.shown_at(e, anno) else { continue };
             let e = e.as_ref();
-            if !self.shows_layer(&e.layer)
-                || !self.doc.object_shown(e)
+            let layer = layers.get(&e.layer);
+            if !self.shows_layer_on(&e.layer, layer)
+                || !self.doc.object_shown_on(e, layer)
                 || (annotative && !on_screen(&self.doc.entity_bounds(e), &view))
             {
                 continue;
             }
-            if frozen.iter().any(|f| f.eq_ignore_ascii_case(&e.layer)) {
+            if !frozen.is_empty() && frozen.iter().any(|f| f.eq_ignore_ascii_case(&e.layer)) {
                 continue;
             }
             // REFEDIT: the reference being edited shows as its working set,
@@ -897,18 +900,19 @@ impl OxidraftApp {
             let compare_color =
                 compared.map(|c| if c.only_here.contains(&e.id) { crate::compare::HERE } else { crate::compare::BOTH });
             // TRANSPARENCY: see-through by its own or its layer's.
-            let opacity = 1.0 - f32::from(self.doc.transparency_of(e)) / 100.0;
+            let opacity = 1.0 - f32::from(self.doc.transparency_on(e, layer)) / 100.0;
             // A plain object as it is; the rest taken apart.
-            let plain = self.doc.plain_styled(e);
+            let plain = self.doc.plain_styled_on(e, layer);
             let expanded = if plain.is_none() { self.doc.expanded_styled(e) } else { Vec::new() };
-            let (is_selected, is_hovered) = (selected.contains(&e.id), hovered.contains(&e.id));
+            let is_selected = !selected.is_empty() && selected.contains(&e.id);
+            let is_hovered = !hovered.is_empty() && hovered.contains(&e.id);
             for s in plain.into_iter().chain(expanded.iter().map(oxidraft_model::StyledRef::from)) {
                 let mut color = compare_color.unwrap_or_else(|| theme::aci(s.color));
                 if opacity < 1.0 {
                     color = color.gamma_multiply(opacity);
                 }
                 // Locked layers draw faded (AutoCAD's LAYLOCKFADECTL).
-                if self.doc.layer(s.layer).is_some_and(|l| l.locked) {
+                if piece_layers.get(s.layer).is_some_and(|l| l.locked) {
                     color = color.gamma_multiply(0.45);
                 }
                 if xref {
@@ -945,7 +949,7 @@ impl OxidraftApp {
                 }
             }
             if let Some(frame) = self.doc.clip_frame(&e.geometry) {
-                let color = theme::aci(self.doc.layer(&e.layer).map_or(7, |l| l.color));
+                let color = theme::aci(layer.map_or(7, |l| l.color));
                 let width = if is_selected || is_hovered { 2.5 } else { 1.0 };
                 self.draw_geometry(painter, rect, &frame, Stroke::new(width, color));
             }
@@ -1577,6 +1581,32 @@ fn nav_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
 /// label and the floating command line.
 fn fit_area(rect: Rect) -> Rect {
     Rect::from_min_max(rect.min + vec2(24.0, 36.0), rect.max - vec2(24.0, 120.0))
+}
+
+/// Layers by name, the last one found kept: objects on the same layer
+/// one after another look it up once.
+struct LayerMemo<'a> {
+    doc: &'a oxidraft_model::Document,
+    last: Option<&'a oxidraft_model::Layer>,
+}
+
+impl<'a> LayerMemo<'a> {
+    fn new(doc: &'a oxidraft_model::Document) -> Self {
+        Self { doc, last: None }
+    }
+
+    fn get(&mut self, name: &str) -> Option<&'a oxidraft_model::Layer> {
+        if let Some(l) = self.last
+            && l.name.eq_ignore_ascii_case(name)
+        {
+            return Some(l);
+        }
+        let found = self.doc.layer(name);
+        if found.is_some() {
+            self.last = found;
+        }
+        found
+    }
 }
 
 fn on_screen(b: &Aabb, view: &Aabb) -> bool {
