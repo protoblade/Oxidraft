@@ -18,7 +18,7 @@ use oxidraft_model::{
 use crate::{
     app::OxidraftApp,
     icons::{self, Icon},
-    theme,
+    picture, theme,
     view::View,
     viewport::Frame,
 };
@@ -832,6 +832,65 @@ impl OxidraftApp {
         // The object pointed at in the Selection list.
         hovered.extend(self.cycling.as_ref().and_then(|c| c.hovered));
         let hovered: std::collections::HashSet<_> = hovered.into_iter().collect();
+        // The objects as last drawn while only the cursor moves, and what's
+        // under it drawn over them.
+        let Some(key) = self.picture_key(painter, rect, space, frozen) else {
+            return self.draw_objects(painter, rect, space, frozen, &selected, &hovered, false);
+        };
+        if !self.pictures.borrow_mut().show(painter, &key, &mut self.detail_wants.borrow_mut()) {
+            let layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("oxidraft picture"));
+            let none = std::collections::HashSet::new();
+            let wanted = self.detail_wants.borrow().len();
+            self.draw_objects(&painter.clone().with_layer_id(layer), rect, space, frozen, &selected, &none, false);
+            let shapes = painter.ctx().graphics_mut(|g| std::mem::take(g.entry(layer)));
+            let wants = self.detail_wants.borrow()[wanted..].to_vec();
+            let mut pictures = self.pictures.borrow_mut();
+            pictures.keep(painter.ctx(), key.clone(), shapes.all_entries().cloned(), wants);
+            pictures.show(painter, &key, &mut Vec::new());
+        }
+        if !hovered.is_empty() {
+            self.draw_objects(painter, rect, space, frozen, &selected, &hovered, true);
+        }
+    }
+
+    /// What the picture of `space`'s objects is drawn from, or none while
+    /// it can't be kept: LAYWALK and comparing drawings change what shows
+    /// without changing the drawing.
+    fn picture_key(&self, painter: &Painter, rect: Rect, space: Space, frozen: &[String]) -> Option<picture::Key> {
+        if self.capturing_image() || self.layer_walk.is_some() || self.comparison.is_some() {
+            return None;
+        }
+        Some(picture::Key {
+            drawing: (self.doc.instance(), self.doc.revision()),
+            space,
+            rect,
+            clip: painter.clip_rect(),
+            view: self.view,
+            sheet_scale: self.sheet_scale,
+            frozen: frozen.to_vec(),
+            selected: self.engine.highlighted(),
+            traces: (self.trace_front, self.trace_paper),
+            lineweights: self.show_lineweights,
+            colors: [theme::aci(7), theme::background_now(), theme::selection_glow()],
+            pixels_per_point: painter.ctx().pixels_per_point(),
+            images: self.pictures_shown(),
+        })
+    }
+
+    /// Draws `space`'s objects (but those on `frozen` layers), the
+    /// `selected` and `hovered` ones highlighted; with `only_hovered`, the
+    /// hovered ones alone (but those selected).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_objects(
+        &self,
+        painter: &Painter,
+        rect: Rect,
+        space: Space,
+        frozen: &[String],
+        selected: &std::collections::HashSet<oxidraft_model::EntityId>,
+        hovered: &std::collections::HashSet<oxidraft_model::EntityId>,
+        only_hovered: bool,
+    ) {
         let view = self.world_rect(rect);
         // Dash patterns in screen pixels by linetype name, looked up once a
         // frame (a drawing has few linetypes).
@@ -850,13 +909,25 @@ impl OxidraftApp {
         // What may show in the view, in draw order, without going through
         // the rest of the drawing. Traces in front: the drawing, then the
         // tracing paper, then them.
-        let ordered = self.doc.space_near(space, &view);
+        let ordered = if only_hovered {
+            let mut over: Vec<_> = hovered
+                .iter()
+                .filter(|id| !selected.contains(id))
+                .filter_map(|id| self.doc.entity(*id))
+                .filter(|e| e.space == space)
+                .collect();
+            over.sort_by_key(|e| e.id);
+            over
+        } else {
+            self.doc.space_near(space, &view)
+        };
         let trace = |e: &oxidraft_model::Entity| crate::traces::is_trace_layer(&e.layer);
         let (mut ordered, traces): (Vec<_>, Vec<_>) =
             if self.trace_front { ordered.into_iter().partition(|e| !trace(e)) } else { (ordered, Vec::new()) };
         let paper_at = ordered.len();
         // The paper's there while there are traces, in the view or not.
-        let paper = !self.capturing_image()
+        let paper = !only_hovered
+            && !self.capturing_image()
             && self.trace_front
             && self.trace_paper > 0
             && self.doc.layers().iter().any(|l| crate::traces::is_trace_layer(&l.name) && self.shows_layer(&l.name))

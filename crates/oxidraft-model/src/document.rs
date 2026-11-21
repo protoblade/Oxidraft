@@ -351,6 +351,23 @@ const MAX_BLOCK_DEPTH: usize = 16;
 ///
 /// Edits made between [`Document::begin`] and [`Document::commit`] undo as a
 /// single step. Edits made outside a transaction each get their own step.
+/// A drawing's own number, a new one for each copy.
+#[derive(Debug)]
+struct Instance(u64);
+
+impl Default for Instance {
+    fn default() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+impl Clone for Instance {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Document {
     entities: BTreeMap<EntityId, Entity>,
@@ -363,6 +380,8 @@ pub struct Document {
     pub(crate) revision: u64,
     /// Where each space's objects are, at the current revision.
     spatial: crate::spatial::SpatialCache,
+    /// Which drawing this is: a new one for each drawing and each copy.
+    instance: Instance,
     /// Linetypes the drawing defines, by upper-case name, besides the standard ones.
     linetypes: BTreeMap<String, Linetype>,
     /// LTSCALE: global scale of linetype patterns.
@@ -531,6 +550,7 @@ impl Document {
             redo_stack: Vec::new(),
             revision: 0,
             spatial: Default::default(),
+            instance: Instance::default(),
             linetypes: BTreeMap::new(),
             ltscale: 1.0,
             pdmode: 0,
@@ -580,6 +600,12 @@ impl Document {
     /// Compare against a saved value to show the unsaved-changes marker.
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// A number no other drawing open now or since has, a copy of this one
+    /// included: with [`Document::revision`], it tells what's drawn apart.
+    pub fn instance(&self) -> u64 {
+        self.instance.0
     }
 
     // ---- queries -------------------------------------------------------

@@ -14,6 +14,8 @@ use crate::{
 /// The main window: ribbon, file tabs, drawing area, command line, status bar.
 pub struct OxidraftApp {
     pub(crate) doc: Document,
+    /// The objects as last drawn, kept while only the cursor moves.
+    pub(crate) pictures: std::cell::RefCell<crate::picture::Pictures>,
     pub(crate) engine: Engine,
     pub(crate) view: View,
     /// OSNAP (F3).
@@ -331,6 +333,7 @@ impl OxidraftApp {
         engine.log(format!("Oxidraft {} - type a command, or HELP for a list.", env!("CARGO_PKG_VERSION")));
         Self {
             doc: Document::new(),
+            pictures: Default::default(),
             engine,
             view: View::default(),
             osnap: true,

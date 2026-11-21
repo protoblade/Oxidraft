@@ -4248,3 +4248,63 @@ fn an_empty_clipboard_drawing_pastes_nothing() {
     let last = engine.history().last().cloned().unwrap_or_default();
     assert_eq!(last, "Nothing to paste: the clipboard holds no drawing objects.");
 }
+
+/// How many vertices the last frame painted.
+fn painted_vertices(h: &Harness<'_, OxidraftApp>) -> usize {
+    let out = h.output();
+    h.ctx
+        .tessellate(out.shapes.clone(), out.pixels_per_point)
+        .iter()
+        .map(|p| match &p.primitive {
+            eframe::egui::epaint::Primitive::Mesh(m) => m.vertices.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+#[test]
+fn the_drawing_kept_while_the_cursor_moves_follows_its_changes() {
+    let mut h = app_with_line();
+    // Back and forth between two points, so all else shows the same.
+    let (a, b) = (screen(&h, 50.0, 30.0), screen(&h, 52.0, 30.0));
+    let there_and_back = |h: &mut Harness<'_, OxidraftApp>| {
+        h.hover_at(b);
+        h.run_steps(1);
+        h.hover_at(a);
+        h.run_steps(1);
+        painted_vertices(h)
+    };
+    let before = there_and_back(&mut h);
+    assert_eq!(there_and_back(&mut h), before, "kept, the same");
+    // Changed with no other input than the pointer moving: drawn again.
+    h.state_mut().document_mut().add(Geometry::Circle { center: Point::new(50.0, 30.0), radius: 20.0 });
+    let with_circle = there_and_back(&mut h);
+    assert!(with_circle > before + 50, "the circle is drawn: {before} -> {with_circle}");
+    // (The title marks the change a frame later.)
+    let with_circle = there_and_back(&mut h);
+    assert_eq!(there_and_back(&mut h), with_circle);
+    // Undone: gone again.
+    h.state_mut().document_mut().undo();
+    let undone = there_and_back(&mut h);
+    assert!(undone + 50 < with_circle, "the circle is gone: {with_circle} -> {undone}");
+    assert_eq!(there_and_back(&mut h), undone);
+}
+
+#[test]
+fn the_object_under_the_cursor_is_highlighted_over_the_kept_drawing() {
+    let mut h = app_with_line();
+    let away = screen(&h, 50.0, 30.0);
+    h.hover_at(away);
+    h.run_steps(1);
+    h.hover_at(away + vec2(3.0, 0.0));
+    h.run_steps(1);
+    let plain = painted_vertices(&h);
+    // Over the line: it's drawn again, thicker, over it.
+    h.hover_at(screen(&h, 50.0, 0.0));
+    h.run_steps(1);
+    let over = painted_vertices(&h);
+    assert!(over > plain, "the line highlighted: {plain} -> {over}");
+    h.hover_at(away);
+    h.run_steps(1);
+    assert_eq!(painted_vertices(&h), plain, "and not once the cursor leaves it");
+}

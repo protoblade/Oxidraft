@@ -105,6 +105,7 @@ impl Default for Loader {
 /// What drawing a picture found it wants read sharper: the part on screen
 /// (`visible`), the part to read (with a margin for panning) and how many
 /// pixels to read it at for each of the picture's.
+#[derive(Clone)]
 pub(crate) struct DetailWant {
     key: String,
     image: String,
@@ -351,6 +352,15 @@ impl OxidraftApp {
             Some(Raster::Ready(t)) => Some(t.id()),
             _ => None,
         }
+    }
+
+    /// What the pictures on screen show: which have been read (by a count
+    /// of those read), and the sharper parts of them shown.
+    pub(crate) fn pictures_shown(&self) -> (u64, Vec<(String, egui::TextureId)>) {
+        let mut details: Vec<_> =
+            self.details.iter().filter_map(|(k, d)| d.shown.as_ref().map(|(_, _, t)| (k.clone(), t.id()))).collect();
+        details.sort_by(|a, b| a.0.cmp(&b.0));
+        (self.raster_revision, details)
     }
 
     /// True while pictures, or sharper parts of them, are being read.

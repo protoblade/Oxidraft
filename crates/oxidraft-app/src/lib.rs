@@ -50,6 +50,7 @@ mod object_props;
 mod paste_scales;
 mod pdf_import;
 mod pe_resources;
+mod picture;
 mod plot;
 mod plot_styles;
 mod plotters;
