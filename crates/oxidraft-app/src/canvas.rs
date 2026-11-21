@@ -237,8 +237,18 @@ impl OxidraftApp {
             );
         }
         self.request_details();
-        // What the command drags: block references drawn with their contents.
-        if let Some(c) = &cursor {
+        // What the command drags: block references drawn with their contents,
+        // and objects dragged whole drawn once and moved.
+        let dragged = cursor.as_ref().and_then(|c| self.engine.dragged(c.point));
+        if dragged.is_none() {
+            self.drag_picture.borrow_mut().clear();
+        }
+        if let Some(d) = &dragged {
+            self.draw_dragged(&model, rect, d);
+            for g in d.rest.iter().flat_map(|g| self.doc.expanded_geometry(g)) {
+                self.draw_geometry(&model, rect, &g, Stroke::new(1.0, theme::preview()));
+            }
+        } else if let Some(c) = &cursor {
             for g in self.engine.preview(c.point).iter().flat_map(|g| self.doc.expanded_geometry(g)) {
                 self.draw_geometry(&model, rect, &g, Stroke::new(1.0, theme::preview()));
             }
@@ -851,6 +861,38 @@ impl OxidraftApp {
         if !hovered.is_empty() {
             self.draw_objects(painter, rect, space, frozen, &selected, &hovered, true);
         }
+    }
+
+    /// Objects a command drags whole, as the picture of them first drawn,
+    /// moved to where they're dragged now.
+    fn draw_dragged(&self, painter: &Painter, rect: Rect, d: &oxidraft_commands::Dragged<'_>) {
+        let stroke = Stroke::new(1.0, theme::preview());
+        // Where the drawing's origin is dragged to, on screen: the picture
+        // moves as it does.
+        let at = self.view.to_screen(rect, d.offset);
+        let key = picture::DragKey {
+            drawing: (self.doc.instance(), self.doc.revision()),
+            objects: d.objects.iter().map(|e| e.id).collect(),
+            rect,
+            clip: painter.clip_rect(),
+            view: self.view,
+            color: stroke.color,
+            pixels_per_point: painter.ctx().pixels_per_point(),
+        };
+        if self.drag_picture.borrow_mut().show(painter, &key, at) {
+            return;
+        }
+        let layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("oxidraft dragged"));
+        let drawn = painter.clone().with_layer_id(layer);
+        for e in d.objects {
+            for g in self.doc.expanded_geometry(&e.geometry.translated(d.offset)) {
+                self.draw_geometry(&drawn, rect, &g, stroke);
+            }
+        }
+        let shapes = painter.ctx().graphics_mut(|g| std::mem::take(g.entry(layer)));
+        let mut kept = self.drag_picture.borrow_mut();
+        kept.keep(painter.ctx(), key.clone(), shapes.all_entries().cloned(), at);
+        kept.show(painter, &key, at);
     }
 
     /// What the picture of `space`'s objects is drawn from, or none while

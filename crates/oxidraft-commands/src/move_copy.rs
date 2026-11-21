@@ -99,6 +99,15 @@ impl Command for MoveCopy {
         out
     }
 
+    fn dragged(&self, cursor: Point) -> Option<crate::Dragged<'_>> {
+        let base = self.base?;
+        Some(crate::Dragged {
+            objects: &self.selected,
+            offset: cursor - base,
+            rest: vec![Geometry::Line { start: base, end: cursor }],
+        })
+    }
+
     fn base_point(&self) -> Option<Point> {
         self.base
     }

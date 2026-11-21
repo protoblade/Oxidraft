@@ -2576,6 +2576,15 @@ impl Engine {
         self.active.as_ref().map(|a| a.cmd.preview(cursor)).unwrap_or_default()
     }
 
+    /// [`Engine::preview`] when the command drags objects whole: those, to
+    /// be drawn once and moved ([`crate::Command::dragged`]).
+    pub fn dragged(&self, cursor: Point) -> Option<crate::Dragged<'_>> {
+        if self.gathering.is_some() {
+            return None;
+        }
+        self.active.as_ref()?.cmd.dragged(cursor)
+    }
+
     /// Objects to draw highlighted: the selection set plus whatever the command adds.
     pub fn highlighted(&self) -> Vec<EntityId> {
         let mut ids = self.selection.clone();
@@ -5217,6 +5226,30 @@ mod tests {
         assert_eq!(e.selection().len(), 2, "selection survives grip editing");
         type_all(&mut e, &mut d, &["u"]);
         assert_eq!(lines(&d)[0].1, Point::new(10.0, 0.0));
+    }
+
+    #[test]
+    fn move_and_copy_drag_their_objects_whole_as_they_preview_them() {
+        for command in ["move", "copy"] {
+            let (mut e, mut d) = (engine(), Document::new());
+            type_all(&mut e, &mut d, &["l", "0,0", "10,0", ""]);
+            type_all(&mut e, &mut d, &["c", "5,5", "2"]);
+            type_all(&mut e, &mut d, &[command]);
+            click(&mut e, &mut d, 5.0, 0.0);
+            click(&mut e, &mut d, 5.0, 7.0);
+            type_all(&mut e, &mut d, &["", "1,1"]);
+            let cursor = Point::new(4.0, -2.5);
+            let dragged = e.dragged(cursor).expect("dragged whole");
+            assert_eq!(dragged.offset, Point::new(3.0, -3.5));
+            let mut drawn: Vec<Geometry> =
+                dragged.objects.iter().map(|o| o.geometry.translated(dragged.offset)).collect();
+            drawn.extend(dragged.rest);
+            assert_eq!(drawn, e.preview(cursor), "{command}");
+        }
+        // At a selection prompt nothing's dragged.
+        let (mut e, mut d) = (engine(), Document::new());
+        type_all(&mut e, &mut d, &["move"]);
+        assert!(e.dragged(Point::ORIGIN).is_none());
     }
 
     #[test]

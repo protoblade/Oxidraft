@@ -97,6 +97,16 @@ pub use attdef::sync_attributes;
 pub use cleanup::object_key;
 pub use clipboard::{block_drawing, clip_of, paste};
 pub use engine::{COMMANDS, CommandInfo, Engine, Tracked, is_command};
+
+/// Objects a command drags whole ([`Command::dragged`]).
+pub struct Dragged<'a> {
+    /// The objects, as they were picked up.
+    pub objects: &'a [oxidraft_model::Entity],
+    /// How far they're moved.
+    pub offset: Point,
+    /// The rest of the preview (the rubber band), drawn as usual.
+    pub rest: Vec<Geometry>,
+}
 pub use input::{Input, parse_input};
 pub use mview::{viewport_at, viewport_onto_model};
 pub use rename::Named;
@@ -497,6 +507,14 @@ pub trait Command {
     /// Rubber-band geometry to draw while the cursor moves.
     fn preview(&self, _cursor: Point) -> Vec<Geometry> {
         Vec::new()
+    }
+
+    /// [`Command::preview`] when most of it is objects only moved with
+    /// the cursor (MOVE, COPY): those, as picked up, how far they're
+    /// moved, and the rest of the preview. Drawn once and moved, however
+    /// many there are.
+    fn dragged(&self, _cursor: Point) -> Option<Dragged<'_>> {
+        None
     }
 
     /// Point that ortho mode and relative (`@`) input measure from.

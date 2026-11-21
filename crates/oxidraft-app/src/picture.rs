@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Color32, Context, Event, Mesh, Painter, Rect, Shape, TextureId,
+    self, Color32, Context, Event, Mesh, Painter, Pos2, Rect, Shape, TextureId,
     emath::TSTransform,
     epaint::{ClippedShape, Tessellator},
 };
@@ -108,27 +108,96 @@ impl Pictures {
         self.kept.retain(|k| k.key != key && pass.saturating_sub(k.shown) <= 1);
         self.kept.truncate(15);
         let atlas = atlas(ctx);
-        let options = ctx.tessellation_options(|o| *o);
-        let mut tessellator = Tessellator::new(key.pixels_per_point, options, atlas.0, Vec::new());
-        let mut pieces = Vec::new();
-        let mut run: Option<(Rect, Mesh)> = None;
-        let piece = |(clip, mesh): (Rect, Mesh)| ClippedShape::new(clip, Shape::Mesh(Arc::new(mesh)));
-        for shape in shapes {
-            if !merges(&shape.shape) || shape.transform_after_tessellation != TSTransform::IDENTITY {
-                pieces.extend(run.take().map(piece));
-                pieces.push(shape);
-                continue;
-            }
-            if run.as_ref().is_some_and(|(clip, _)| *clip != shape.clip_rect) {
-                pieces.extend(run.take().map(piece));
-            }
-            let (_, mesh) = run.get_or_insert_with(|| (shape.clip_rect, Mesh::default()));
-            tessellator.set_clip_rect(shape.clip_rect);
-            tessellator.tessellate_shape(shape.shape, mesh);
-        }
-        pieces.extend(run.take().map(piece));
+        let pieces = merged(ctx, key.pixels_per_point, shapes);
         // Shown when kept: its wants are there already.
         self.kept.push(Kept { key, pieces, made: Instant::now(), atlas, shown: pass, wants });
+    }
+}
+
+/// `shapes` turned into triangles, in draw order: runs of them merged
+/// into one mesh each, and what can't merge as it is.
+fn merged(ctx: &Context, pixels_per_point: f32, shapes: impl Iterator<Item = ClippedShape>) -> Vec<ClippedShape> {
+    let options = ctx.tessellation_options(|o| *o);
+    let mut tessellator = Tessellator::new(pixels_per_point, options, atlas(ctx).0, Vec::new());
+    let mut pieces = Vec::new();
+    let mut run: Option<(Rect, Mesh)> = None;
+    let piece = |(clip, mesh): (Rect, Mesh)| ClippedShape::new(clip, Shape::Mesh(Arc::new(mesh)));
+    for shape in shapes {
+        if !merges(&shape.shape) || shape.transform_after_tessellation != TSTransform::IDENTITY {
+            pieces.extend(run.take().map(piece));
+            pieces.push(shape);
+            continue;
+        }
+        if run.as_ref().is_some_and(|(clip, _)| *clip != shape.clip_rect) {
+            pieces.extend(run.take().map(piece));
+        }
+        let (_, mesh) = run.get_or_insert_with(|| (shape.clip_rect, Mesh::default()));
+        tessellator.set_clip_rect(shape.clip_rect);
+        tessellator.tessellate_shape(shape.shape, mesh);
+    }
+    pieces.extend(run.take().map(piece));
+    pieces
+}
+
+/// Everything a picture of dragged objects is drawn from.
+#[derive(Clone, PartialEq)]
+pub(crate) struct DragKey {
+    pub drawing: (u64, u64),
+    pub objects: Vec<EntityId>,
+    pub rect: Rect,
+    pub clip: Rect,
+    pub view: View,
+    pub color: Color32,
+    pub pixels_per_point: f32,
+}
+
+/// Objects a command drags whole (MOVE, COPY): drawn once where they were
+/// first dragged to, and moved from there since.
+#[derive(Default)]
+pub(crate) struct DragPicture {
+    kept: Option<KeptDrag>,
+}
+
+/// A picture of dragged objects: what it's drawn from, where its
+/// reference point was then, the font atlas it was made with, its pieces.
+struct KeptDrag {
+    key: DragKey,
+    then: Pos2,
+    atlas: ([usize; 2], f32),
+    pieces: Vec<ClippedShape>,
+}
+
+impl DragPicture {
+    /// Paints the picture kept for `key` with `painter`, moved so that what
+    /// was drawn at `then` is at `at`: true if there was one.
+    pub(crate) fn show(&mut self, painter: &Painter, key: &DragKey, at: Pos2) -> bool {
+        let atlas = atlas(painter.ctx());
+        let Some(kept) = &self.kept else { return false };
+        if &kept.key != key || atlas.0 != kept.atlas.0 || atlas.1 < kept.atlas.1 {
+            return false;
+        }
+        let moved = TSTransform::from_translation(at - kept.then);
+        painter.ctx().graphics_mut(|g| {
+            let list = g.entry(painter.layer_id());
+            for piece in &kept.pieces {
+                let shown = list.add(piece.clip_rect, piece.shape.clone());
+                list.mutate_shape(shown, |s| {
+                    s.transform_after_tessellation = moved * piece.transform_after_tessellation
+                });
+            }
+        });
+        true
+    }
+
+    /// Keeps `shapes`, drawn for `key` with their reference point `at`.
+    pub(crate) fn keep(&mut self, ctx: &Context, key: DragKey, shapes: impl Iterator<Item = ClippedShape>, at: Pos2) {
+        let pieces = merged(ctx, key.pixels_per_point, shapes);
+        self.kept = Some(KeptDrag { key, then: at, atlas: atlas(ctx), pieces });
+    }
+
+    /// Lets the picture go, once nothing's dragged.
+    pub(crate) fn clear(&mut self) {
+        self.kept = None;
     }
 }
 
@@ -228,5 +297,51 @@ mod tests {
         }];
         assert!(!pass(&ctx, &mut pictures, typed, &key(1), false).0, "a key was pressed");
         assert!(!pass(&ctx, &mut pictures, Vec::new(), &key(1), false).0, "a pass with nothing in it");
+    }
+
+    #[test]
+    fn a_dragged_picture_moves_with_its_reference_point() {
+        let ctx = Context::default();
+        let mut dragged = DragPicture::default();
+        let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0));
+        let key = |revision| DragKey {
+            drawing: (1, revision),
+            objects: Vec::new(),
+            rect: area,
+            clip: area,
+            view: View::default(),
+            color: Color32::WHITE,
+            pixels_per_point: 1.0,
+        };
+        // Where what's painted is, and whether the picture was shown.
+        let mut paint = |at: Pos2, key: &DragKey, keep: bool| {
+            let mut shown = false;
+            let mut out = ctx.run_ui(RawInput::default(), |ui| {
+                let painter = ui.painter();
+                if keep {
+                    let line =
+                        Shape::line_segment([pos2(10.0, 10.0), pos2(100.0, 10.0)], Stroke::new(1.0, Color32::RED));
+                    dragged.keep(ui.ctx(), key.clone(), [ClippedShape::new(area, line)].into_iter(), at);
+                }
+                shown = dragged.show(painter, key, at);
+            });
+            out.textures_delta.clear();
+            let mut bounds = Rect::NOTHING;
+            for p in ctx.tessellate(out.shapes, 1.0) {
+                if let egui::epaint::Primitive::Mesh(m) = p.primitive {
+                    for v in &m.vertices {
+                        bounds.extend_with(v.pos);
+                    }
+                }
+            }
+            (shown, bounds)
+        };
+        let (shown, first) = paint(pos2(0.0, 0.0), &key(1), true);
+        assert!(shown);
+        let (shown, moved) = paint(pos2(40.0, 5.0), &key(1), false);
+        assert!(shown);
+        assert!((moved.min - first.min - vec2(40.0, 5.0)).length() < 0.01, "{first:?} -> {moved:?}");
+        assert!((moved.max - first.max - vec2(40.0, 5.0)).length() < 0.01);
+        assert!(!paint(pos2(40.0, 5.0), &key(2), false).0, "the drawing changed");
     }
 }

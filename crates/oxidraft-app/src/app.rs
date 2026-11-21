@@ -16,6 +16,8 @@ pub struct OxidraftApp {
     pub(crate) doc: Document,
     /// The objects as last drawn, kept while only the cursor moves.
     pub(crate) pictures: std::cell::RefCell<crate::picture::Pictures>,
+    /// What a command drags whole, drawn once and moved.
+    pub(crate) drag_picture: std::cell::RefCell<crate::picture::DragPicture>,
     pub(crate) engine: Engine,
     pub(crate) view: View,
     /// OSNAP (F3).
@@ -334,6 +336,7 @@ impl OxidraftApp {
         Self {
             doc: Document::new(),
             pictures: Default::default(),
+            drag_picture: Default::default(),
             engine,
             view: View::default(),
             osnap: true,
