@@ -833,8 +833,9 @@ impl OxidraftApp {
         hovered.extend(self.cycling.as_ref().and_then(|c| c.hovered));
         let hovered: std::collections::HashSet<_> = hovered.into_iter().collect();
         let view = self.world_rect(rect);
-        // Dash patterns in screen pixels by linetype name, looked up once a frame.
-        let mut patterns: HashMap<String, Option<Vec<f64>>> = HashMap::new();
+        // Dash patterns in screen pixels by linetype name, looked up once a
+        // frame (a drawing has few linetypes).
+        let mut patterns: Vec<(String, Option<Vec<f64>>)> = Vec::new();
         // Complex linetypes, for their shapes and texts.
         let mut complex: HashMap<String, Option<oxidraft_model::Linetype>> = HashMap::new();
         let px_per_unit = self.doc.ltscale() * self.sheet_scale.unwrap_or(self.view.scale);
@@ -921,14 +922,18 @@ impl OxidraftApp {
                 if faded {
                     color = color.gamma_multiply(0.5);
                 }
-                if !patterns.contains_key(s.linetype) {
-                    let lt = self.doc.linetype(s.linetype).filter(|l| !l.is_continuous());
-                    // Too fine to see at this zoom: draw it solid, as AutoCAD does.
-                    let dashes = lt.filter(|lt| lt.length() * px_per_unit >= 3.0);
-                    let dashes = dashes.map(|lt| lt.pattern.iter().map(|d| d * px_per_unit).collect());
-                    patterns.insert(s.linetype.to_string(), dashes);
-                }
-                let pattern = &patterns[s.linetype];
+                let at = match patterns.iter().position(|(name, _)| name == s.linetype) {
+                    Some(at) => at,
+                    None => {
+                        let lt = self.doc.linetype(s.linetype).filter(|l| !l.is_continuous());
+                        // Too fine to see at this zoom: draw it solid, as AutoCAD does.
+                        let dashes = lt.filter(|lt| lt.length() * px_per_unit >= 3.0);
+                        let dashes = dashes.map(|lt| lt.pattern.iter().map(|d| d * px_per_unit).collect());
+                        patterns.push((s.linetype.to_string(), dashes));
+                        patterns.len() - 1
+                    }
+                };
+                let pattern = &patterns[at].1;
                 let width = if self.show_lineweights { lineweight_px(s.lineweight) } else { 1.0 };
                 let g = s.geometry;
                 if is_selected {
@@ -961,19 +966,21 @@ impl OxidraftApp {
     fn draw_dashed(&self, painter: &Painter, rect: Rect, g: &Geometry, stroke: Stroke, pattern: Option<&[f64]>) {
         let wide = matches!(g, Geometry::Polyline { vertices, .. }
             if vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0));
-        let Some(pattern) = pattern.filter(|_| !wide && !g.segments().is_empty()) else {
+        let Some(pattern) = pattern.filter(|_| !wide) else {
             return self.draw_geometry(painter, rect, g, stroke);
         };
-        let path: Vec<Point> =
-            self.screen_path(rect, g).into_iter().map(|p| Point::new(f64::from(p.x), f64::from(p.y))).collect();
-        let to_pos = |p: &Point| pos2(p.x as f32, p.y as f32);
-        for run in linetype::dashes(&path, pattern, 1.0) {
-            if let [dot] = run[..] {
-                painter.circle_filled(to_pos(&dot), (stroke.width / 2.0).max(0.8), stroke.color);
-            } else {
-                painter.add(Shape::line(run.iter().map(to_pos).collect(), stroke));
-            }
+        // Text, fills and the like have no path to dash.
+        let path = self.screen_path(rect, g);
+        if path.is_empty() {
+            return self.draw_geometry(painter, rect, g, stroke);
         }
+        dash_runs(&path, pattern, |run| {
+            if let [dot] = run {
+                painter.circle_filled(*dot, (stroke.width / 2.0).max(0.8), stroke.color);
+            } else {
+                painter.add(Shape::line(run.to_vec(), stroke));
+            }
+        });
     }
 
     /// A complex linetype's shapes and texts along a curve, `scale`
@@ -1049,6 +1056,23 @@ impl OxidraftApp {
             return clip_segment(s, &view)
                 .map(|c| vec![self.view.to_screen(rect, c.start), self.view.to_screen(rect, c.end)])
                 .unwrap_or_default();
+        }
+        match g {
+            Geometry::Line { start, end } => {
+                return vec![self.view.to_screen(rect, *start), self.view.to_screen(rect, *end)];
+            }
+            Geometry::Polyline { vertices, closed } if vertices.iter().all(|v| v.bulge == 0.0) => {
+                if vertices.len() < 2 {
+                    return Vec::new();
+                }
+                let mut points = Vec::with_capacity(vertices.len() + 1);
+                points.extend(vertices.iter().map(|v| self.view.to_screen(rect, v.point)));
+                if *closed {
+                    points.push(points[0]);
+                }
+                return points;
+            }
+            _ => {}
         }
         let mut points: Vec<Pos2> = Vec::new();
         for seg in g.segments() {
@@ -1583,6 +1607,60 @@ fn fit_area(rect: Rect) -> Rect {
     Rect::from_min_max(rect.min + vec2(24.0, 36.0), rect.max - vec2(24.0, 120.0))
 }
 
+/// `path` split by a dash `pattern` (in its own units: screen pixels),
+/// each dash given to `run`; a dot as one point. As
+/// [`linetype::dashes`], without copying the path or the dashes.
+fn dash_runs(path: &[Pos2], pattern: &[f64], mut run: impl FnMut(&[Pos2])) {
+    let total: f64 = pattern.iter().map(|d| d.abs()).sum();
+    if path.len() < 2 || total <= 1e-9 {
+        return run(path);
+    }
+    let point = |p: Pos2| Point::new(f64::from(p.x), f64::from(p.y));
+    let pos = |p: Point| pos2(p.x as f32, p.y as f32);
+    let mut dash: Vec<Pos2> = Vec::new();
+    let (mut element, mut left) = (0, pattern[0].abs());
+    let mut on = pattern[0] > 0.0;
+    if on {
+        dash.push(path[0]);
+    } else if pattern[0] == 0.0 {
+        run(&[path[0]]);
+    }
+    for w in path.windows(2) {
+        let (mut a, b) = (point(w[0]), point(w[1]));
+        let mut seg = a.distance(b);
+        while seg > 1e-9 {
+            if left > seg {
+                left -= seg;
+                if on {
+                    dash.push(w[1]);
+                }
+                break;
+            }
+            // The current element ends inside this piece of the path.
+            let p = a.lerp(b, left / seg);
+            seg -= left;
+            a = p;
+            if on {
+                dash.push(pos(p));
+                run(&dash);
+                dash.clear();
+            }
+            element = (element + 1) % pattern.len();
+            let d = pattern[element];
+            left = d.abs();
+            on = d > 0.0;
+            if on {
+                dash.push(pos(p));
+            } else if d == 0.0 {
+                run(&[pos(p)]);
+            }
+        }
+    }
+    if on && dash.len() >= 2 {
+        run(&dash);
+    }
+}
+
 /// Layers by name, the last one found kept: objects on the same layer
 /// one after another look it up once.
 struct LayerMemo<'a> {
@@ -1781,4 +1859,30 @@ pub(crate) fn paint_text(
         v.pos = anchor + rot * local;
     }
     painter.add(Shape::mesh(mesh));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dashes_split_screen_paths_as_the_linetype_does() {
+        let path = [pos2(0.0, 0.0), pos2(30.0, 0.0), pos2(30.0, 17.5), pos2(3.0, 40.0)];
+        let patterns: [&[f64]; 5] =
+            [&[6.0, -3.0], &[-2.0, 5.0, 0.0, -2.0], &[0.0, -4.0], &[12.5, -1.5, 0.0, -1.5], &[100.0, -1.0]];
+        for pattern in patterns {
+            let mut runs: Vec<Vec<Pos2>> = Vec::new();
+            dash_runs(&path, pattern, |run| runs.push(run.to_vec()));
+            let points: Vec<Point> = path.iter().map(|p| Point::new(f64::from(p.x), f64::from(p.y))).collect();
+            let expected: Vec<Vec<Pos2>> = linetype::dashes(&points, pattern, 1.0)
+                .iter()
+                .map(|run| run.iter().map(|p| pos2(p.x as f32, p.y as f32)).collect())
+                .collect();
+            assert_eq!(runs, expected, "{pattern:?}");
+        }
+        // Too short to dash, or no pattern length: as it is.
+        let mut runs = Vec::new();
+        dash_runs(&path[..1], &[6.0, -3.0], |run| runs.push(run.to_vec()));
+        assert_eq!(runs, vec![vec![path[0]]]);
+    }
 }
