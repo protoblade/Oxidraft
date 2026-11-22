@@ -2865,6 +2865,20 @@ fn plotters_wmfout_and_paper_sizes_of_your_own() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Frames till the current drawing has been read in the background, as
+/// the note over the window has you wait for it: what's typed before then
+/// is cancelled when it's taken in.
+fn wait_till_read(h: &mut Harness<'_, oxidraft_app::Drawings>) {
+    for _ in 0..400 {
+        if h.state_mut().current().opening().is_none() {
+            return;
+        }
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("{:?} not read in time", h.state_mut().current().opening());
+}
+
 #[test]
 fn several_drawings_in_file_tabs() {
     use oxidraft_app::Drawings;
@@ -2905,6 +2919,7 @@ fn several_drawings_in_file_tabs() {
         h.state_mut().handle(&ctx, oxidraft_app::drawings::TabRequest::Open(file.clone()));
         h.run_steps(1);
     }
+    wait_till_read(&mut h);
     assert_eq!(h.state().names(), ["Drawing1.dxf", "Drawing2.dxf", "site.dxf"]);
     assert_eq!(h.state().active(), 2);
     // SYSWINDOWS, tiled: the others side by side, each in a window of its own to work in.
@@ -4333,14 +4348,7 @@ fn drawings_opened_in_tabs_are_read_in_the_background() {
     // Its tab is there at once, named for it, while it's read.
     assert_eq!(h.state().names(), ["Drawing1.dxf", "big.dxf"]);
     assert_eq!(h.state().active(), 1);
-    for _ in 0..200 {
-        h.run_steps(1);
-        if h.state_mut().current().opening().is_none() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    assert!(h.state_mut().current().opening().is_none(), "read");
+    wait_till_read(&mut h);
     assert_eq!(h.state_mut().current().document_mut().len(), 2000);
     // Opened again: the same tab.
     h.state_mut().handle(&ctx, oxidraft_app::drawings::TabRequest::Switch(0));
@@ -4351,13 +4359,7 @@ fn drawings_opened_in_tabs_are_read_in_the_background() {
     std::fs::write(&broken, "not a drawing").unwrap();
     h.state_mut().handle(&ctx, oxidraft_app::drawings::TabRequest::Open(broken));
     assert_eq!(h.state().names().len(), 3);
-    for _ in 0..200 {
-        h.run_steps(1);
-        if h.state().names().len() == 2 {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    wait_till_read(&mut h);
     assert_eq!(h.state().names(), ["Drawing1.dxf", "big.dxf"]);
     let said = h.state_mut().current().engine_mut().history().last().cloned().unwrap_or_default();
     assert!(said.starts_with("Could not open"), "{said}");
