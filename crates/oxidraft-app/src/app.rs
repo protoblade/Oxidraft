@@ -296,6 +296,9 @@ pub struct OxidraftApp {
     pub(crate) recall: Option<usize>,
     /// What a primary-button drag in the drawing area is doing.
     pub(crate) drag: Option<crate::canvas::Drag>,
+    /// Where the pointer was last seen while dragging in the drawing area,
+    /// for when it's out of the window with the button still down.
+    pub(crate) drag_pointer: Option<egui::Pos2>,
     /// SELECTIONCYCLING: a click on objects on top of each other lists
     /// them to choose from (Ctrl+W), and the list while it's open.
     pub(crate) selection_cycling: bool,
@@ -508,6 +511,7 @@ impl OxidraftApp {
             suggestion: 0,
             recall: None,
             drag: None,
+            drag_pointer: None,
             selection_cycling: true,
             cycling: None,
             updater: Updater::default(),

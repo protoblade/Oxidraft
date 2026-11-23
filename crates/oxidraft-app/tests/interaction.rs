@@ -177,6 +177,47 @@ fn dragging_on_empty_space_draws_a_lasso() {
     assert_ne!(upper, lower);
 }
 
+/// Moves the pointer from one place to another in a few frames.
+fn move_through(h: &mut Harness<'_, OxidraftApp>, from: Pos2, to: Pos2) {
+    for i in 1..=6 {
+        h.hover_at(from + (to - from) * (i as f32 / 6.0));
+        h.run_steps(1);
+    }
+}
+
+#[test]
+fn a_lasso_goes_on_while_the_pointer_is_out_of_the_window() {
+    // Round the lower line and below the window's edge (800 down) with the
+    // button held, then back in or let go out there: still a window lasso
+    // round the lower line.
+    for let_go_outside in [false, true] {
+        let mut h = app_with_line();
+        let (start, right) = (screen(&h, -10.0, 10.0), screen(&h, 110.0, 10.0));
+        let (edge, below) = (Pos2::new(right.x, 799.0), Pos2::new(right.x, 900.0));
+        let below_left = Pos2::new(start.x, 900.0);
+        h.hover_at(start);
+        h.run_steps(1);
+        button(&mut h, start, true);
+        move_through(&mut h, start, right);
+        move_through(&mut h, right, edge);
+        // Out of the window, as the window system tells it.
+        h.event(Event::PointerGone);
+        h.run_steps(2);
+        move_through(&mut h, edge, below);
+        move_through(&mut h, below, below_left);
+        let end = if let_go_outside {
+            below_left
+        } else {
+            let back = screen(&h, -10.0, 8.0);
+            move_through(&mut h, below_left, back);
+            back
+        };
+        button(&mut h, end, false);
+        let selected = h.state_mut().engine_mut().selection().to_vec();
+        assert_eq!(selected.len(), 1, "let go outside: {let_go_outside}");
+    }
+}
+
 #[test]
 fn clicking_objects_on_top_of_each_other_lists_them_to_choose_from() {
     let mut h = app_with_line();

@@ -149,10 +149,18 @@ impl OxidraftApp {
         self.engine.vars.view_aspect = f64::from(rect.width() / rect.height().max(1.0));
 
         // While dragging a grip the pointer may leave the hover state; keep tracking it.
+        // Out of the window with the button still down, egui no longer
+        // counts the drawing as hovered: the pointer's own position then, or
+        // where it was last seen, so a lasso or grip goes on following it.
+        let dragging = self.drag.is_some() || response.dragged();
         let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos());
+        let pointer = match dragging {
+            true => pointer.or_else(|| ui.input(|i| i.pointer.latest_pos())).or(self.drag_pointer),
+            false => pointer,
+        };
+        self.drag_pointer = pointer.filter(|_| dragging);
         // In a viewport, the crosshair is only inside its frame.
         let frame = self.active_frame(rect).map(|(_, r)| r);
-        let dragging = self.drag.is_some() || response.dragged();
         let pointer = pointer.filter(|p| dragging || frame.is_none_or(|r| r.contains(*p)));
         let cursor = pointer.map(|screen| self.resolve_cursor(rect, screen));
         self.cursor = cursor.as_ref().map(|c| c.point);
